@@ -1,0 +1,7 @@
+node_modules/
+lib/
+*.tsbuildinfo
+.zcode/
+.DS_Store
+Thumbs.db
+desktop.ini
