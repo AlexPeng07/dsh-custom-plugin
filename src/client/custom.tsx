@@ -1169,14 +1169,6 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     )
   }
 
-  function FooterButton(): React.ReactElement {
-    return React.createElement('button', {
-      className: 'vx-foot-btn',
-      title: '个性化中心',
-      onClick: () => setS({ panelOpen: !S.panelOpen, foldersOpen: false }),
-    }, React.createElement(Icon, { n: 'sliders', size: 15 }), React.createElement('span', { className: 'vx-foot-label' }, '个性化'))
-  }
-
   function FolderSidebarButton(): React.ReactElement {
     return React.createElement('button', {
       className: 'vx-foot-btn',
@@ -2173,13 +2165,30 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
 
   function OverlayRoot(props: OverlayProps): React.ReactElement {
     const s = useS()
+    /** 当前 GUI 实际配色。主题服务已解析的快照最权威（覆盖 GUI 内全局深色
+     * 切换，与 OS 偏好无关）；其次 body 上呈现器维护的 data-ds-dark-theme；
+     * 最后兜底操作系统 prefers-color-scheme。 */
+    const readDark = (): boolean => {
+      try {
+        const theme = C.get('theme')
+        if (theme !== undefined) {
+          const scheme = theme.getTheme()?.active?.colorScheme
+          if (scheme === 'dark') return true
+          if (scheme === 'light') return false
+        }
+      } catch { /* theme service not ready yet */ }
+      const d = typeof document !== 'undefined' ? document : null
+      if (d !== null && d.body !== null && d.body.hasAttribute('data-ds-dark-theme')) return true
+      const w = typeof window !== 'undefined' ? window : null
+      if (w !== null && w.matchMedia !== undefined && w.matchMedia('(prefers-color-scheme: dark)').matches) return true
+      return false
+    }
     React.useEffect(() => { void loadCfg() }, [])
     React.useEffect(() => { if (s.booted) applyAppearance() }, [s.booted, s.cfg.bg, s.cfg.glass, s.cfg.glassMode, s.cfg.globalGlass])
     React.useEffect(() => { syncAntiScroll(s.cfg.antiScroll === true) }, [s.cfg.antiScroll])
     React.useEffect(() => {
       const w = typeof window !== 'undefined' ? window : null
-      if (w === null || w.matchMedia === undefined) return
-      const mq = w.matchMedia('(prefers-color-scheme: dark)')
+      const d = typeof document !== 'undefined' ? document : null
       const applyDark = (dark: boolean): void => {
         S.dark = dark
         if (dark && S.booted && S.cfg.bg !== 'default' && S.cfg.bg !== 'aurora') {
@@ -2188,20 +2197,46 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
         }
         setS({ dark })
       }
-      applyDark(mq.matches === true)
-      const on = (e: MediaQueryListEvent): void => applyDark(e.matches === true)
-      if (typeof mq.addEventListener === 'function') mq.addEventListener('change', on)
-      else if (typeof mq.addListener === 'function') mq.addListener(on as () => void)
+      applyDark(readDark())
+      // GUI 全局主题切换（权威：主题服务事件，覆盖浅/深/system 偏好）
+      let offTheme: (() => boolean) | undefined
+      try {
+        offTheme = C.on('theme/change', (snap) => applyDark(snap.active?.colorScheme === 'dark'))
+      } catch { /* theme event unavailable */ }
+      // OS 配色变化（system 偏好时主题服务也会重发 theme/change，此处幂等兜底）
+      let mq: MediaQueryList | undefined
+      let onMq: ((e: MediaQueryListEvent) => void) | undefined
+      if (w !== null && w.matchMedia !== undefined) {
+        mq = w.matchMedia('(prefers-color-scheme: dark)')
+        onMq = (): void => applyDark(readDark())
+        if (typeof mq.addEventListener === 'function') mq.addEventListener('change', onMq)
+        else if (typeof mq.addListener === 'function') mq.addListener(onMq as () => void)
+      }
+      // DOM 兜底：body[data-ds-dark-theme] 由主题呈现器按快照维护
+      let observer: MutationObserver | null = null
+      if (d !== null && d.body !== null && typeof MutationObserver === 'function') {
+        observer = new MutationObserver(() => applyDark(readDark()))
+        observer.observe(d.body, { attributes: true, attributeFilter: ['data-ds-dark-theme'] })
+      }
       return () => {
-        if (typeof mq.removeEventListener === 'function') mq.removeEventListener('change', on)
-        else if (typeof mq.removeListener === 'function') mq.removeListener(on as () => void)
+        if (offTheme !== undefined) { try { offTheme() } catch { /* already removed */ } }
+        if (mq !== undefined && onMq !== undefined) {
+          if (typeof mq.removeEventListener === 'function') mq.removeEventListener('change', onMq)
+          else if (typeof mq.removeListener === 'function') mq.removeListener(onMq as () => void)
+        }
+        if (observer !== null) observer.disconnect()
       }
     }, [])
     React.useEffect(() => {
-      if (S.dark && S.booted && S.cfg.bg !== 'default' && S.cfg.bg !== 'aurora') {
+      // boot 时再对一次表：此刻主题服务必然就绪，避免启动窗口期的误判
+      const dark = readDark()
+      S.dark = dark
+      if (dark && S.booted && S.cfg.bg !== 'default' && S.cfg.bg !== 'aurora') {
         S.cfg = { ...S.cfg, bg: 'default' }
         setS({ cfg: S.cfg })
         saveCfg()
+      } else {
+        setS({ dark })
       }
     }, [s.booted])
     React.useEffect(() => {
@@ -2288,8 +2323,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       return false
     }
   }
-  injectOne('sidebar.footer.action', 'custom-plugin-personalize', { id: 'custom-plugin-personalize', order: 5, label: '个性化' }, FooterButton)
-  injectOne('sidebar.footer.action', 'custom-plugin-folders', { id: 'custom-plugin-folders', order: 6, label: '项目' }, FolderSidebarButton)
+  injectOne('sidebar.footer.action', 'custom-plugin-folders', { id: 'custom-plugin-folders', order: -100, label: '项目' }, FolderSidebarButton)
   injectOne('shell.overlay', 'custom-plugin-overlay', { id: 'custom-plugin-overlay', order: 10, label: 'Custom 便利套件' }, OverlayRoot)
   injectOne('conversation.input.dock', 'custom-plugin-quote', { id: 'custom-plugin-quote', order: 30, label: '引用回复' }, QuoteDock)
   injectOne('conversation.chat.turnTail', 'custom-plugin-turn-tail', { select: (o: { seq?: unknown }) => (o !== null && typeof o.seq === 'number' ? o.seq : null) }, TurnTailEntry)
