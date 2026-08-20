@@ -785,8 +785,8 @@ export const STATIC_CSS = `/* dsh-custom-plugin static styles. Every rule is glo
     position: fixed;
     left: 12px;
     bottom: 60px;
-    width: min(420px, calc(100vw - 24px));
-    max-height: min(680px, calc(100vh - 100px));
+    width: 272px;
+    max-height: min(560px, calc(100vh - 220px));
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -794,10 +794,14 @@ export const STATIC_CSS = `/* dsh-custom-plugin static styles. Every rule is glo
     color: #20242e;
     z-index: 55;
   }
+  /* 头部行（图标 + 标题 + 按钮）下移并拉开与容器边缘的间距 */
+  .vx-folders .vx-pop-head {
+    padding: 14px 14px 0;
+  }
   .vx-folders-body {
     flex: 1;
     overflow: auto;
-    padding: 4px 10px 12px;
+    padding: 4px 14px 12px;
     position: relative;
     z-index: 1;
   }
