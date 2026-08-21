@@ -10,8 +10,8 @@ import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
 import type { SessionQueryEngine } from '@deepseek-ai/dsh-session-query'
 import { buildExportRows, buildMarkdown, buildPdfHtml, extractTurns } from './extract.ts'
 import { readDeepSeekCredential } from './credentials.ts'
-import type { BalanceInfo, CustomPluginState, TimelineItem } from './protocol.ts'
-import { dayKey } from './usage.ts'
+import type { BalanceInfo, CustomPluginState, TimelineItem, UsageRow } from './protocol.ts'
+import { aggregateDayUsage, dayKey, foldUsageRecord, isPeakHour, mergeUsageRow, type UsageRecord } from './usage.ts'
 
 export type { BalanceInfo, TimelineItem }
 
@@ -74,18 +74,14 @@ export class CustomPluginHost {
     this.sessionModel.delete(sessionId)
   }
 
-  /** Fold one assistant/message usage record into today's ledger. */
-  foldUsage(sessionId: string, usage: { inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number; reasoningTokens?: number }): void {
-    const today = dayKey()
-    const day = this.state.usage[today] ?? (this.state.usage[today] = {})
+  /** Fold one assistant/message usage record into the ledger. The event time
+   * decides both the day bucket and the peak/off-peak portion. */
+  foldUsage(sessionId: string, usage: UsageRecord, time?: number): void {
+    const at = time ?? Date.now()
+    const day = this.state.usage[dayKey(at)] ?? (this.state.usage[dayKey(at)] = {})
     const model = this.sessionModel.get(sessionId) ?? 'unknown'
     const row = day[model] ?? (day[model] = { in: 0, out: 0, cacheIn: 0, cacheW: 0, reason: 0, calls: 0 })
-    row.in += usage.inputTokens ?? 0
-    row.out += usage.outputTokens ?? 0
-    row.cacheIn += usage.cacheReadTokens ?? 0
-    row.cacheW += usage.cacheWriteTokens ?? 0
-    row.reason += usage.reasoningTokens ?? 0
-    row.calls += 1
+    foldUsageRecord(row, usage, isPeakHour(at))
   }
 
   /** Snapshot of the whole state document for the browser. */
@@ -129,12 +125,14 @@ export class CustomPluginHost {
           lastSeq: all.length > 0 ? all[all.length - 1].seq : 0,
           items: all,
         })
-        items = afterSeq > 0 ? all.filter((item) => item.seq > afterSeq) : all.slice(-160)
+        // Tail cap bounds the payload (each item carries up to 4k of preview
+        // text); 400 keeps dots available when the GUI deep-loads history.
+        items = afterSeq > 0 ? all.filter((item) => item.seq > afterSeq) : all.slice(-400)
       } catch (error) {
         return { ok: false, error: String((error as Error)?.message ?? error) }
       }
     }
-    return { ok: true, sessionId, items: (items ?? []).slice(-160) }
+    return { ok: true, sessionId, items: (items ?? []).slice(-400) }
   }
 
   /** Export one session as JSON / Markdown / print-ready HTML. */
@@ -243,7 +241,10 @@ export class CustomPluginHost {
     }
   }
 
-  /** Re-scan today's session logs and rebuild today's usage ledger. */
+  /** Re-scan the session logs and rebuild today's usage ledger. Every session
+   * is replayed but only usage events whose own timestamp falls on today are
+   * folded, so sessions created before midnight keep contributing the usage
+   * they produced today. */
   async usageScan(): Promise<{ ok: true; usageToday: unknown; scannedSessions: number } | { ok: false; error: string }> {
     let records
     try {
@@ -252,28 +253,18 @@ export class CustomPluginHost {
       return { ok: false, error: '列会话失败' }
     }
     const today = dayKey()
-    const agg: Record<string, { in: number; out: number; cacheIn: number; cacheW: number; reason: number; calls: number }> = {}
+    const agg: Record<string, UsageRow> = {}
     let scanned = 0
     for (const record of records) {
       try {
-        const createdAt = (record.header as { createdAt?: unknown }).createdAt
-        if (typeof createdAt !== 'number' || dayKey(createdAt) !== today) continue
-        scanned++
         const snapshot = await this.sessionQuery.readSession(record.header.id as never)
-        let model: string | null = null
-        for (const event of snapshot.events) {
-          if (event.type === 'request/context') model = event.data.model
-          else if (event.type === 'assistant/message' && event.data.usage !== undefined) {
-            const usage = event.data.usage
-            const key = model ?? 'unknown'
-            const row = agg[key] ?? (agg[key] = { in: 0, out: 0, cacheIn: 0, cacheW: 0, reason: 0, calls: 0 })
-            row.in += usage.inputTokens ?? 0
-            row.out += usage.outputTokens ?? 0
-            row.cacheIn += usage.cacheReadTokens ?? 0
-            row.cacheW += usage.cacheWriteTokens ?? 0
-            row.reason += usage.reasoningTokens ?? 0
-            row.calls += 1
-          }
+        const dayUsage = aggregateDayUsage(snapshot.events, today)
+        const models = Object.keys(dayUsage)
+        if (models.length === 0) continue
+        scanned++
+        for (const model of models) {
+          const row = agg[model] ?? (agg[model] = { in: 0, out: 0, cacheIn: 0, cacheW: 0, reason: 0, calls: 0 })
+          mergeUsageRow(row, dayUsage[model])
         }
       } catch {
         // skip unreadable session
@@ -319,14 +310,20 @@ export class CustomPluginHost {
     return this.mermaidBytesValue
   }
 
+  /** Whether any DeepSeek key source resolves (state, environment, credential
+   * file) — the honest answer behind the panel's "key configured" badge. */
+  async hasApiKey(): Promise<boolean> {
+    return await this.resolveApiKey() !== ''
+  }
+
   /** Diagnostics snapshot for the status tool and the About tab. */
-  debugInfo(): { statePath: string; today: string; usageToday: unknown; mermaidBytes: number; apiKeySet: boolean; diagReports: string[] } {
+  async debugInfo(): Promise<{ statePath: string; today: string; usageToday: unknown; mermaidBytes: number; apiKeySet: boolean; diagReports: string[] }> {
     return {
       statePath: this.statePath(),
       today: dayKey(),
       usageToday: this.state.usage[dayKey()] ?? {},
       mermaidBytes: this.mermaidBytesValue,
-      apiKeySet: this.state.apiKey.trim() !== '',
+      apiKeySet: await this.hasApiKey(),
       diagReports: [...this.diagReports],
     }
   }

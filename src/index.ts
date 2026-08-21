@@ -71,7 +71,7 @@ function applyImpl(ctx: Context): void {
       if (event.type === 'request/context') {
         host.rememberModel(sessionId, event.data.model ?? null)
       } else if (event.type === 'assistant/message' && event.data.usage !== undefined) {
-        host.foldUsage(sessionId, event.data.usage)
+        host.foldUsage(sessionId, event.data.usage, event.time)
         saveSoon()
       }
     } catch (error) {
@@ -114,12 +114,13 @@ function applyImpl(ctx: Context): void {
     },
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     async execute(): Promise<Record<string, any>> {
-      const out: Record<string, unknown> = {        today: dayKey(),
+      const out: Record<string, unknown> = {
+        today: dayKey(),
         cfg: state.cfg,
         usageToday: state.usage[dayKey()] ?? {},
         mermaidBytes: host.mermaidBytes(),
         statePath,
-        apiKeyConfigured: state.apiKey.trim() !== '',
+        apiKeyConfigured: await host.hasApiKey(),
         diagReports: [...diagReports],
       }
       const agents = ctx.get('agents') as { currentInitiator?(): { id: unknown } } | undefined

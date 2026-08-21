@@ -196,7 +196,7 @@ export function makeCustomPluginRoutes(host: CustomPluginHost): WebRoute[] {
     handler: (req, res): void => {
       if (!guard(req, res)) return
       if (!isMethod(req, 'GET', res)) return
-      json(res, 200, { ok: true, ...host.debugInfo() })
+      void host.debugInfo().then((info) => { json(res, 200, { ok: true, ...info }) }).catch(() => { json(res, 200, { ok: false, error: '调试信息不可用' }) })
     },
   }
 

@@ -45,7 +45,7 @@ export interface CustomPluginConfig {
 
 /** Default configuration (also the composition-layer default). */
 export const DEFAULT_CONFIG: CustomPluginConfig = {
-  bg: 'aurora',
+  bg: '天青灰',
   weather: 'none',
   glass: true,
   glassMode: 'frost',
@@ -87,6 +87,13 @@ export interface UsageRow {
   cacheW: number
   reason: number
   calls: number
+  /** Peak-hour (Beijing 09-12 / 14-18) portion of each counter; the rest is
+   * off-peak. Optional because rows persisted before the peak/off-peak split
+   * predate these fields. */
+  peakIn?: number
+  peakCacheIn?: number
+  peakCacheW?: number
+  peakOut?: number
 }
 
 /** Day -> model -> counters. */
