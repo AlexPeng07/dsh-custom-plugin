@@ -74,10 +74,10 @@ The `custom_plugin_status` tool reports appearance config, today's per-model usa
 
 ## Install
 
-This is a standalone plugin: it is not registered in any marketplace or community-plugin set, and installs into a DSH profile as a local link:
+Prerequisites: Node 22+, pnpm, and the `dsh` CLI (the official `@deepseek-ai/dsh` npm package; `npx @deepseek-ai/dsh` stands in for `dsh` when it is not installed globally).
 
 ```sh
-# build (run from this repo root; requires Node 22+ and pnpm)
+# build (run from this repo root)
 pnpm install
 pnpm build
 # add to the web profile. The link path must not contain spaces: on Windows,
@@ -86,7 +86,7 @@ dsh plugin --profile web add link:F:/dsh-plugin-dev
 # restart dsh web
 ```
 
-`dsh plugin add` writes the profile dependency and automatically joins the package to `dsh.profile.bundles` (row id `custom-plugin`); the browser half loads via the official client module system from the same row.
+The package declares its manifest per the official bundle protocol: `dsh.bundle.patch` in `package.json` points at the `cordis.patch.yml` config layer (row id `custom-plugin`) and `dsh.client` declares the browser half. `dsh plugin add` forwards to pnpm inside the profile directory; the installed package joins `dsh.profile.bundles` automatically because of that declaration, and the browser half loads via the official client module system from the same row.
 
 ## Config
 

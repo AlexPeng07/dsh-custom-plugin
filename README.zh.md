@@ -74,10 +74,10 @@ DeepSeek Harness（DSH）Web GUI 的 Custom 便利套件：个性化外观、天
 
 ## 安装
 
-本插件是独立插件，不经插件市场或社区插件注册，直接以本地链接装入 DSH profile：
+前置：Node 22+、pnpm，以及 `dsh` CLI（官方 npm 包 `@deepseek-ai/dsh`；未全局安装时，可用 `npx @deepseek-ai/dsh` 代替 `dsh`）。
 
 ```sh
-# 构建（本仓库根目录执行，需要 Node 22+ 与 pnpm）
+# 构建（本仓库根目录执行）
 pnpm install
 pnpm build
 # 装入 web profile。链接路径不能含空格：Windows 上若源码路径含空格，
@@ -86,7 +86,7 @@ dsh plugin --profile web add link:F:/dsh-plugin-dev
 # 重启 dsh web
 ```
 
-`dsh plugin add` 会写入 profile 依赖并把包自动加入 `dsh.profile.bundles`（行 id `custom-plugin`）；浏览器半区经官方客户端模块系统按同一行加载。
+包按官方组合包协议声明 manifest：`package.json` 的 `dsh.bundle.patch` 指向 `cordis.patch.yml` 配置层（行 id `custom-plugin`），`dsh.client` 声明浏览器半区。`dsh plugin add` 在 profile 目录内转发给 pnpm，安装后因该声明被自动加入 `dsh.profile.bundles`；浏览器半区经官方客户端模块系统按同一行加载。
 
 ## 配置
 
