@@ -5,15 +5,12 @@
  * @module @alexpeng/dsh-custom-plugin/host-service
  */
 
-import type { Context } from '@deepseek-ai/cordis'
 import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
 import type { SessionQueryEngine } from '@deepseek-ai/dsh-session-query'
 import { buildExportRows, buildMarkdown, buildPdfHtml, extractTurns } from './extract.ts'
 import { readDeepSeekCredential } from './credentials.ts'
 import type { BalanceInfo, CustomPluginState, TimelineItem, UsageRow } from './protocol.ts'
 import { aggregateDayUsage, dayKey, foldUsageRecord, isPeakHour, mergeUsageRow, type UsageRecord } from './usage.ts'
-
-export type { BalanceInfo, TimelineItem }
 
 /** Options the loader entry supplies to the host service. */
 export interface CustomPluginHostOptions {
@@ -41,11 +38,10 @@ export class CustomPluginHost {
   private readonly diagReports: string[]
   private readonly attachments: AttachmentStore | undefined
   private readonly sessionModel = new Map<string, string | null>()
-  private readonly timelineCache = new Map<string, { at: number; lastSeq: number; items: TimelineItem[] }>()
   private mermaidBytesValue = 0
   private mermaidJs = ''
 
-  constructor(_ctx: Context, options: CustomPluginHostOptions) {
+  constructor(options: CustomPluginHostOptions) {
     this.sessionQuery = options.sessionQuery
     this.state = options.state
     this.statePath = options.statePath
@@ -105,34 +101,16 @@ export class CustomPluginHost {
     if (typeof edit.apiKey === 'string') this.state.apiKey = edit.apiKey
   }
 
-  /** Timeline nodes for one session, with a 10-second cache. */
-  async timelineGet(sessionId: string, afterSeq: number): Promise<{ ok: true; sessionId: string; items: TimelineItem[] } | { ok: false; error: string }> {
-    const cached = this.timelineCache.get(sessionId)
-    const fresh = cached !== undefined && Date.now() - cached.at < 10000
-    let items: TimelineItem[] | null = null
-    if (fresh && cached.lastSeq > 0 && afterSeq > 0 && afterSeq < cached.lastSeq) {
-      items = cached.items.filter((item) => item.seq > afterSeq)
-    } else {
-      try {
-        const snapshot = await this.sessionQuery.readSession(sessionId as never)
-        const all = extractTurns(snapshot.events)
-        if (this.timelineCache.size > 6) {
-          const firstKey = this.timelineCache.keys().next().value
-          if (firstKey !== undefined) this.timelineCache.delete(firstKey)
-        }
-        this.timelineCache.set(sessionId, {
-          at: Date.now(),
-          lastSeq: all.length > 0 ? all[all.length - 1].seq : 0,
-          items: all,
-        })
-        // Tail cap bounds the payload (each item carries up to 4k of preview
-        // text); 400 keeps dots available when the GUI deep-loads history.
-        items = afterSeq > 0 ? all.filter((item) => item.seq > afterSeq) : all.slice(-400)
-      } catch (error) {
-        return { ok: false, error: String((error as Error)?.message ?? error) }
-      }
+  /** Timeline nodes for one session, capped to the 400-node tail. The tail cap
+   * bounds the payload (each item carries up to 4k of preview text); 400 keeps
+   * dots available when the GUI deep-loads history. */
+  async timelineGet(sessionId: string): Promise<{ ok: true; sessionId: string; items: TimelineItem[] } | { ok: false; error: string }> {
+    try {
+      const snapshot = await this.sessionQuery.readSession(sessionId as never)
+      return { ok: true, sessionId, items: extractTurns(snapshot.events).slice(-400) }
+    } catch (error) {
+      return { ok: false, error: String((error as Error)?.message ?? error) }
     }
-    return { ok: true, sessionId, items: (items ?? []).slice(-400) }
   }
 
   /** Export one session as JSON / Markdown / print-ready HTML. */

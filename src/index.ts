@@ -11,8 +11,6 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
-import type {} from '@deepseek-ai/dsh-host-webserver'
-import type {} from '@deepseek-ai/dsh-attachment'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { dshHome } from './dsh-home.ts'
 import { mountOnce } from './mount-once.ts'
@@ -53,7 +51,7 @@ function applyImpl(ctx: Context): void {
     }
   })()
 
-  const host = new CustomPluginHost(ctx, {
+  const host = new CustomPluginHost({
     sessionQuery: ctx.sessionQuery,
     state,
     statePath: () => statePath,
@@ -89,7 +87,7 @@ function applyImpl(ctx: Context): void {
   }
 
   // The status tool: appearance config, today's usage, balance, timeline sample.
-  ctx.tools.register(defineTool({
+  const disposeTool = ctx.tools.register(defineTool({
     name: 'custom_plugin_status',
     description: '查看 Custom 便利套件（dsh-custom-plugin）运行状态：外观配置、今日 token 用量（按模型）、DeepSeek 余额（如已配置 API Key）、当前会话时间线样本、Mermaid 引擎加载情况、客户端注入诊断。',
     parameters: {},
@@ -127,7 +125,7 @@ function applyImpl(ctx: Context): void {
       const agent = agents !== undefined && typeof agents.currentInitiator === 'function' ? agents.currentInitiator() : null
       const sessionId = agent !== null && agent !== undefined ? String(agent.id) : null
       if (sessionId !== null) {
-        const timeline = await host.timelineGet(sessionId, 0)
+        const timeline = await host.timelineGet(sessionId)
         out.timelineSample = timeline.ok
           ? (timeline.items ?? []).slice(0, 2).map((item) => ({ seq: item.seq, time: item.time, text: item.text.slice(0, 120) }))
           : timeline.error
@@ -144,5 +142,5 @@ function applyImpl(ctx: Context): void {
     return () => { for (const item of dispose) item() }
   }, 'custom-plugin: host routes')
 
-  console.log(`[custom-plugin] host ready, state at ${statePath}`)
+  ctx.effect(() => () => { disposeTool() }, 'custom-plugin: status tool')
 }

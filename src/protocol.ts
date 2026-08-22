@@ -129,6 +129,3 @@ export interface BalanceInfo {
   granted: string
   toppedUp: string
 }
-
-/** Host response envelope. */
-export type ApiResult<T> = { ok: true; [key: string]: unknown } & T

@@ -64,9 +64,9 @@ export async function apiStateSave(edit: StateEdit): Promise<{ ok: true } | { ok
   return await postJson('/state', edit)
 }
 
-/** Timeline nodes for one session. */
-export async function apiTimelineGet(sessionId: string, afterSeq = 0): Promise<{ ok: true; sessionId: string; items: TimelineItem[] } | { ok: false; error?: string }> {
-  return await request(`/timeline?sessionId=${encodeURIComponent(sessionId)}&afterSeq=${afterSeq}`, { cache: 'no-store' })
+/** Timeline nodes for one session (tail-capped by the host). */
+export async function apiTimelineGet(sessionId: string): Promise<{ ok: true; sessionId: string; items: TimelineItem[] } | { ok: false; error?: string }> {
+  return await request(`/timeline?sessionId=${encodeURIComponent(sessionId)}`, { cache: 'no-store' })
 }
 
 /** Export one session in the given format. */

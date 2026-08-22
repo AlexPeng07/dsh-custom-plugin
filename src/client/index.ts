@@ -2,7 +2,8 @@
  * Browser-half entry for dsh-custom-plugin.
  *
  * Mounts the Custom UI surfaces (overlay, timeline, folders, prompts,
- * balance, quote reply) through the nine slot injections. The slots ledger is
+ * balance, quote reply) through eight injections into seven official slots.
+ * The slots ledger is
  * the only coupling point: the declarations are provided by the web shell
  * itself, so this plugin needs no family-side integration to work. All
  * surfaces ship plain Chinese copy, with no i18n registration and no polling
