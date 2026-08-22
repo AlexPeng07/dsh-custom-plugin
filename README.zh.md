@@ -4,7 +4,7 @@
 
 DeepSeek Harness（DSH）Web GUI 的 Custom 便利套件：个性化外观、天气特效、玻璃效果、按用户消息的时间线导航、项目文件夹、提示词库、会话导出、Mermaid 渲染、引用回复，以及 DeepSeek 额度与今日 token 用量。
 
-插件为双半区架构：宿主半区（`src/`）持有状态文档、注册 `/api/custom-plugin` 路由与 `custom_plugin_status` 智能体工具；浏览器半区（`src/client/`）通过 9 个官方 slot 注入 UI，以同源 fetch 与宿主通信。经官方 profile 机制挂载，不改 DSH 源码。
+插件为双半区架构：宿主半区（`src/`）持有状态文档、注册 `/api/custom-plugin` 路由与 `custom_plugin_status` 智能体工具；浏览器半区（`src/client/`）通过 7 个官方 slot 的 8 处注入挂载 UI，以同源 fetch 与宿主通信。经官方 profile 机制挂载，不改 DSH 源码。
 
 ## 功能
 
@@ -59,7 +59,7 @@ DeepSeek Harness（DSH）Web GUI 的 Custom 便利套件：个性化外观、天
 会话头部常驻额度徽标（可点击固定），额度面板提供：
 
 - **余额**：调用官方 `https://api.deepseek.com/user/balance` 接口，优先显示 CNY，赠送与充值余额分列，并显示账户可用状态。
-- **Key 解析顺序**：面板粘贴（仅存本机状态文件）→ 环境变量 `DEEPSEEK_API_KEY` / `DEEPSEEK_KEY` / `DEEPSEEK_TOKEN` → DSH 凭据文件 `$DSH_HOME/.credentials.yaml`（自动复用 DSH 已配置的 DeepSeek key，无需重复填写）。
+- **Key 解析顺序**：面板粘贴（仅存本机状态文件）→ 环境变量 `DEEPSEEK_API_KEY` / `DEEPSEEK_KEY` / `DEEPSEEK_TOKEN`（取值需以 `sk-` 开头）→ DSH 凭据文件 `$DSH_HOME/.credentials.yaml`（自动复用 DSH 已配置的 DeepSeek key，无需重复填写）。
 - **今日用量**：按模型统计输入 / 输出 / 缓存 token 与调用次数，实时折叠自 `session/event` 事件。
 - **费用估算**：按 DeepSeek 官方峰谷价目（2026-08-17 生效）估算——高峰时段（北京时间 9–12 / 14–18 时）全价，空闲时段半价：`deepseek-v4-flash` ¥3 / ¥9，`deepseek-v4-pro` ¥9 / ¥27（每百万 tokens 输入 / 输出，缓存写入 ¥0.1 / ¥0.3；已停用的 `deepseek-chat` / `deepseek-reasoner` 按 v4-flash 计），仅供参考。
 - **扫描**：「扫描今日会话日志」重放全部会话、按事件自身时间戳归入今日（跨午夜会话不丢量），完成后显示扫描到的活跃会话数。
@@ -84,6 +84,15 @@ dsh plugin --profile web add @alexpeng/dsh-custom-plugin
 ```
 
 registry 上是预构建产物，安装端无需从源码构建。
+
+### 从 GitHub 安装（源码安装）
+
+```sh
+dsh plugin --profile web add github:AlexPeng07/dsh-custom-plugin
+# 重启 dsh web
+```
+
+git 安装拉取的是源码，`prepare` 脚本会在安装端构建 `lib/`。pnpm ≥10 需要一次性授权该构建——把 pnpm 提示的确切包键复制进 profile 的 `pnpm-workspace.yaml` 的 `allowBuilds` 下，再重新执行 add。走上方 npm 路线可免去构建授权。
 
 ### 本地链接（开发）
 

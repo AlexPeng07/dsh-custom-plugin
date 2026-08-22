@@ -4,7 +4,7 @@ English | [中文](README.zh.md)
 
 Custom convenience suite for the DeepSeek Harness (DSH) Web GUI: personalization, weather FX, glass effects, a per-user-message timeline rail, project folders, prompts, conversation export, Mermaid rendering, quote reply, and DeepSeek balance / daily token usage.
 
-The plugin is dual-face: the host half (`src/`) owns the state document, registers the `/api/custom-plugin` routes and the `custom_plugin_status` agent tool; the browser half (`src/client/`) injects its UI through nine official slots and talks to the host over same-origin fetch. Mounted through the official profile mechanism — no DSH source changes.
+The plugin is dual-face: the host half (`src/`) owns the state document, registers the `/api/custom-plugin` routes and the `custom_plugin_status` agent tool; the browser half (`src/client/`) injects its UI through eight injections into seven official slots and talks to the host over same-origin fetch. Mounted through the official profile mechanism — no DSH source changes.
 
 ## What it does
 
@@ -59,7 +59,7 @@ When a message contains a ```mermaid block, a render chip appears under it; the 
 A balance badge sits in the session header (clickable to pin); the balance panel provides:
 
 - **Balance**: the official `https://api.deepseek.com/user/balance` endpoint, CNY preferred, granted and topped-up balances listed separately, with the account availability flag.
-- **Key resolution order**: pasted in the panel (stored only in the local state file) → environment variables `DEEPSEEK_API_KEY` / `DEEPSEEK_KEY` / `DEEPSEEK_TOKEN` → the DSH credentials file `$DSH_HOME/.credentials.yaml` (reuses the DeepSeek key already configured in DSH — no duplicate setup).
+- **Key resolution order**: pasted in the panel (stored only in the local state file) → environment variables `DEEPSEEK_API_KEY` / `DEEPSEEK_KEY` / `DEEPSEEK_TOKEN` (values must start with `sk-`) → the DSH credentials file `$DSH_HOME/.credentials.yaml` (reuses the DeepSeek key already configured in DSH — no duplicate setup).
 - **Today's usage**: per-model input / output / cache token counters and call counts, folded live from `session/event` records.
 - **Cost estimate**: DeepSeek's official peak/off-peak table (effective 2026-08-17) — peak hours (Beijing 09:00–12:00 / 14:00–18:00) at full price, off-peak at half: `deepseek-v4-flash` ¥3 / ¥9, `deepseek-v4-pro` ¥9 / ¥27 (CNY per 1M tokens in / out, cache writes ¥0.1 / ¥0.3; the retired `deepseek-chat` / `deepseek-reasoner` price as v4-flash). Indicative only.
 - **Scan**: "scan today's session logs" replays every session and buckets usage events by their own timestamp (cross-midnight sessions keep contributing today's usage), reporting how many active sessions were scanned.
@@ -84,6 +84,15 @@ dsh plugin --profile web add @alexpeng/dsh-custom-plugin
 ```
 
 The registry tarball ships prebuilt output — no source build on the installing machine.
+
+### From GitHub (source install)
+
+```sh
+dsh plugin --profile web add github:AlexPeng07/dsh-custom-plugin
+# restart dsh web
+```
+
+Git installs pull sources; the `prepare` script builds `lib/` on the installing machine. pnpm ≥10 asks you to approve that build once — copy the exact package key it prints into the profile's `pnpm-workspace.yaml` under `allowBuilds`, then re-run the add. The npm route above skips the build-approval step.
 
 ### Local link (development)
 
