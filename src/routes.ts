@@ -93,12 +93,11 @@ export function makeCustomPluginRoutes(host: CustomPluginHost): WebRoute[] {
       if (!isMethod(req, 'GET', res)) return
       const url = new URL(req.url ?? '/', 'http://localhost')
       const sessionId = url.searchParams.get('sessionId') ?? ''
-      const afterSeq = Number(url.searchParams.get('afterSeq') ?? '0')
       if (sessionId === '') {
         json(res, 400, { ok: false, error: 'no sessionId' })
         return
       }
-      const result = await host.timelineGet(sessionId, Number.isFinite(afterSeq) ? afterSeq : 0)
+      const result = await host.timelineGet(sessionId)
       json(res, result.ok ? 200 : 500, result)
     },
   }
@@ -131,7 +130,9 @@ export function makeCustomPluginRoutes(host: CustomPluginHost): WebRoute[] {
       if (!guard(req, res)) return
       if (!isMethod(req, 'GET', res)) return
       const result = await host.balanceGet()
-      json(res, result.ok ? 200 : 200, result)
+      // 200 either way: the { ok, error } envelope carries the failure detail
+      // (e.g. "key not configured") the panel renders.
+      json(res, 200, result)
     },
   }
 
@@ -161,6 +162,9 @@ export function makeCustomPluginRoutes(host: CustomPluginHost): WebRoute[] {
     kind: 'exact',
     path: MERMAID_SCRIPT_PATH,
     handler: (req, res): void => {
+      // Same fence as the API routes: a same-origin <script src> passes
+      // (sec-fetch-site: same-origin), a cross-site page does not.
+      if (!guard(req, res)) return
       const script = host.mermaidScript()
       if (script === '') {
         res.statusCode = 503

@@ -104,8 +104,6 @@ interface Store {
   balance: Record<string, unknown> | null
   exporting: boolean
   insertDraft: ((text: string, replace: boolean) => boolean) | null
-  quoteSetDraft: ((text: string) => boolean) | null
-  suppressUntil: number
   greeted: boolean
 }
 
@@ -257,8 +255,6 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     balance: null,
     exporting: false,
     insertDraft: null,
-    quoteSetDraft: null,
-    suppressUntil: 0,
     greeted: false,
   }
 
@@ -910,7 +906,6 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       toast('该消息尚未渲染，请稍后重试', 'error')
       return
     }
-    S.suppressUntil = Date.now() + 400
     // Drive the scrollport's scrollTop directly so the jump
     // lands the row at the viewport center even when the row sits inside a
     // nested scroller; scrollIntoView stays as the fallback.
@@ -1058,7 +1053,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       const w = typeof window !== 'undefined' ? window : null
       const mermaid = (w as unknown as { mermaid?: { initialize(opts: Record<string, unknown>): void; render(id: string, code: string): Promise<string | { svg: string }> } }).mermaid
       if (mermaid === undefined) return { ok: false, error: '引擎未就绪' }
-      mermaid.initialize({ startOnLoad: false, theme: 'default', securityLevel: 'loose' })
+      mermaid.initialize({ startOnLoad: false, theme: 'default', securityLevel: 'strict' })
       const id = 'vx-mmd-' + Date.now() + Math.floor(Math.random() * 9999)
       const out = await mermaid.render(id, code)
       const svg = typeof out === 'string' ? out : (out?.svg ?? '')
@@ -1393,8 +1388,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
           return false
         }
       }
-      S.quoteSetDraft = (text: string): boolean => S.insertDraft !== null ? S.insertDraft(text, false) : false
-      return () => { S.insertDraft = null; S.quoteSetDraft = null }
+      return () => { S.insertDraft = null }
     }, [])
     React.useEffect(() => {
       if (s.cfg.quote !== true) {
@@ -1666,10 +1660,9 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     )
   }
 
-  function FolderNode(props: { node: FolderNode; depth?: number; useSessions: OverlayProps['useSessions']; useWorkspaces: OverlayProps['useWorkspaces'] }): React.ReactElement {
+  function FolderNode(props: { node: FolderNode; useSessions: OverlayProps['useSessions']; useWorkspaces: OverlayProps['useWorkspaces'] }): React.ReactElement {
     const s = useS()
     const node = props.node
-    const depth = props.depth ?? 0
     const [open, setOpen] = React.useState(true)
     const sessions = useSessionsSafe(props)
     const byId = sessions !== null ? (sessions.byId as unknown as Record<string, { displayTitle?: string; title?: string; running?: boolean }>) : {}
@@ -1789,7 +1782,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       ),
       open
         ? React.createElement('div', { className: 'vx-folder-body' },
-          children.map((c) => React.createElement(FolderNode, { key: c.id, node: c, depth: depth + 1, useSessions: props.useSessions, useWorkspaces: props.useWorkspaces })),
+          children.map((c) => React.createElement(FolderNode, { key: c.id, node: c, useSessions: props.useSessions, useWorkspaces: props.useWorkspaces })),
           wsIds.map((wid) => {
             const w = wsItems.find((x) => x.workspaceId === wid)
             if (w === undefined) return null
@@ -1865,7 +1858,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     return React.createElement('div', { className: 'vx-col' },
       React.createElement('div', { className: 'vx-muted' }, '跨工作区共享的会话与工作区收藏夹，支持多级嵌套与拖拽排序；数据保存在本机状态文件。'),
       S.folders.length === 0 ? React.createElement('div', { className: 'vx-muted vx-pad-sm' }, '暂无文件夹，点击下方按钮创建。') : null,
-      S.folders.map((f) => React.createElement(FolderNode, { key: f.id, node: f, depth: 0, useSessions: props.useSessions, useWorkspaces: props.useWorkspaces })),
+      S.folders.map((f) => React.createElement(FolderNode, { key: f.id, node: f, useSessions: props.useSessions, useWorkspaces: props.useWorkspaces })),
       React.createElement('div', { className: 'vx-row vx-pad-sm' },
         React.createElement('button', { className: 'vx-btn', onClick: addRoot }, React.createElement(Icon, { n: 'folderPlus', size: 13 }), ' 新建文件夹'),
       ),
@@ -2219,7 +2212,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       ),
       React.createElement('div', { className: 'vx-folders-body' },
         S.folders.length === 0 ? React.createElement('div', { className: 'vx-muted vx-pad-sm' }, '暂无文件夹。在个性化中心可管理，或点击右上角新建。') : null,
-        S.folders.map((f) => React.createElement(FolderNode, { key: f.id, node: f, depth: 0, useSessions: props.useSessions, useWorkspaces: props.useWorkspaces })),
+        S.folders.map((f) => React.createElement(FolderNode, { key: f.id, node: f, useSessions: props.useSessions, useWorkspaces: props.useWorkspaces })),
       ),
     )
   }
@@ -2413,7 +2406,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
   injectOne('conversation.session.header.actions', 'custom-plugin-panel-open', { id: 'custom-plugin-panel-open', order: 5, label: '个性化' }, HeaderPanelButton)
   injectOne('conversation.session.header.actions', 'custom-plugin-prompts', { id: 'custom-plugin-prompts', order: 6, label: '提示词' }, PromptQuickButton)
   injectOne('conversation.session.header.utilities', 'custom-plugin-balance', { id: 'custom-plugin-balance', order: -5, label: '额度' }, HeaderBalance)
-  console.log('[custom-plugin] client registered')
+  reportDiag('client registered: 8 injections / 7 slots')
   return () => {
     for (const unregister of unregisterAll.splice(0)) {
       try { unregister() } catch { /* already unregistered */ }
