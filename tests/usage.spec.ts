@@ -7,9 +7,10 @@ import { describe, expect, it } from 'vitest'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { aggregateDayUsage, dayKey, isPeakHour } from '../src/usage.ts'
 
-/** Local-time timestamp builder so tests are timezone-independent. */
+/** Timestamp whose Beijing (UTC+8) wall clock reads the given fields, so tests
+ * are independent of the host timezone. */
 function T(year: number, month: number, day: number, hour: number, minute = 0): number {
-  return new Date(year, month - 1, day, hour, minute, 0, 0).getTime()
+  return Date.UTC(year, month - 1, day, hour - 8, minute, 0, 0)
 }
 
 function requestContext(seq: number, time: number, model: string): SessionEvent {
@@ -31,7 +32,7 @@ function usageEvent(seq: number, time: number, usage: { inputTokens?: number, ou
 }
 
 describe('isPeakHour', () => {
-  it('matches the 9-12 / 14-18 windows with half-open bounds', () => {
+  it('matches the Beijing 9-12 / 14-18 windows with half-open bounds', () => {
     expect(isPeakHour(T(2026, 8, 21, 9))).toBe(true)
     expect(isPeakHour(T(2026, 8, 21, 11, 59))).toBe(true)
     expect(isPeakHour(T(2026, 8, 21, 12))).toBe(false)
@@ -39,6 +40,18 @@ describe('isPeakHour', () => {
     expect(isPeakHour(T(2026, 8, 21, 14))).toBe(true)
     expect(isPeakHour(T(2026, 8, 21, 17, 59))).toBe(true)
     expect(isPeakHour(T(2026, 8, 21, 18))).toBe(false)
+  })
+
+  it('uses Beijing time regardless of the host timezone', () => {
+    // 2026-08-21 01:00 UTC == 09:00 Beijing: peak even where the local clock reads 01:00.
+    expect(isPeakHour(Date.UTC(2026, 7, 21, 1, 0))).toBe(true)
+    // 2026-08-21 10:00 UTC == 18:00 Beijing: off-peak even where the local clock reads 10:00.
+    expect(isPeakHour(Date.UTC(2026, 7, 21, 10, 0))).toBe(false)
+  })
+
+  it('buckets days on the Beijing calendar', () => {
+    // 2026-08-20 16:30 UTC == 2026-08-21 00:30 Beijing.
+    expect(dayKey(Date.UTC(2026, 7, 20, 16, 30))).toBe('2026-08-21')
   })
 })
 

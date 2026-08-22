@@ -15,18 +15,30 @@ export interface UsageRecord {
   reasoningTokens?: number
 }
 
-/** Local-timezone day key `YYYY-MM-DD`. */
-export function dayKey(time?: number): string {
-  const d = time === undefined ? new Date() : new Date(time)
-  const pad = (n: number): string => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+/** China Standard Time offset: UTC+8, no DST, so fixed-offset arithmetic is
+ * exact. The published peak/off-peak schedule and the ledger day buckets are
+ * both defined on this clock, independent of the host's local timezone. */
+const CST_OFFSET_MS = 8 * 3_600_000
+
+interface CSTParts { year: number, month: number, day: number, hour: number, minute: number }
+
+function cstParts(time: number): CSTParts {
+  const d = new Date(time + CST_OFFSET_MS)
+  return { year: d.getUTCFullYear(), month: d.getUTCMonth() + 1, day: d.getUTCDate(), hour: d.getUTCHours(), minute: d.getUTCMinutes() }
 }
 
-/** DeepSeek peak billing window: 09:00-12:00 / 14:00-18:00, off-peak is the
- * remainder at half price. Approximated on the host-local clock — the ledger
- * day key already uses the same clock. */
+/** Beijing-time (UTC+8) day key `YYYY-MM-DD`. */
+export function dayKey(time?: number): string {
+  const p = cstParts(time === undefined ? Date.now() : time)
+  const pad = (n: number): string => String(n).padStart(2, '0')
+  return `${p.year}-${pad(p.month)}-${pad(p.day)}`
+}
+
+/** DeepSeek peak billing window: Beijing 09:00-12:00 / 14:00-18:00, off-peak is
+ * the remainder at half price. Evaluated on China Standard Time so the split
+ * matches the published schedule on any host timezone. */
 export function isPeakHour(time: number): boolean {
-  const hour = new Date(time).getHours()
+  const { hour } = cstParts(time)
   return (hour >= 9 && hour < 12) || (hour >= 14 && hour < 18)
 }
 
