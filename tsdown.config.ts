@@ -42,8 +42,9 @@ export default (): UserConfig[] => {
     fixedExtension: false,
     dts: false,
     clean: false,
-    // The cordis framework resolves at runtime from the dsh profile tree.
-    external: ['@deepseek-ai/cordis'],
+    // The cordis framework and the dsh tool SDK resolve at runtime from the
+    // dsh profile tree (both are peerDependencies — harness convention).
+    external: ['@deepseek-ai/cordis', '@deepseek-ai/dsh-tools'],
   }]
 
   if (existsSync(resolve(process.cwd(), 'src/client/index.ts'))) {
