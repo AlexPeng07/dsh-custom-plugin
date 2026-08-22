@@ -28,6 +28,9 @@
       "platform": "web"
     }
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.build.json && tsdown",
     "bundle": "tsdown",
@@ -37,7 +40,7 @@
     "test:watch": "vitest"
   },
   "peerDependencies": {
-    "react": "^18.2.0"
+    "@deepseek-ai/cordis": "^4.0.1"
   },
   "dependencies": {},
   "devDependencies": {

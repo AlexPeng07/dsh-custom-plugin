@@ -76,6 +76,17 @@ The `custom_plugin_status` tool reports appearance config, today's per-model usa
 
 Prerequisites: Node 22+, pnpm, and the `dsh` CLI (the official `@deepseek-ai/dsh` npm package; `npx @deepseek-ai/dsh` stands in for `dsh` when it is not installed globally).
 
+### From npm
+
+```sh
+dsh plugin --profile web add @alexpeng/dsh-custom-plugin
+# restart dsh web
+```
+
+The registry tarball ships prebuilt output — no source build on the installing machine.
+
+### Local link (development)
+
 ```sh
 # build (run from this repo root)
 pnpm install

@@ -76,6 +76,17 @@ DeepSeek Harness（DSH）Web GUI 的 Custom 便利套件：个性化外观、天
 
 前置：Node 22+、pnpm，以及 `dsh` CLI（官方 npm 包 `@deepseek-ai/dsh`；未全局安装时，可用 `npx @deepseek-ai/dsh` 代替 `dsh`）。
 
+### 从 npm 安装
+
+```sh
+dsh plugin --profile web add @alexpeng/dsh-custom-plugin
+# 重启 dsh web
+```
+
+registry 上是预构建产物，安装端无需从源码构建。
+
+### 本地链接（开发）
+
 ```sh
 # 构建（本仓库根目录执行）
 pnpm install
