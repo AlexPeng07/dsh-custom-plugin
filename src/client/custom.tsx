@@ -15,7 +15,7 @@ import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SessionListState, TurnLocation, WorkspaceListState } from '@deepseek-ai/dsh-client-runtime/client'
 import type { ThemeRuntime } from '@deepseek-ai/dsh-client-ui-theme/client'
 import type { Context } from '@deepseek-ai/cordis'
-import type { CustomPluginConfig, FolderNode, PromptItem, TimelineItem } from '../protocol.ts'
+import type { CustomPluginConfig, FolderNode, PromptItem, TimelineItem, UsageRow } from '../protocol.ts'
 import {
   apiBalanceGet,
   apiDebugInfo,
@@ -28,6 +28,7 @@ import {
   apiUsageScan,
 } from './api.ts'
 import { MERMAID_SCRIPT_PATH } from '../protocol.ts'
+import { mermaidLiveUrl } from './mermaid-url.ts'
 import { STATIC_CSS } from './styles.ts'
 
 /** Minimal input-state face the input dock owner provides. */
@@ -67,7 +68,7 @@ interface Store {
   prompts: PromptItem[]
   stars: Record<string, Record<string, boolean>>
   apiKey: string
-  usage: Record<string, Record<string, { in: number; out: number; cacheIn: number; cacheW: number; reason: number; calls: number }>>
+  usage: Record<string, Record<string, UsageRow>>
   sessionId: string | null
   turns: { sessionId: string; items: TimelineItem[] } | null
   anchors: Map<number, { el: HTMLElement; turn: TurnLocation | null }>
@@ -108,8 +109,11 @@ interface Store {
   greeted: boolean
 }
 
-/** Palette of 20 muted low-saturation backgrounds (with matching tab colors). */
+/** Palette of 20 muted low-saturation backgrounds (with matching tab colors).
+ * 天青灰 leads the list: it is the install default and renders first among
+ * the palette swatches, right after 无颜色 / 极光. */
 export const PALETTE: Array<[string, string, string]> = [
+  ['天青灰', '#E9EBEE', '#D6DADF'],
   ['暖象牙', '#F5F0E8', '#E8E0D4'],
   ['雾灰绿', '#E9EDE6', '#D7DED3'],
   ['烟熏玫瑰', '#F2EAEC', '#E5D6DA'],
@@ -123,7 +127,6 @@ export const PALETTE: Array<[string, string, string]> = [
   ['奶油黄', '#F4F0E6', '#E6E1D5'],
   ['鼠尾草', '#EAEDE5', '#D7DED1'],
   ['腮红粉', '#F3EAEC', '#E6D6DA'],
-  ['天青灰', '#E9EBEE', '#D6DADF'],
   ['香草白', '#F3F0E6', '#E5E0D4'],
   ['青灰', '#E7F0F0', '#D3E1E1'],
   ['杏仁白', '#F0ECE8', '#E2DAD3'],
@@ -213,7 +216,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
   const C = ctx
 
   const S: Store = {
-    cfg: { bg: 'aurora', weather: 'none', glass: true, glassMode: 'frost', globalGlass: true, timeline: true, timelineLeft: false, starsOnly: false, quote: true, antiScroll: false, mermaid: true, formula: true },
+    cfg: { bg: '天青灰', weather: 'none', glass: true, glassMode: 'frost', globalGlass: true, timeline: true, timelineLeft: false, starsOnly: false, quote: true, antiScroll: false, mermaid: true, formula: true },
     folders: [],
     prompts: [],
     stars: {},
@@ -412,6 +415,12 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     if (cfg.bg === 'aurora') {
       dyn += '@keyframes vx-aurora { 0% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } 100% { background-position: 0% 50%; } }'
       dyn += ' body { background: linear-gradient(120deg, #8fa8d8, #b59fd8, #8fc4b4, #d8a8c0) !important; background-size: 320% 320% !important; animation: vx-aurora 26s ease infinite !important; }'
+      // The composer seat fades from transparent into a translucent-dark
+      // bg-base over 36px (GUI rule on the scrollport's sticky composer
+      // child); over the bright aurora in dark mode that fade reads as a
+      // smudged band at the page bottom — drop it and let the aurora flow
+      // through. Light mode keeps the stock fade.
+      dyn += ' body[data-ds-dark-theme] [data-conversation-scroll] > :has([data-conversation-composer-overlay]) { background: transparent !important; }'
     } else if (cfg.bg !== undefined && cfg.bg !== 'default') {
       const base = (PALETTE.find((p) => p[0] === cfg.bg) ?? PALETTE[0])[1]
       dyn += ` body { background-color: ${base} !important; }`
@@ -701,7 +710,12 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       const t0 = Date.now()
       const loop = (): void => {
         const weather = s.cfg.weather ?? 'none'
-        if (weather === 'none') return // no particles scheduled: stay idle
+        if (weather === 'none') {
+          // Baseline behaviour: switching to "off" wipes the last painted frame
+          // instead of leaving it frozen on the canvas.
+          try { g.clearRect(0, 0, cvs.width, cvs.height) } catch { /* context lost */ }
+          return // no particles scheduled: stay idle
+        }
         raf = requestAnimationFrame(loop)
         fxFrame(g, cvs, weather, Date.now() - t0)
       }
@@ -713,6 +727,10 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
 
   // ================= timeline =================
   let lastRefetchAt = 0
+  // Rows already counted when the last rows>items refetch went out; one
+  // attempt per rendered-row growth stops the every-2s re-read loop when the
+  // host's own tail cap is what leaves the oldest loaded rows uncovered.
+  let railRefetchRows = -1
   let lastDiagAt = 0
   function diagThrottled(message: string): void {
     const now = Date.now()
@@ -729,6 +747,9 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
   async function fetchTurns(sessionId: string): Promise<void> {
     try {
       const result = await apiTimelineGet(sessionId)
+      // A slower fetch for a previously open session must not paint its turns
+      // onto the newly opened one's rows.
+      if (sessionId !== S.sessionId) return
       if (result.ok === true) {
         S.turns = { sessionId, items: result.items ?? [] }
         setS({ turns: S.turns })
@@ -809,7 +830,10 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     if (w === null) return
     // Turns data missing or stale (session switched, history loaded before the
     // first fetch): pull it back throttled instead of staying empty forever.
-    if (S.turns === null || S.turns.sessionId !== S.sessionId) scheduleTurnsRefetch()
+    if (S.turns === null || S.turns.sessionId !== S.sessionId) {
+      railRefetchRows = -1
+      scheduleTurnsRefetch()
+    }
     const items = S.turns !== null && Array.isArray(S.turns.items) ? S.turns.items : []
     let scroller = S.scrollerEl
     if (scroller === null || !scroller.isConnected) {
@@ -854,7 +878,10 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       // More rendered rows than the turns data covers (older history loaded
       // past what the host returned, or the fetch predates the load): pull the
       // turns again so every dot keeps its preview text and actions.
-      if (rows.length > items.length) scheduleTurnsRefetch()
+      if (rows.length > items.length && railRefetchRows < rows.length) {
+        railRefetchRows = rows.length
+        scheduleTurnsRefetch()
+      }
       for (let i = 0; i < rows.length; i++) {
         const item = offset + i >= 0 ? items[offset + i] : undefined
         if (item === undefined) continue
@@ -996,22 +1023,6 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     const ok = await copyText(codes.join('\n\n'))
     toast(ok ? `已复制 ${codes.length} 个 MathML（可粘贴到 Word）` : '复制失败', ok ? 'info' : 'error')
   }
-  function mermaidLiveUrl(code: string): string {
-    const state = { code, mermaid: { theme: 'default' } }
-    const bytes: number[] = []
-    for (let i = 0; i < state.code.length; i++) {
-      let cp = state.code.codePointAt(i) ?? 0
-      if (cp > 0xffff) i++
-      if (cp < 0x80) bytes.push(cp)
-      else if (cp < 0x800) bytes.push(0xc0 | (cp >> 6), 0x80 | (cp & 63))
-      else if (cp < 0x10000) bytes.push(0xe0 | (cp >> 12), 0x80 | ((cp >> 6) & 63), 0x80 | (cp & 63))
-      else bytes.push(0xf0 | (cp >> 18), 0x80 | ((cp >> 12) & 63), 0x80 | ((cp >> 6) & 63), 0x80 | (cp & 63))
-    }
-    let bin = ''
-    for (const byte of bytes) bin += String.fromCharCode(byte)
-    const b64 = btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
-    return 'https://mermaid.live/edit#pako:' + b64
-  }
   let mermaidState: { status: 'idle' | 'loading' | 'ready' | 'failed'; error?: string } = { status: 'idle' }
   async function ensureMermaid(): Promise<boolean> {
     if (mermaidState.status === 'ready') return true
@@ -1069,14 +1080,18 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     if (codes.length === 0) { toast('未找到 Mermaid 代码块', 'error'); return }
     setS({ mermaidModal: { title: item.text.slice(0, 40), codes, index: 0 } })
   }
+  /** Peak-hour CNY unit prices per 1M tokens (official peak/off-peak table
+   * effective 2026-08-17); off-peak hours are exactly half. deepseek-chat and
+   * deepseek-reasoner were deprecated 2026-07-24 and both map onto
+   * deepseek-v4-flash pricing. */
   function priceOf(model: string): { in: number; out: number; cache: number } {
-    const prices: Record<string, { in: number; out: number; cache: number }> = {
-      'deepseek-chat': { in: 0.27, out: 0.07, cache: 1.1 },
-      'deepseek-reasoner': { in: 0.55, out: 0.14, cache: 2.19 },
-      'deepseek-v4-flash': { in: 0.27, out: 0.07, cache: 1.1 },
-      'deepseek-v4-pro': { in: 0.55, out: 0.14, cache: 2.19 },
+    const peak: Record<string, { in: number; out: number; cache: number }> = {
+      'deepseek-v4-flash': { in: 3, cache: 0.1, out: 9 },
+      'deepseek-v4-pro': { in: 9, cache: 0.3, out: 27 },
+      'deepseek-chat': { in: 3, cache: 0.1, out: 9 },
+      'deepseek-reasoner': { in: 3, cache: 0.1, out: 9 },
     }
-    return prices[model] ?? prices['deepseek-chat']
+    return peak[model] ?? peak['deepseek-v4-flash']
   }
   async function refreshBalance(): Promise<void> {
     try {
@@ -1095,7 +1110,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
         S.usage = { ...S.usage }
         S.usage[dayKey()] = result.usageToday as Store['usage'][string]
         setS({ usage: S.usage })
-        toast('已扫描今日会话日志', 'info')
+        toast(`已扫描今日会话日志（${String(result.scannedSessions)} 个今日活跃会话）`, 'info')
       } else {
         toast(result.error ?? '扫描失败', 'error')
       }
@@ -1240,8 +1255,11 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     React.useEffect(() => { if (b === null) void refreshBalance() }, [])
     const usageToday = s.usage[dayKey()] ?? {}
     const calls = Object.keys(usageToday).reduce((n, k) => n + (usageToday[k].calls ?? 0), 0)
-    const balance = (b?.ok === true && b.balance !== null && b.balance !== undefined)
-      ? ('¥' + (b.balance as { total?: string }).total)
+    const bal = (b?.ok === true && b.balance !== null && b.balance !== undefined)
+      ? b.balance as { currency?: string, total?: string }
+      : null
+    const balance = bal !== null
+      ? ((bal.currency ?? 'CNY') === 'CNY' ? '¥' + (bal.total ?? '') : `${bal.total ?? ''} ${bal.currency ?? ''}`)
       : (b?.ok === false ? ((b as { keyConfigured?: boolean }).keyConfigured === true ? '额度?' : '未配置密钥') : '额度…')
     const open = hover || pinned
     return React.createElement('span', { className: 'vx-balance-wrap' },
@@ -1284,7 +1302,16 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
         React.createElement('tbody', null, models.map((model) => {
           const row = day[model]
           const p = priceOf(model)
-          const cost = ((row.in ?? 0) * p.in + (row.out ?? 0) * p.out + (row.cacheIn ?? 0) * p.cache) / 1e6 * 7.25
+          // Peak-hour volume bills at the table price, the rest of the day at
+          // half; cache writes bill at the cache-miss input rate. Rows folded
+          // before the peak split have no peak* fields (treated as off-peak).
+          const pin = row.peakIn ?? 0
+          const pcacheIn = row.peakCacheIn ?? 0
+          const pcacheW = row.peakCacheW ?? 0
+          const pout = row.peakOut ?? 0
+          const peakCost = pin * p.in + pcacheIn * p.cache + pcacheW * p.in + pout * p.out
+          const offCost = ((row.in ?? 0) - pin) * p.in + ((row.cacheIn ?? 0) - pcacheIn) * p.cache + ((row.cacheW ?? 0) - pcacheW) * p.in + ((row.out ?? 0) - pout) * p.out
+          const cost = (peakCost + offCost / 2) / 1e6
           return React.createElement('tr', { key: model },
             React.createElement('td', null, model),
             React.createElement('td', null, row.in ?? 0),
@@ -1295,7 +1322,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
           )
         })),
       ),
-      React.createElement('div', { className: 'vx-muted' }, '费用按 DeepSeek 官方单价 × 汇率 7.25 估算，仅供参考'),
+      React.createElement('div', { className: 'vx-muted' }, '费用按 DeepSeek 官方峰谷单价估算（¥/百万 tokens，高峰时段 9-12/14-18 时，空闲时段半价），仅供参考'),
     )
   }
 
@@ -1314,12 +1341,16 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
         }),
         React.createElement('button', { className: 'vx-btn', onClick: () => { void refreshBalance() } }, React.createElement(Icon, { n: 'refresh', size: 13 }), ' 刷新'),
       ),
-      React.createElement('div', { className: 'vx-muted' }, 'Key 仅保存在本机用户主目录 custom-plugin-state.json；留空则尝试自动探测已配置的 DeepSeek 凭据。'),
+      React.createElement('div', { className: 'vx-muted' }, 'Key 仅保存在本机状态文件；留空时自动读取 DSH 已配置的 DeepSeek 凭据。'),
       b !== null && b.ok === true && b.balance !== null && b.balance !== undefined
-        ? React.createElement('div', { className: 'vx-balance-lines' },
-          React.createElement('div', null, `可用额度: ¥${(b.balance as { total?: string }).total} ${(b.balance as { currency?: string }).currency ?? ''}`),
-          React.createElement('div', { className: 'vx-muted' }, `赠送 ¥${(b.balance as { granted?: string }).granted} · 充值 ¥${(b.balance as { toppedUp?: string }).toppedUp}${(b as { available?: boolean }).available === false ? ' · 余额不足不可用' : ''}`),
-        )
+        ? (() => {
+          const info = b.balance as { currency?: string, total?: string, granted?: string, toppedUp?: string }
+          const sym = (info.currency ?? 'CNY') === 'CNY' ? '¥' : `${info.currency ?? ''} `
+          return React.createElement('div', { className: 'vx-balance-lines' },
+            React.createElement('div', null, `可用额度: ${sym}${info.total ?? ''}`),
+            React.createElement('div', { className: 'vx-muted' }, `赠送 ${sym}${info.granted ?? ''} · 充值 ${sym}${info.toppedUp ?? ''}${(b as { available?: boolean }).available === false ? ' · 余额不足不可用' : ''}`),
+          )
+        })()
         : null,
       b !== null && b.ok === false ? React.createElement('div', { className: 'vx-error' }, String((b as { error?: unknown }).error ?? '未知错误')) : null,
       React.createElement('div', { className: 'vx-section-title' }, '今日消费与 Token'),
@@ -1440,12 +1471,34 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
   function RailPopover(): React.ReactElement | null {
     const s = useS()
     const h = s.railHover
+    const popRef = React.useRef<HTMLDivElement | null>(null)
+    // Keep the card inside the rail's height: dots near the bottom would push
+    // the action row past the viewport bottom otherwise. Direct DOM writes
+    // avoid the measure → setState → re-measure loop a state clamp causes.
+    React.useLayoutEffect(() => {
+      const el = popRef.current
+      if (el === null || h === null) return
+      const rail = el.parentElement
+      if (rail === null) return
+      const base = Math.max(8, h.y - 90)
+      el.style.top = base + 'px'
+      const over = el.offsetTop + el.offsetHeight - rail.clientHeight
+      if (over > 0) el.style.top = Math.max(8, base - over) + 'px'
+    }, [h?.seq, h?.y])
     if (h === null) return null
     const item = s.turns !== null && Array.isArray(s.turns.items) ? s.turns.items.find((x) => x.seq === h.seq) ?? null : null
     if (item === null) return null
     const starred = S.sessionId !== null && s.stars[S.sessionId]?.[h.seq] === true
     const side = s.cfg.timelineLeft === true ? 'left' : 'right'
-    return React.createElement('div', { className: `vx-glass vx-rail-pop ${side}`, style: { top: Math.max(8, h.y - 90) } },
+    return React.createElement('div', {
+      ref: (el: HTMLDivElement | null): void => { popRef.current = el },
+      className: `vx-glass vx-rail-pop ${side}`,
+      style: { top: Math.max(8, h.y - 90) },
+      // Entering the card cancels the dot's hide timer so the actions (star,
+      // fork, copy) are reachable; leaving re-arms it like a dot leave does.
+      onMouseEnter: () => { if (S.railHoverTimer !== null) { clearTimeout(S.railHoverTimer); S.railHoverTimer = null } },
+      onMouseLeave: () => { S.railHoverTimer = setTimeout(() => setS({ railHover: null }), 350) },
+    },
       React.createElement('div', { className: 'vx-pattern' }),
       React.createElement('div', { className: 'vx-pop-time' }, `${fmtClock(item.time)} · 第 ${item.turn ?? '?'} 轮${item.imageCount > 0 ? ` · ${item.imageCount} 张图片` : ''}`),
       React.createElement('div', { className: 'vx-pop-text' }, item.text.slice(0, 220) + (item.text.length > 220 ? '…' : '')),
@@ -1488,9 +1541,14 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       if (s.cfg.timeline !== true || S.sessionId === null) return
       const el = trackRef.current
       if (el === null) return
+      // The hover card lives inside the 12px rail but must behave like a
+      // normal panel: button presses there are clicks (not thumb drags) and
+      // wheel events should not scroll the chat out from under the reader.
+      const fromPopover = (e: Event): boolean => e.target instanceof Element && e.target.closest('.vx-rail-pop') !== null
       const down = (e: PointerEvent): void => {
         const scroller = S.scrollerEl
         if (scroller === null || !scroller.isConnected) return
+        if (fromPopover(e)) return
         e.preventDefault()
         const rect = el.getBoundingClientRect()
         const startY = e.clientY
@@ -1514,6 +1572,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       const onWheel = (e: WheelEvent): void => {
         const scroller = S.scrollerEl
         if (scroller === null || !scroller.isConnected) return
+        if (fromPopover(e)) return
         e.preventDefault()
         const floor = Math.max(0, (scroller.scrollHeight ?? 1) - (scroller.clientHeight ?? 0))
         scroller.scrollTop = Math.max(0, Math.min(floor, (scroller.scrollTop ?? 0) + (e.deltaY || 0)))
@@ -1553,8 +1612,9 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       saveCfg()
     }
     return React.createElement('div', { className: 'vx-col' },
-      React.createElement('div', { className: 'vx-section-title' }, '背景颜色（20 组典雅低饱和）'),
-      dark ? React.createElement('div', { className: 'vx-muted' }, '深色模式下仅支持「无颜色」与「极光」，其余颜色已禁用；切回浅色模式即可全选。') : null,
+      React.createElement('div', { className: 'vx-muted' }, '主题背景、天气特效与玻璃质感，选择后即时生效。'),
+      React.createElement('div', { className: 'vx-section-title' }, '背景颜色'),
+      React.createElement('div', { className: 'vx-muted' }, '20 组低饱和色板；深色模式下仅可用「无颜色」与「极光」。'),
       React.createElement('div', { className: 'vx-swatches' },
         React.createElement('button', { key: 'default', className: 'vx-swatch' + (s.cfg.bg === 'default' ? ' on' : ''), onClick: () => set('bg', 'default'), title: '无颜色（默认主题）' },
           React.createElement('span', { className: 'vx-swatch-box', style: { background: 'repeating-conic-gradient(#ccc 0 25%, #eee 0 50%) 0 0/10px 10px' } }),
@@ -1566,7 +1626,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
           React.createElement('span', { className: 'vx-swatch-box', style: { background: p[1] } }),
           React.createElement('span', { className: 'vx-swatch-label' }, p[0]))),
       ),
-      React.createElement('div', { className: 'vx-section-title' }, '天气特效（一键切换）'),
+      React.createElement('div', { className: 'vx-section-title' }, '天气特效'),
       React.createElement('div', { className: 'vx-row wrap' },
         (['none', 'snow', 'rain', 'sakura'] as const).map((w) => {
           const iconNames: Record<string, string> = { none: 'minimize', snow: 'snowflake', rain: 'cloudRain', sakura: 'flower' }
@@ -1586,7 +1646,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
         React.createElement('button', { className: 'vx-btn' + (s.cfg.glassMode !== 'liquid' ? ' on' : ''), onClick: () => set('glassMode', 'frost') }, '毛玻璃'),
         React.createElement('button', { className: 'vx-btn' + (s.cfg.glassMode === 'liquid' ? ' on' : ''), onClick: () => set('glassMode', 'liquid') }, '液态玻璃'),
       ),
-      React.createElement('div', { className: 'vx-muted' }, '液态玻璃（Chromium 位移折射，无字色散色、轻微模糊背景）；Safari/Firefox 自动回退毛玻璃。'),
+      React.createElement('div', { className: 'vx-muted' }, '在 Chromium 启用液态玻璃，Safari/Firefox 自动回退毛玻璃。'),
       React.createElement(Toggle, { label: '全局浮层玻璃', checked: s.cfg.globalGlass === true, onChange: (v) => set('globalGlass', v), hint: '对弹窗/菜单等浮层应用模糊，不改变圆角与边框' }),
     )
   }
@@ -1788,7 +1848,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       })
     }
     return React.createElement('div', { className: 'vx-col' },
-      React.createElement('div', { className: 'vx-muted' }, '文件夹保存在用户主目录 custom-plugin-state.json，跨工作区共享；可收纳任意工作区与会话，支持拖拽排序。'),
+      React.createElement('div', { className: 'vx-muted' }, '跨工作区共享的会话与工作区收藏夹，支持多级嵌套与拖拽排序；数据保存在本机状态文件。'),
       S.folders.length === 0 ? React.createElement('div', { className: 'vx-muted vx-pad-sm' }, '暂无文件夹，点击下方按钮创建。') : null,
       S.folders.map((f) => React.createElement(FolderNode, { key: f.id, node: f, depth: 0, useSessions: props.useSessions, useWorkspaces: props.useWorkspaces })),
       React.createElement('div', { className: 'vx-row vx-pad-sm' },
@@ -1814,7 +1874,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       saveCfg()
     }
     return React.createElement('div', { className: 'vx-col' },
-      React.createElement('div', { className: 'vx-muted' }, '提示词保存在 custom-plugin-state.json；点击会话顶部的「提示词」按钮可快速调用。'),
+      React.createElement('div', { className: 'vx-muted' }, '常用提示词收藏；点击会话顶部的「提示词」按钮搜索插入，也可直接复制。'),
       S.prompts.map((p) => React.createElement('div', { key: p.id, className: 'vx-prompt-card' },
         React.createElement('div', { className: 'vx-row' },
           React.createElement('span', { className: 'vx-prompt-title' }, p.name),
@@ -1837,7 +1897,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       saveCfg()
     }
     return React.createElement('div', { className: 'vx-col' },
-      React.createElement('div', { className: 'vx-muted' }, '每条用户消息在右侧生成时间线节点：悬停预览、点击跳转；星标节点可筛选显示。'),
+      React.createElement('div', { className: 'vx-muted' }, '为每条用户消息生成导航节点：悬停预览、点击跳转，支持星标与分支。'),
       React.createElement(Toggle, { label: '显示时间线', checked: s.cfg.timeline === true, onChange: (v) => set('timeline', v) }),
       React.createElement(Toggle, { label: '时间线在左侧', checked: s.cfg.timelineLeft === true, onChange: (v) => set('timelineLeft', v) }),
       React.createElement(Toggle, { label: '仅显示星标', checked: s.cfg.starsOnly === true, onChange: (v) => set('starsOnly', v) }),
@@ -1847,7 +1907,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
   function ExportTab(): React.ReactElement {
     const s = useS()
     return React.createElement('div', { className: 'vx-col' },
-      React.createElement('div', { className: 'vx-muted' }, '导出当前会话：JSON 为标准 messages 结构（可导入其他工具），Markdown 便于阅读，PDF 版含图片（打印时另存为 PDF）。'),
+      React.createElement('div', { className: 'vx-muted' }, '将当前会话导出为文件：JSON 可导入其他工具，Markdown 便于阅读分享，PDF 内嵌图片（打印时另存为 PDF）。'),
       React.createElement('div', { className: 'vx-row wrap' },
         React.createElement('button', { className: 'vx-btn big', disabled: s.exporting === true, onClick: () => runExport('json') }, React.createElement(Icon, { n: 'download', size: 14 }), ' JSON'),
         React.createElement('button', { className: 'vx-btn big', disabled: s.exporting === true, onClick: () => runExport('markdown') }, React.createElement(Icon, { n: 'download', size: 14 }), ' Markdown'),
@@ -1859,18 +1919,20 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
 
   function MermaidTab(): React.ReactElement {
     const [engine, setEngine] = React.useState(mermaidState.status)
+    const aliveRef = React.useRef(true)
     React.useEffect(() => {
-      const t = new Promise<void>((resolve) => setTimeout(resolve, 300)).then(() => setEngine(mermaidState.status)).catch(() => {})
-      return () => { try { void t.catch(() => {}) } catch { /* timer disposed */ } }
+      const t = new Promise<void>((resolve) => setTimeout(resolve, 300)).then(() => { if (aliveRef.current) setEngine(mermaidState.status) }).catch(() => {})
+      return () => { aliveRef.current = false; try { void t.catch(() => {}) } catch { /* timer disposed */ } }
     }, [])
     const load = async (): Promise<void> => {
       setEngine('loading')
       const ok = await ensureMermaid()
+      if (!aliveRef.current) return
       setEngine(ok ? 'ready' : 'failed')
       toast(ok ? 'Mermaid 引擎已就绪' : '加载失败：可改用 mermaid.live 按钮', ok ? 'info' : 'error')
     }
     return React.createElement('div', { className: 'vx-col' },
-      React.createElement('div', { className: 'vx-muted vx-pad-sm' }, '检测到 mermaid 代码块时，在消息下方显示渲染按钮；渲染失败可直接跳转 mermaid.live。'),
+      React.createElement('div', { className: 'vx-muted vx-pad-sm' }, '消息中的 Mermaid 代码块可就地渲染为图表；渲染失败可一键跳转 mermaid.live 在线编辑。'),
       React.createElement(Toggle, { label: '显示 Mermaid 渲染按钮', checked: S.cfg.mermaid === true, onChange: (v) => { setS({ cfg: { ...S.cfg, mermaid: v } }); saveCfg() } }),
       React.createElement('div', { className: 'vx-row' },
         React.createElement('button', { className: 'vx-btn', onClick: () => void load() },
@@ -1894,7 +1956,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       React.createElement(Toggle, { label: '公式复制', checked: s.cfg.formula === true, onChange: (v) => set('formula', v), hint: '消息下方显示 LaTeX/MathML 复制按钮' }),
       React.createElement('div', { className: 'vx-row vx-pad-sm' },
         React.createElement('button', { className: 'vx-btn vx-btn-danger', onClick: () => setS({ batchModal: true }) },
-          React.createElement(Icon, { n: 'trash', size: 13 }), ' 批量删除对话记录'),
+          React.createElement(Icon, { n: 'trash', size: 13 }), ' 批量归档会话'),
       ),
     )
   }
@@ -1906,10 +1968,11 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     }
     React.useEffect(() => { void loadInfo() }, [])
     return React.createElement('div', { className: 'vx-col vx-pad' },
-      React.createElement('div', null, 'Custom 便利套件 — 特效引擎（三层景深粒子 / 心形花瓣 / 言叶之庭雨）。'),
+      React.createElement('div', null, 'Custom 便利套件'),
+      React.createElement('div', { className: 'vx-muted' }, '外观与天气特效 · 时间线导航 · 项目文件夹 · 提示词 · 会话导出 · Mermaid 渲染 · 额度面板'),
       info !== null && info.ok === true
         ? React.createElement('pre', { className: 'vx-pre' },
-          `状态文件: ${String(info.statePath ?? '')}\n今日: ${String(info.today ?? '')}\nMermaid: ${String(info.mermaidBytes ?? 0)} bytes\n事件样例: ${JSON.stringify(info.eventSample, null, 2)}`)
+          `状态文件: ${String(info.statePath ?? '')}\n今日: ${String(info.today ?? '')}\nMermaid: ${String(info.mermaidBytes ?? 0)} bytes\n今日用量: ${JSON.stringify(info.usageToday ?? {})}\n客户端诊断: ${Array.isArray(info.diagReports) ? `${String(info.diagReports.length)} 条` : '0 条'}`)
         : null,
       React.createElement('button', { className: 'vx-btn', onClick: () => void loadInfo() }, React.createElement(Icon, { n: 'refresh', size: 12 }), ' 刷新调试信息'),
     )
@@ -1966,6 +2029,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     const [svg, setSvg] = React.useState<string | null>(null)
     const [err, setErr] = React.useState<string | null>(null)
     const [loading, setLoading] = React.useState(false)
+    const [liveUrl, setLiveUrl] = React.useState('#')
     React.useEffect(() => {
       if (mm === null) return
       let alive = true
@@ -1973,6 +2037,9 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       setErr(null)
       setLoading(true)
       void (async () => {
+        const url = await mermaidLiveUrl(mm.codes[mm.index])
+        if (!alive) return
+        setLiveUrl(url)
         const ready = await ensureMermaid()
         if (!alive) return
         if (!ready) { setErr('Mermaid 引擎加载失败（网络不可达？）。可点击下方按钮在 mermaid.live 打开'); setLoading(false); return }
@@ -1985,7 +2052,6 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       return () => { alive = false }
     }, [mm?.index])
     if (mm === null) return null
-    const code = mm.codes[mm.index]
     return React.createElement('div', { className: 'vx-modal-mask', onClick: () => setS({ mermaidModal: null }) },
       React.createElement('div', { className: 'vx-glass vx-modal', onClick: (e: React.MouseEvent) => e.stopPropagation() },
         React.createElement('div', { className: 'vx-pattern' }),
@@ -1994,7 +2060,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
           React.createElement('span', { className: 'vx-row' },
             mm.codes.length > 1 ? React.createElement('button', { className: 'vx-chip', title: '上一个', onClick: () => setS({ mermaidModal: { ...mm, index: (mm.index + mm.codes.length - 1) % mm.codes.length } }) }, React.createElement(Icon, { n: 'chevronRight', size: 12, style: { transform: 'rotate(180deg)' } })) : null,
             mm.codes.length > 1 ? React.createElement('button', { className: 'vx-chip', title: '下一个', onClick: () => setS({ mermaidModal: { ...mm, index: (mm.index + 1) % mm.codes.length } }) }, React.createElement(Icon, { n: 'chevronRight', size: 12 })) : null,
-            React.createElement('a', { className: 'vx-chip vx-link', href: mermaidLiveUrl(code), target: '_blank', rel: 'noopener noreferrer' }, '在 mermaid.live 打开'),
+            React.createElement('a', { className: 'vx-chip vx-link', href: liveUrl, target: '_blank', rel: 'noopener noreferrer' }, '在 mermaid.live 打开'),
             React.createElement('button', { className: 'vx-chip', title: '关闭', onClick: () => setS({ mermaidModal: null }) }, React.createElement(Icon, { n: 'x', size: 12 })),
           ),
         ),
@@ -2024,7 +2090,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     const selCount = Object.keys(sel).length
     const batchArchive = (targetIds: string[]): void => {
       const workspaces = C.get('workspaces') as { archiveSession(id: string): Promise<void> } | undefined
-      if (workspaces === undefined) { toast('归档服务不可用', 'error'); return }
+      if (workspaces === undefined || typeof workspaces.archiveSession !== 'function') { toast('归档服务不可用', 'error'); return }
       let done = 0
       const run = (): void => {
         if (done >= targetIds.length) { toast(`已归档 ${targetIds.length} 个会话`, 'info'); setS({ batchModal: false }); return }
@@ -2037,7 +2103,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       React.createElement('div', { className: 'vx-glass vx-modal', style: { width: 'min(560px, 92vw)' }, onClick: (e: React.MouseEvent) => e.stopPropagation() },
         React.createElement('div', { className: 'vx-pattern' }),
         React.createElement('div', { className: 'vx-pop-head' },
-          React.createElement('span', null, '批量清理对话记录'),
+          React.createElement('span', null, '批量归档会话'),
           React.createElement('button', { className: 'vx-chip', title: '关闭', onClick: () => setS({ batchModal: false }) }, React.createElement(Icon, { n: 'x', size: 12 })),
         ),
         React.createElement('div', { className: 'vx-muted vx-pad-sm' }, '将选中的会话归档（从会话列表移除，日志仍保留，可在存储中找回）'),
@@ -2105,6 +2171,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       React.createElement('div', { className: 'vx-panel-head', onMouseDown: onHeadDown },
         React.createElement(Icon, { n: 'sliders', size: 14 }),
         React.createElement('span', { className: 'vx-panel-title' }, '个性化中心'),
+        React.createElement('span', { className: 'vx-panel-sub' }, '外观 · 效率 · 额度'),
         React.createElement('span', { className: 'vx-flex1' }),
         React.createElement('button', { className: 'vx-chip', title: '关闭', onClick: () => setS({ panelOpen: false }) }, React.createElement(Icon, { n: 'x', size: 12 })),
       ),

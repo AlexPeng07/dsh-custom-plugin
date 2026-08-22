@@ -32,8 +32,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const timer = globalThis.setTimeout(() => { controller.abort() }, REQUEST_TIMEOUT_MS)
   try {
     const response = await fetch(`${CUSTOM_PLUGIN_API_PREFIX}${path}`, { ...init, signal: controller.signal })
-    const body = await response.json() as T & { error?: string }
-    return body
+    try {
+      return await response.json() as T & { error?: string }
+    } catch {
+      // Non-JSON body (e.g. a size-limit rejection): keep the documented
+      // contract of an { ok: false } envelope instead of a bare SyntaxError.
+      return { ok: false, error: `HTTP ${String(response.status)} 非 JSON 响应` } as unknown as T
+    }
+  } catch (error) {
+    return { ok: false, error: String((error as Error)?.message ?? error) } as unknown as T
   } finally {
     globalThis.clearTimeout(timer)
   }

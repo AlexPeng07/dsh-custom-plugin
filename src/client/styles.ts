@@ -218,11 +218,14 @@ export const STATIC_CSS = `/* dsh-custom-plugin static styles. Every rule is glo
     line-height: 1.55;
     z-index: 5;
   }
+  /* Class = which side the rail sits on; the card must open toward the page
+     content. It is a child of the 12px-wide rail, so right:20px puts it left
+     of the rail and left:20px puts it right (20px = rail width + 8px gap). */
   .vx-rail-pop.right {
-    left: 20px;
+    right: 20px;
   }
   .vx-rail-pop.left {
-    right: 20px;
+    left: 20px;
   }
   .vx-pop-time {
     color: #6d7689;
@@ -362,6 +365,11 @@ export const STATIC_CSS = `/* dsh-custom-plugin static styles. Every rule is glo
   .vx-panel-title {
     font-weight: 600;
     font-size: 13px;
+  }
+  .vx-panel-sub {
+    font-size: 11px;
+    opacity: .62;
+    white-space: nowrap;
   }
   .vx-tabs {
     display: flex;
