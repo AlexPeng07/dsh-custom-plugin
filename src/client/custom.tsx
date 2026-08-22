@@ -1097,7 +1097,16 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     try {
       const result = await apiBalanceGet()
       S.balance = result as unknown as Record<string, unknown>
-      setS({ balance: S.balance })
+      // The route also carries the host's live usage ledger; fold today's row
+      // in so the 「今日 N 次」 badge refreshes together with the figure.
+      const usageToday = result.usageToday
+      if (usageToday !== undefined && usageToday !== null && typeof usageToday === 'object') {
+        S.usage = { ...S.usage }
+        S.usage[dayKey()] = usageToday as Store['usage'][string]
+        setS({ balance: S.balance, usage: S.usage })
+      } else {
+        setS({ balance: S.balance })
+      }
     } catch (error) {
       S.balance = { ok: false, error: String((error as Error)?.message ?? error) }
       setS({ balance: S.balance })
@@ -1252,7 +1261,13 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     const b = s.balance
     const [hover, setHover] = React.useState(false)
     const [pinned, setPinned] = React.useState(false)
-    React.useEffect(() => { if (b === null) void refreshBalance() }, [])
+    // Initial fetch plus a refresh every minute, so the balance figure and the
+    // today-usage badge stay current without pressing 刷新.
+    React.useEffect(() => {
+      if (S.balance === null) void refreshBalance()
+      const timer = setInterval(() => { void refreshBalance() }, 60_000)
+      return () => { clearInterval(timer) }
+    }, [])
     const usageToday = s.usage[dayKey()] ?? {}
     const calls = Object.keys(usageToday).reduce((n, k) => n + (usageToday[k].calls ?? 0), 0)
     const bal = (b?.ok === true && b.balance !== null && b.balance !== undefined)
