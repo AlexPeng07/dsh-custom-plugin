@@ -171,6 +171,10 @@ export async function buildExportRows(
   readImage?: (ref: ImageAttachmentRef) => Promise<StoredImageAttachment>,
 ): Promise<ExportRow[]> {
   const rows: ExportRow[] = []
+  // tool/result events carry only the ToolResultMessage (whose source holds the
+  // callId) — the producing tool's name has to be remembered from the paired
+  // tool/call event while walking the log in order.
+  const callNames = new Map<string, string>()
   for (const event of snapshot.events) {
     if (event === undefined || event === null) continue
     if (event.type === 'user/message') {
@@ -186,13 +190,15 @@ export async function buildExportRows(
       const message = event.data.message
       rows.push({ seq: event.seq, time: event.time, kind: 'assistant', text: messageText(message.content) })
     } else if (event.type === 'tool/call') {
+      if (event.data.callId !== undefined) callNames.set(String(event.data.callId), event.data.name ?? '')
       rows.push({ seq: event.seq, time: event.time, kind: 'tool-call', text: '', toolName: event.data.name ?? '', toolArgs: event.data.arguments ?? '' })
     } else if (event.type === 'tool/result') {
+      const callId = event.data.message?.source?.callId
       rows.push({
         seq: event.seq,
         time: event.time,
         kind: 'tool-result',
-        toolName: '',
+        toolName: (callId !== undefined ? callNames.get(String(callId)) : undefined) ?? '',
         text: messageText(event.data.message.content).slice(0, 3000),
       })
     }

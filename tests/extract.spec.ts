@@ -5,7 +5,7 @@
 
 import { describe, expect, it } from 'vitest'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
-import { buildMarkdown, extractTurns, flagsOf, messageText } from '../src/extract.ts'
+import { buildExportRows, buildMarkdown, extractTurns, flagsOf, messageText } from '../src/extract.ts'
 
 function userEvent(seq: number, text: string, kind: 'user' | 'plugin' = 'user'): SessionEvent {
   return {
@@ -98,5 +98,34 @@ describe('buildMarkdown', () => {
     expect(md).toContain('## 用户')
     expect(md).toContain('## 助手')
     expect(md).toContain('### 工具调用: read')
+  })
+})
+
+describe('buildExportRows', () => {
+  it('carries the tool name onto tool-result rows via the paired callId', async () => {
+    const toolResultEvent: SessionEvent = {
+      type: 'tool/result',
+      seq: 6,
+      time: 3006,
+      data: {
+        turn: 1,
+        step: 1,
+        message: {
+          id: 'r6',
+          role: 'user',
+          content: [{ type: 'tool-result', toolCallId: 'c5', content: [{ type: 'text', text: '文件内容' }] }],
+          source: { kind: 'tool', callId: 'c5' },
+        },
+      } as never,
+    }
+    const rows = await buildExportRows({
+      session: { id: 's1' as never, createdAt: 1 },
+      events: [userEvent(2, '读一下'), toolCallEvent(5), toolResultEvent],
+    } as never, 'json')
+    const call = rows.find((row) => row.kind === 'tool-call')
+    const result = rows.find((row) => row.kind === 'tool-result')
+    expect(call?.toolName).toBe('read')
+    expect(result?.toolName).toBe('read')
+    expect(result?.text).toContain('文件内容')
   })
 })
