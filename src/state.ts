@@ -4,7 +4,9 @@
  * One JSON document at `$DSH_HOME/custom-plugin-state.json` holds the
  * appearance configuration, folder tree, prompt library, starred timeline
  * nodes, the balance API key, and the per-day token usage ledger. Writes are
- * atomic (temp file + rename) so a crash never truncates the document.
+ * atomic (temp file + rename) and serialized (one in-flight write per path),
+ * so a crash never truncates the document and concurrent saves never race
+ * on the temp file.
  * @module @alexpeng/dsh-custom-plugin/state
  */
 
@@ -77,11 +79,27 @@ export async function loadStateFile(
   return statePath
 }
 
-/** Atomically persist the state document. */
-export async function saveStateFile(state: CustomPluginState, home: string = dshHome()): Promise<void> {
+/** In-flight save per state path: concurrent saves queue instead of racing
+ * on the shared .tmp file. Two writers renaming one temp file is the Windows
+ * EPERM/EBUSY source; queuing also coalesces naturally, because each turn
+ * serializes the live document when it runs, not when it was requested. */
+const saveQueues = new Map<string, Promise<void>>()
+
+/** Atomically persist the state document. Saves to the same path are
+ * serialized: a caller awaits its own turn's completion, a failed turn never
+ * poisons the queue behind it. */
+export function saveStateFile(state: CustomPluginState, home: string = dshHome()): Promise<void> {
   const statePath = join(home, STATE_FILE)
-  await mkdir(dirname(statePath), { recursive: true })
-  const tmpPath = statePath + '.tmp'
-  await writeFile(tmpPath, JSON.stringify(state), 'utf8')
-  await rename(tmpPath, statePath)
+  const turn = (saveQueues.get(statePath) ?? Promise.resolve())
+    .catch(() => {})
+    .then(async () => {
+      await mkdir(dirname(statePath), { recursive: true })
+      const tmpPath = statePath + '.tmp'
+      await writeFile(tmpPath, JSON.stringify(state), 'utf8')
+      await rename(tmpPath, statePath)
+    })
+  saveQueues.set(statePath, turn)
+  return turn.finally(() => {
+    if (saveQueues.get(statePath) === turn) saveQueues.delete(statePath)
+  })
 }

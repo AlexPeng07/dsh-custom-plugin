@@ -46,7 +46,9 @@ function applyImpl(ctx: Context): void {
       if (timer !== undefined) clearTimeout(timer)
       timer = setTimeout(() => {
         timer = undefined
-        void saveStateFile(state).catch(() => {})
+        void saveStateFile(state).catch((error) => {
+          reportDiag(`state save failed: ${String((error as Error)?.message ?? error)}`)
+        })
       }, 500)
     }
   })()

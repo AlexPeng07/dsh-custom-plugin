@@ -5,10 +5,11 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { defaultState, loadStateFile, mergeState, normalizeCfg } from '../src/state.ts'
+import { defaultState, loadStateFile, mergeState, normalizeCfg, saveStateFile, STATE_FILE } from '../src/state.ts'
 import { DEFAULT_CONFIG } from '../src/protocol.ts'
 
 describe('defaultState', () => {
@@ -68,6 +69,22 @@ describe('mergeState', () => {
     expect(state.cfg).toEqual(DEFAULT_CONFIG)
     expect(state.folders).toEqual([])
   })
+
+  it('rejects wrong collection shapes and non-string keys without touching defaults', () => {
+    const state = defaultState()
+    mergeState(state, {
+      stars: ['not', 'a', 'map'],
+      usage: ['not', 'a', 'map'],
+      apiKey: 12345,
+      prompts: 'nope',
+      unknownTopLevel: { kept: false },
+    })
+    expect(state.stars).toEqual({})
+    expect(state.usage).toEqual({})
+    expect(state.apiKey).toBe('')
+    expect(state.prompts).toEqual([])
+    expect((state as unknown as Record<string, unknown>).unknownTopLevel).toBeUndefined()
+  })
 })
 
 describe('loadStateFile', () => {
@@ -100,6 +117,24 @@ describe('loadStateFile', () => {
       expect(state.folders).toEqual([])
     } finally {
       await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('saveStateFile', () => {
+  it('serializes concurrent saves: all settle, the document stays valid, no tmp residue', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'custom-plugin-save-'))
+    try {
+      const state = defaultState()
+      await Promise.all(Array.from({ length: 12 }, (_, index) => {
+        state.cfg.bg = `色-${index}`
+        return saveStateFile(state, home)
+      }))
+      const text = await readFile(join(home, STATE_FILE), 'utf8')
+      expect(() => JSON.parse(text)).not.toThrow()
+      expect(existsSync(join(home, STATE_FILE + '.tmp'))).toBe(false)
+    } finally {
+      await rm(home, { recursive: true, force: true })
     }
   })
 })
