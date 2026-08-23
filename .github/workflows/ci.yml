@@ -17,6 +17,8 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
+      - name: README bilingual hash check
+        run: node scripts/check-readme-i18n.mjs
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
       - run: pnpm test

@@ -47,6 +47,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "check:readme": "node scripts/check-readme-i18n.mjs",
     "prepare": "pnpm build",
     "prepublishOnly": "pnpm typecheck && pnpm test"
   },
