@@ -12,7 +12,7 @@ DeepSeek Harness（DSH）Web GUI 的 Custom 便利套件：个性化外观、天
 
 插件为双半区架构：宿主半区（`src/`）持有状态文档、注册 `/api/custom-plugin` 路由与 `custom_plugin_status` 智能体工具；浏览器半区（`src/client/`）通过 7 个官方 slot 的 8 处注入挂载 UI，以同源 fetch 与宿主通信。经官方 profile 机制挂载，不改 DSH 源码。
 
-## 界面展示
+## 部分界面展示
 
 <table>
 <tr>
@@ -24,12 +24,12 @@ DeepSeek Harness（DSH）Web GUI 的 Custom 便利套件：个性化外观、天
 <td width="50%" valign="top"><b>时间线轨道与悬停预览</b><br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/timeline.png" alt="时间线轨道" width="100%"></td>
 </tr>
 <tr>
-<td colspan="2" valign="top" align="center"><b>余额与今日分模型用量</b><br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/balance-usage.png" alt="余额与用量面板" width="100%"></td>
+<td width="50%" valign="top" align="center"><b>余额与今日分模型用量</b><br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/balance-usage.png" alt="余额与用量面板" width="100%"></td>
+<td width="50%" valign="top" align="center"><b>雨（三层景深）</b><br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/weather-rain.gif" alt="下雨特效" width="100%"></td>
 </tr>
 <tr>
-<td width="33%" valign="top" align="center">雨（三层景深）<br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/weather-rain.gif" alt="下雨特效" width="100%"></td>
-<td width="33%" valign="top" align="center">樱花<br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/weather-sakura.gif" alt="樱花特效" width="100%"></td>
-<td width="33%" valign="top" align="center">飘雪<br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/weather-snow.gif" alt="飘雪特效" width="100%"></td>
+<td width="50%" valign="top" align="center"><b>樱花</b><br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/weather-sakura.gif" alt="樱花特效" width="100%"></td>
+<td width="50%" valign="top" align="center"><b>飘雪</b><br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/weather-snow.gif" alt="飘雪特效" width="100%"></td>
 </tr>
 </table>
 

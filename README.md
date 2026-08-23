@@ -12,7 +12,7 @@ Custom convenience suite for the DeepSeek Harness (DSH) Web GUI: personalization
 
 The plugin is dual-face: the host half (`src/`) owns the state document, registers the `/api/custom-plugin` routes and the `custom_plugin_status` agent tool; the browser half (`src/client/`) injects its UI through eight injections into seven official slots and talks to the host over same-origin fetch. Mounted through the official profile mechanism — no DSH source changes.
 
-## Screenshots
+## Selected screenshots
 
 <table>
 <tr>
@@ -24,12 +24,12 @@ The plugin is dual-face: the host half (`src/`) owns the state document, registe
 <td width="50%" valign="top"><b>Timeline rail with hover preview</b><br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/timeline.png" alt="Timeline rail" width="100%"></td>
 </tr>
 <tr>
-<td colspan="2" valign="top" align="center"><b>Balance and today's per-model usage</b><br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/balance-usage.png" alt="Balance and usage panel" width="100%"></td>
+<td width="50%" valign="top" align="center"><b>Balance and today's per-model usage</b><br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/balance-usage.png" alt="Balance and usage panel" width="100%"></td>
+<td width="50%" valign="top" align="center"><b>Rain — three depth layers</b><br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/weather-rain.gif" alt="Rain FX" width="100%"></td>
 </tr>
 <tr>
-<td width="33%" valign="top" align="center">Rain — three depth layers<br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/weather-rain.gif" alt="Rain FX" width="100%"></td>
-<td width="33%" valign="top" align="center">Sakura petals<br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/weather-sakura.gif" alt="Sakura FX" width="100%"></td>
-<td width="33%" valign="top" align="center">Snow<br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/weather-snow.gif" alt="Snow FX" width="100%"></td>
+<td width="50%" valign="top" align="center"><b>Sakura petals</b><br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/weather-sakura.gif" alt="Sakura FX" width="100%"></td>
+<td width="50%" valign="top" align="center"><b>Snow</b><br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/weather-snow.gif" alt="Snow FX" width="100%"></td>
 </tr>
 </table>
 
