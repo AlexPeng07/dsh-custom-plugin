@@ -24,6 +24,10 @@ DeepSeek Harness（DSH）Web GUI 的 Custom 便利套件：个性化外观、天
 <td width="50%" valign="top"><b>时间线轨道与悬停预览</b><br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/timeline.png" alt="时间线轨道" width="100%"></td>
 </tr>
 <tr>
+<td width="50%" valign="top"><b>多级项目文件夹</b><br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/project-folders.png" alt="项目文件夹" width="100%"></td>
+<td width="50%" valign="top"><b>Mermaid 思维导图就地渲染</b><br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/mermaid-mindmap.png" alt="Mermaid 思维导图" width="100%"></td>
+</tr>
+<tr>
 <td width="50%" valign="top" align="center"><b>余额与今日分模型用量</b><br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/balance-usage.png" alt="余额与用量面板" width="100%"></td>
 <td width="50%" valign="top" align="center"><b>雨（三层景深）</b><br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/weather-rain.gif" alt="下雨特效" width="100%"></td>
 </tr>

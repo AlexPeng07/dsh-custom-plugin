@@ -24,6 +24,10 @@ The plugin is dual-face: the host half (`src/`) owns the state document, registe
 <td width="50%" valign="top"><b>Timeline rail with hover preview</b><br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/timeline.png" alt="Timeline rail" width="100%"></td>
 </tr>
 <tr>
+<td width="50%" valign="top"><b>Multi-level project folders</b><br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/project-folders.png" alt="Project folders" width="100%"></td>
+<td width="50%" valign="top"><b>Mermaid mindmap rendered in place</b><br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/mermaid-mindmap.png" alt="Mermaid mindmap" width="100%"></td>
+</tr>
+<tr>
 <td width="50%" valign="top" align="center"><b>Balance and today's per-model usage</b><br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/balance-usage.png" alt="Balance and usage panel" width="100%"></td>
 <td width="50%" valign="top" align="center"><b>Rain — three depth layers</b><br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/weather-rain.gif" alt="Rain FX" width="100%"></td>
 </tr>
