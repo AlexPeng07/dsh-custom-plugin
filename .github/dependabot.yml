@@ -1,0 +1,24 @@
+# Monthly dependency refresh: regular update commits double as a maintenance
+# signal for the awesome-dsh-plugin decay scan. npm bumps are grouped into one
+# minor/patch PR per month; majors stay manual decisions.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: "ci"
+      include: scope
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      npm-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+    commit-message:
+      prefix: "chore"
+      include: scope
