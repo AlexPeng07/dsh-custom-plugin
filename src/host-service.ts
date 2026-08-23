@@ -7,6 +7,8 @@
 
 import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
 import type { SessionQueryEngine } from '@deepseek-ai/dsh-session-query'
+import { createRequire } from 'node:module'
+import { readFileSync } from 'node:fs'
 import { buildExportRows, buildMarkdown, buildPdfHtml, extractTurns } from './extract.ts'
 import { readDeepSeekCredential } from './credentials.ts'
 import type { BalanceInfo, CustomPluginState, TimelineItem, UsageRow } from './protocol.ts'
@@ -27,6 +29,8 @@ export interface CustomPluginHostOptions {
   diagReports: string[]
   /** Optional attachment store used to embed images into PDF exports. */
   attachments?: AttachmentStore | undefined
+  /** Test seam: return the local mermaid engine file path (or null). */
+  localMermaidPath?: () => string | null
 }
 
 /** Host capabilities behind the routes and the agent tool. */
@@ -40,6 +44,8 @@ export class CustomPluginHost {
   private readonly sessionModel = new Map<string, string | null>()
   private mermaidBytesValue = 0
   private mermaidJs = ''
+  private mermaidSource = ''
+  private localMermaidPath: () => string | null
 
   constructor(options: CustomPluginHostOptions) {
     this.sessionQuery = options.sessionQuery
@@ -48,6 +54,7 @@ export class CustomPluginHost {
     this.persistNow = options.saveNow
     this.diagReports = options.diagReports
     this.attachments = options.attachments
+    this.localMermaidPath = options.localMermaidPath ?? defaultLocalMermaidPath
   }
 
   /** Persist the state document (debounced by the loader entry). */
@@ -253,9 +260,25 @@ export class CustomPluginHost {
     return { ok: true, usageToday: this.state.usage[today] ?? {}, scannedSessions: scanned }
   }
 
-  /** Fetch the Mermaid engine from CDN mirrors (cached for the host lifetime). */
+  /** Resolve the Mermaid engine: the bundled `mermaid` dependency on disk
+   * first (no runtime network), CDN mirrors only as a fallback (cached for
+   * the host lifetime). */
   async mermaidFetch(): Promise<{ ok: true; bytes: number } | { ok: false; error: string }> {
     if (this.mermaidBytesValue > 0) return { ok: true, bytes: this.mermaidBytesValue }
+    const localPath = this.localMermaidPath()
+    if (localPath !== null && localPath !== '') {
+      try {
+        const text = readFileSync(localPath, 'utf8')
+        if (text.length > 0) {
+          this.mermaidJs = text
+          this.mermaidBytesValue = text.length
+          this.mermaidSource = 'local'
+          return { ok: true, bytes: text.length }
+        }
+      } catch {
+        // unreadable local bundle: fall through to the CDN mirrors
+      }
+    }
     const urls = [
       'https://cdn.jsdelivr.net/npm/mermaid@11.6.0/dist/mermaid.min.js',
       'https://fastly.jsdelivr.net/npm/mermaid@11.6.0/dist/mermaid.min.js',
@@ -275,6 +298,7 @@ export class CustomPluginHost {
     if (text === '') return { ok: false, error: `无法获取 Mermaid 引擎: ${lastError}` }
     this.mermaidJs = text
     this.mermaidBytesValue = text.length
+    this.mermaidSource = 'cdn'
     return { ok: true, bytes: text.length }
   }
 
@@ -288,6 +312,11 @@ export class CustomPluginHost {
     return this.mermaidBytesValue
   }
 
+  /** Where the engine came from: 'local', 'cdn', or '' while unloaded. */
+  mermaidLoadedSource(): string {
+    return this.mermaidSource
+  }
+
   /** Whether any DeepSeek key source resolves (state, environment, credential
    * file) — the honest answer behind the panel's "key configured" badge. */
   async hasApiKey(): Promise<boolean> {
@@ -295,12 +324,13 @@ export class CustomPluginHost {
   }
 
   /** Diagnostics snapshot for the status tool and the About tab. */
-  async debugInfo(): Promise<{ statePath: string; today: string; usageToday: unknown; mermaidBytes: number; apiKeySet: boolean; diagReports: string[] }> {
+  async debugInfo(): Promise<{ statePath: string; today: string; usageToday: unknown; mermaidBytes: number; mermaidSource: string; apiKeySet: boolean; diagReports: string[] }> {
     return {
       statePath: this.statePath(),
       today: dayKey(),
       usageToday: this.state.usage[dayKey()] ?? {},
       mermaidBytes: this.mermaidBytesValue,
+      mermaidSource: this.mermaidSource,
       apiKeySet: await this.hasApiKey(),
       diagReports: [...this.diagReports],
     }
@@ -334,5 +364,17 @@ export class CustomPluginHost {
     } catch (error) {
       return { ok: false, error: String((error as Error)?.message ?? error) }
     }
+  }
+}
+
+/** Resolve `mermaid/dist/mermaid.min.js` from the package's own dependency
+ * tree (works for `link:` checkouts and registry installs alike); null when
+ * the dependency is absent, which falls mermaidFetch back to the CDN. */
+export function defaultLocalMermaidPath(): string | null {
+  try {
+    const require = createRequire(import.meta.url)
+    return require.resolve('mermaid/dist/mermaid.min.js')
+  } catch {
+    return null
   }
 }

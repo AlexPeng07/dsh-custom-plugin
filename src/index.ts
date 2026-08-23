@@ -86,6 +86,12 @@ function applyImpl(ctx: Context): void {
     routeDisposers.push(ctx.webServer.register(route))
   }
 
+  // Preheat the Mermaid engine (local dependency first, CDN fallback) so the
+  // first diagram render in the browser does not pay the load latency.
+  void host.mermaidFetch().then((result) => {
+    reportDiag(result.ok ? `mermaid engine ready (${result.bytes} bytes, ${host.mermaidLoadedSource()})` : `mermaid engine failed: ${result.error}`)
+  })
+
   // The status tool: appearance config, today's usage, balance, timeline sample.
   const disposeTool = ctx.tools.register(defineTool({
     name: 'custom_plugin_status',

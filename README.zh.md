@@ -74,7 +74,7 @@ DeepSeek Harness（DSH）Web GUI 的 Custom 便利套件：个性化外观、天
 
 ### Mermaid 渲染
 
-消息中出现 ```mermaid 代码块时，下方显示渲染按钮：模态窗口内用宿主拉取的 Mermaid 11 引擎渲染（jsdelivr / fastly / unpkg 三镜像回退，引擎在宿主进程内缓存，可在 Mermaid 页预加载）；另附 mermaid.live 兜底链接（DEFLATE 压缩的 `#pako:` 格式，打开即还原图表）。
+聊天中的 ```mermaid 代码块（含助手回复，思维导图 / 流程图 / 时序图等）自动就地渲染为图表：代码块上方出现「图表 / 代码」切换工具条与 mermaid.live 兜底链接，流式输出期间内容完整后即预览，跟随 GUI 明暗主题重绘，渲染失败时保留原代码。检测依据代码块语言标签；无标签（流式中）时按内容启发式判断（关键字前缀 + 完整度检查，语言明确的代码块不会误触）。引擎优先读取随插件安装的本地 Mermaid 11 依赖（离线可用），缺失时回退 jsdelivr / fastly / unpkg 三镜像拉取并在宿主进程内缓存；用户消息下方的渲染按钮与模态窗口（多图切换）保持不变，mermaid.live 链接为 DEFLATE 压缩的 `#pako:` 格式，打开即还原图表。
 
 ### 效率工具
 
@@ -155,7 +155,7 @@ dsh plugin --profile web add link:F:/dsh-plugin-dev
 | `starsOnly` | `false` | 只显示星标节点 |
 | `quote` | `true` | 划词引用回复 |
 | `antiScroll` | `false` | 防自动跳底 |
-| `mermaid` | `true` | Mermaid 渲染按钮 |
+| `mermaid` | `true` | Mermaid 图表自动就地渲染（含消息下方渲染按钮） |
 | `formula` | `true` | LaTeX / MathML 复制按钮 |
 
 ## 安全模型
@@ -166,7 +166,7 @@ dsh plugin --profile web add link:F:/dsh-plugin-dev
 
 ## 已知限制
 
-- Mermaid 首次渲染需要能访问 CDN（宿主在进程生命周期内缓存引擎）。
+- Mermaid 引擎来自随插件安装的本地依赖，离线可用；仅当依赖缺失时回退 CDN 拉取（宿主在进程生命周期内缓存）。
 - 用量账本折叠自实时 `session/event` 记录；错过实时事件时可手动「扫描」重读今日会话日志。
 - 费用按 DeepSeek 官方峰谷单价估算，仅供参考。
 - 深色模式下背景限制是刻意设计：仅「无颜色」与「极光」可选。

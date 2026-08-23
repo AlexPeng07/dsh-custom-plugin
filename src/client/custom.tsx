@@ -28,6 +28,7 @@ import {
   apiUsageScan,
 } from './api.ts'
 import { MERMAID_SCRIPT_PATH } from '../protocol.ts'
+import { isGenericInfostring, isMermaidCode, normalizeMermaidText } from './mermaid-code.ts'
 import { mermaidLiveUrl } from './mermaid-url.ts'
 import { STATIC_CSS } from './styles.ts'
 
@@ -1048,12 +1049,12 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       return false
     }
   }
-  async function renderMermaid(code: string): Promise<{ ok: true; svg: string } | { ok: false; error: string }> {
+  async function renderMermaid(code: string, dark = false): Promise<{ ok: true; svg: string } | { ok: false; error: string }> {
     try {
       const w = typeof window !== 'undefined' ? window : null
       const mermaid = (w as unknown as { mermaid?: { initialize(opts: Record<string, unknown>): void; render(id: string, code: string): Promise<string | { svg: string }> } }).mermaid
       if (mermaid === undefined) return { ok: false, error: '引擎未就绪' }
-      mermaid.initialize({ startOnLoad: false, theme: 'default', securityLevel: 'strict' })
+      mermaid.initialize({ startOnLoad: false, theme: dark ? 'dark' : 'default', securityLevel: 'strict' })
       const id = 'vx-mmd-' + Date.now() + Math.floor(Math.random() * 9999)
       const out = await mermaid.render(id, code)
       const svg = typeof out === 'string' ? out : (out?.svg ?? '')
@@ -1075,6 +1076,144 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     if (codes.length === 0) { toast('未找到 Mermaid 代码块', 'error'); return }
     setS({ mermaidModal: { title: item.text.slice(0, 40), codes, index: 0 } })
   }
+
+  // ================= mermaid in-place (chat DOM) =================
+  /** Blocks with a render already in flight (WeakSet: dead blocks drop out). */
+  const mmdInflight = new WeakSet<HTMLElement>()
+  /** Previous scan theme; a flip invalidates rendered-SVG memoization. */
+  let mmdLastDark: boolean | null = null
+
+  /** The banner's language label: `.md-code-block > bannerWrap > banner >
+   * infostring` is the GUI CodeBlock's stable shape (its CSS classes are
+   * hashed, the structure is not). */
+  function blockInfostring(block: HTMLElement): string | null {
+    const info = block.querySelector(':scope > div:first-child > div:first-child > div:first-child')
+    return info !== null ? info.textContent ?? '' : null
+  }
+
+  /** Raw fence text: the GUI keeps unknown languages (mermaid among them) on
+   * the plain `<pre><code>` path, so `pre` always carries the source. */
+  function blockCodeText(block: HTMLElement): string | null {
+    const pre = block.querySelector('pre')
+    return pre !== null ? pre.textContent ?? '' : null
+  }
+
+  /** Insert/refresh the diagram wrapper before one code block. Never moves
+   * GUI-owned nodes — React keeps reconciling its tree; the block is only
+   * visually swapped with the diagram stage via display. */
+  async function renderInPlace(block: HTMLElement, code: string, dark: boolean): Promise<void> {
+    if (block.dataset.vxMmd === code) return
+    const ready = await ensureMermaid()
+    if (!ready) {
+      // Engine unreachable: keep the code visible; retry only when the code
+      // itself changes (a later scan after engine recovery re-renders).
+      block.dataset.vxMmdFail = code
+      return
+    }
+    const r = await renderMermaid(code, dark)
+    if (!r.ok) { block.dataset.vxMmdFail = code; return }
+    delete block.dataset.vxMmdFail
+    block.dataset.vxMmd = code
+    const d = typeof document !== 'undefined' ? document : null
+    if (d === null) return
+    let wrap = block.previousElementSibling as HTMLElement | null
+    if (wrap === null || !wrap.classList.contains('vx-mmd-wrap')) {
+      wrap = d.createElement('div')
+      wrap.className = 'vx-mmd-wrap'
+      block.parentElement?.insertBefore(wrap, block)
+      const bar = d.createElement('div')
+      bar.className = 'vx-mmd-bar'
+      const diagramBtn = d.createElement('button')
+      diagramBtn.type = 'button'
+      diagramBtn.className = 'vx-mmd-btn active'
+      diagramBtn.textContent = '图表'
+      const codeBtn = d.createElement('button')
+      codeBtn.type = 'button'
+      codeBtn.className = 'vx-mmd-btn'
+      codeBtn.textContent = '代码'
+      const live = d.createElement('a')
+      live.className = 'vx-mmd-live'
+      live.target = '_blank'
+      live.rel = 'noopener noreferrer'
+      live.textContent = 'mermaid.live'
+      void mermaidLiveUrl(code).then((url) => { live.href = url }).catch(() => {})
+      bar.append(diagramBtn, codeBtn, live)
+      const stage = d.createElement('div')
+      stage.className = 'vx-mmd-stage'
+      wrap.append(bar, stage)
+      const showDiagram = (): void => {
+        stage.style.display = ''
+        block.style.display = 'none'
+        diagramBtn.classList.add('active')
+        codeBtn.classList.remove('active')
+      }
+      const showCode = (): void => {
+        stage.style.display = 'none'
+        block.style.display = ''
+        diagramBtn.classList.remove('active')
+        codeBtn.classList.add('active')
+      }
+      diagramBtn.addEventListener('click', showDiagram)
+      codeBtn.addEventListener('click', showCode)
+      showDiagram()
+    }
+    const stage = wrap.querySelector('.vx-mmd-stage')
+    if (stage !== null) stage.innerHTML = r.svg
+  }
+
+  /** Scan every chat code block and render the mermaid ones in place. */
+  async function scanMermaidBlocks(dark: boolean): Promise<void> {
+    const d = typeof document !== 'undefined' ? document : null
+    if (d === null) return
+    // Drop wrappers whose code block left the DOM (history switch / unmount).
+    for (const wrap of Array.from(d.querySelectorAll<HTMLElement>('.vx-mmd-wrap'))) {
+      const next = wrap.nextElementSibling
+      if (next === null || !next.classList.contains('md-code-block')) wrap.remove()
+    }
+    for (const block of Array.from(d.querySelectorAll<HTMLElement>('.md-code-block'))) {
+      if (mmdInflight.has(block)) continue
+      const codeRaw = blockCodeText(block)
+      if (codeRaw === null) continue
+      const code = normalizeMermaidText(codeRaw).trim()
+      if (code === '') continue
+      const info = blockInfostring(block)
+      const definite = info !== null && info.trim().toLowerCase() === 'mermaid'
+      if (definite) {
+        // Settled ```mermaid fence: only guard against a lone keyword line.
+        if (code.split('\n').filter((l) => l.trim() !== '').length < 2) continue
+      } else {
+        // Blank (streaming) or generic banner: content heuristics decide, so a
+        // streaming mindmap previews as soon as it is complete enough and a
+        // named foreign language (python etc.) is never touched.
+        if (!isGenericInfostring(info)) continue
+        if (!isMermaidCode(codeRaw)) continue
+      }
+      if (block.dataset.vxMmd === code || block.dataset.vxMmdFail === code) continue
+      mmdInflight.add(block)
+      try {
+        await renderInPlace(block, code, dark)
+      } finally {
+        mmdInflight.delete(block)
+      }
+    }
+  }
+
+  /** Undo in-place rendering (feature toggled off): remove wrappers, unhide
+   * code blocks. Diagram DOM is plugin-owned, so removal is safe. */
+  function restoreMermaidBlocks(): void {
+    const d = typeof document !== 'undefined' ? document : null
+    if (d === null) return
+    for (const wrap of Array.from(d.querySelectorAll<HTMLElement>('.vx-mmd-wrap'))) {
+      const next = wrap.nextElementSibling as HTMLElement | null
+      if (next !== null && next.classList.contains('md-code-block')) next.style.display = ''
+      wrap.remove()
+    }
+    for (const block of Array.from(d.querySelectorAll<HTMLElement>('.md-code-block'))) {
+      delete block.dataset.vxMmd
+      delete block.dataset.vxMmdFail
+    }
+  }
+
   /** Peak-hour CNY unit prices per 1M tokens (official peak/off-peak table
    * effective 2026-08-17); off-peak hours are exactly half. deepseek-chat and
    * deepseek-reasoner were deprecated 2026-07-24 and both map onto
@@ -1940,13 +2079,13 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       toast(ok ? 'Mermaid 引擎已就绪' : '加载失败：可改用 mermaid.live 按钮', ok ? 'info' : 'error')
     }
     return React.createElement('div', { className: 'vx-col' },
-      React.createElement('div', { className: 'vx-muted vx-pad-sm' }, '消息中的 Mermaid 代码块可就地渲染为图表；渲染失败可一键跳转 mermaid.live 在线编辑。'),
-      React.createElement(Toggle, { label: '显示 Mermaid 渲染按钮', checked: S.cfg.mermaid === true, onChange: (v) => { setS({ cfg: { ...S.cfg, mermaid: v } }); saveCfg() } }),
+      React.createElement('div', { className: 'vx-muted vx-pad-sm' }, '助手回复与用户消息中的 Mermaid 代码块会自动就地渲染为图表（支持思维导图、流程图等），可随时切回代码视图；渲染引擎优先取本地依赖，失败时回退 CDN，也可一键跳转 mermaid.live 在线编辑。'),
+      React.createElement(Toggle, { label: '自动渲染 Mermaid 图表', checked: S.cfg.mermaid === true, onChange: (v) => { setS({ cfg: { ...S.cfg, mermaid: v } }); saveCfg() } }),
       React.createElement('div', { className: 'vx-row' },
         React.createElement('button', { className: 'vx-btn', onClick: () => void load() },
           React.createElement(Icon, { n: 'gitBranch', size: 12 }),
           engine === 'ready' ? ' 引擎已就绪' : (engine === 'loading' ? ' 加载中…' : ' 预加载渲染引擎')),
-        React.createElement('span', { className: 'vx-muted' }, engine === 'failed' ? '加载失败（可能需代理）' : ''),
+        React.createElement('span', { className: 'vx-muted' }, engine === 'failed' ? '加载失败（本地依赖缺失且网络不可达）' : ''),
       ),
     )
   }
@@ -2031,6 +2170,45 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     )
   }
 
+  function MermaidInPlace(): React.ReactElement | null {
+    const s = useS()
+    const enabled = s.cfg.mermaid === true
+    const dark = s.dark
+    React.useEffect(() => {
+      if (!enabled) {
+        restoreMermaidBlocks()
+        return
+      }
+      const d = typeof document !== 'undefined' ? document : null
+      const w = typeof window !== 'undefined' ? window : null
+      if (d === null || d.body === null || w === null || w.MutationObserver === undefined) return
+      let timer: ReturnType<typeof setTimeout> | null = null
+      let stopped = false
+      const scan = (): void => { if (!stopped) void scanMermaidBlocks(dark) }
+      const schedule = (): void => {
+        if (timer !== null) clearTimeout(timer)
+        timer = setTimeout(scan, 400)
+      }
+      if (mmdLastDark !== null && mmdLastDark !== dark) {
+        // Theme flipped: drop the memo so existing diagrams re-render.
+        for (const block of Array.from(d.querySelectorAll<HTMLElement>('.md-code-block'))) delete block.dataset.vxMmd
+      }
+      mmdLastDark = dark
+      scan()
+      // Chat history loads, streaming fences and re-renders all mutate the
+      // conversation subtree; one debounced body-wide observer covers them.
+      const observer = new MutationObserver(schedule)
+      observer.observe(d.body, { childList: true, subtree: true, characterData: true })
+      return () => {
+        stopped = true
+        observer.disconnect()
+        if (timer !== null) { clearTimeout(timer); timer = null }
+      }
+      // dark re-runs the effect: diagrams re-render under the flipped theme.
+    }, [enabled, dark])
+    return null
+  }
+
   function MermaidModal(): React.ReactElement | null {
     const s = useS()
     const mm = s.mermaidModal
@@ -2051,7 +2229,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
         const ready = await ensureMermaid()
         if (!alive) return
         if (!ready) { setErr('Mermaid 引擎加载失败（网络不可达？）。可点击下方按钮在 mermaid.live 打开'); setLoading(false); return }
-        const r = await renderMermaid(mm.codes[mm.index])
+        const r = await renderMermaid(mm.codes[mm.index], S.dark)
         if (!alive) return
         if (r.ok === true) setSvg(r.svg)
         else setErr(r.error)
@@ -2359,6 +2537,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       }
     }, [s.scrollerEl])
     const children: React.ReactElement[] = [React.createElement(FxCanvas, { key: 'fx' })]
+    children.push(React.createElement(MermaidInPlace, { key: 'mmd' }))
     children.push(React.createElement(TimelineRail, { key: 'rail', useSessions: props.useSessions, useWorkspaces: props.useWorkspaces }))
     if (s.panelOpen === true) children.push(React.createElement(PersonalizePanel, { key: 'panel', useSessions: props.useSessions, useWorkspaces: props.useWorkspaces }))
     if (s.foldersOpen === true) children.push(React.createElement(SidebarFoldersPanel, { key: 'folders', useSessions: props.useSessions, useWorkspaces: props.useWorkspaces }))

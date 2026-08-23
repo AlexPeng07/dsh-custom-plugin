@@ -830,4 +830,59 @@ export const STATIC_CSS = `/* dsh-custom-plugin static styles. Every rule is glo
     flex-direction: column;
     gap: 14px;
     max-width: 720px;
+  }
+  .vx-mmd-wrap {
+    position: relative;
+    margin: 6px 0;
+    border: 1px solid rgba(127, 164, 224, .35);
+    border-radius: 12px;
+    overflow: hidden;
+    background: rgba(127, 164, 224, .05);
+  }
+  .vx-mmd-bar {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 6px;
+    border-bottom: 1px solid rgba(127, 164, 224, .25);
+    background: rgba(127, 164, 224, .08);
+  }
+  .vx-mmd-btn {
+    border: none;
+    background: transparent;
+    color: inherit;
+    opacity: .65;
+    font-size: 12px;
+    padding: 3px 10px;
+    border-radius: 8px;
+    cursor: pointer;
+  }
+  .vx-mmd-btn:hover {
+    opacity: 1;
+    background: rgba(127, 164, 224, .18);
+  }
+  .vx-mmd-btn.active {
+    opacity: 1;
+    background: rgba(127, 164, 224, .28);
+    font-weight: 600;
+  }
+  .vx-mmd-live {
+    margin-left: auto;
+    font-size: 11px;
+    opacity: .6;
+    color: inherit;
+    text-decoration: none;
+    padding: 3px 8px;
+  }
+  .vx-mmd-live:hover {
+    opacity: 1;
+  }
+  .vx-mmd-stage {
+    padding: 16px 12px;
+    overflow-x: auto;
+    text-align: center;
+  }
+  .vx-mmd-stage svg {
+    max-width: 100%;
+    height: auto;
   }`

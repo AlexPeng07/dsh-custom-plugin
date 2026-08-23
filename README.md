@@ -74,7 +74,7 @@ Tool rows carry the tool name and an argument digest (resolved from the paired t
 
 ### Mermaid
 
-When a message contains a ```mermaid block, a render chip appears under it; the modal renders the diagram with the host-fetched Mermaid 11 engine (jsdelivr / fastly / unpkg mirror fallback, cached for the host process lifetime, preloadable from the Mermaid tab), plus a mermaid.live fallback link (DEFLATE-compressed `#pako:` format that restores the diagram on open).
+```mermaid blocks anywhere in the chat — assistant replies included (mindmaps, flowcharts, sequence diagrams, …) — render in place automatically: a diagram/code toggle bar with a mermaid.live fallback link appears above the block, streaming blocks preview once their content is complete, diagrams re-render on GUI theme flips, and a failed render keeps the raw code. Detection keys off the fence language label; with a blank label (mid-stream) a content heuristic decides (keyword prefix + completeness checks, so blocks labeled with a real language are never touched). The engine loads from the mermaid 11 dependency installed with the plugin (works offline), falling back to jsdelivr / fastly / unpkg mirrors and caching in the host process; the render chips under user messages and the multi-diagram modal stay, and the mermaid.live link uses the DEFLATE-compressed `#pako:` format that restores the diagram on open.
 
 ### Efficiency tools
 
@@ -155,7 +155,7 @@ Appearance and feature toggles (the `cfg` field, all with defaults):
 | `starsOnly` | `false` | show only starred nodes |
 | `quote` | `true` | selection quote reply |
 | `antiScroll` | `false` | anti auto-scroll |
-| `mermaid` | `true` | Mermaid render chips |
+| `mermaid` | `true` | automatic in-place Mermaid rendering (plus render chips) |
 | `formula` | `true` | LaTeX / MathML copy chips |
 
 ## Security model
@@ -166,7 +166,7 @@ Appearance and feature toggles (the `cfg` field, all with defaults):
 
 ## Known limitations
 
-- Mermaid rendering needs a reachable CDN on first use (the host caches the engine for its lifetime).
+- The Mermaid engine comes from the dependency installed with the plugin and works offline; only a missing dependency falls back to a CDN fetch (cached for the host process lifetime).
 - The usage ledger folds token counts from live `session/event` records; a manual "scan" re-reads today's session logs when live events were missed.
 - Cost estimates use DeepSeek's official peak/off-peak list prices and are indicative only.
 - Dark-mode background restriction is deliberate: only "no color" and "aurora" are selectable in dark mode.
