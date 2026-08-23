@@ -1,10 +1,39 @@
 # dsh-custom-plugin
 
+[![npm version](https://img.shields.io/npm/v/%40alexpeng%2Fdsh-custom-plugin?style=flat-square)](https://www.npmjs.com/package/@alexpeng/dsh-custom-plugin)
+[![license](https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square)](LICENSE)
+[![Node](https://img.shields.io/badge/node-%3E%3D22-339933?style=flat-square)](#install)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org)
+[![CI](https://github.com/AlexPeng07/dsh-custom-plugin/actions/workflows/ci.yml/badge.svg)](https://github.com/AlexPeng07/dsh-custom-plugin/actions/workflows/ci.yml)
+
 English | [中文](README.zh.md)
 
 Custom convenience suite for the DeepSeek Harness (DSH) Web GUI: personalization, weather FX, glass effects, a per-user-message timeline rail, project folders, prompts, conversation export, Mermaid rendering, quote reply, and DeepSeek balance / daily token usage.
 
 The plugin is dual-face: the host half (`src/`) owns the state document, registers the `/api/custom-plugin` routes and the `custom_plugin_status` agent tool; the browser half (`src/client/`) injects its UI through eight injections into seven official slots and talks to the host over same-origin fetch. Mounted through the official profile mechanism — no DSH source changes.
+
+## Screenshots
+
+<table>
+<tr>
+<td width="50%" valign="top"><b>Settings → 个性化: the full-page appearance config</b><br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/settings-appearance.png" alt="Settings → 个性化 full appearance page" width="100%"></td>
+<td width="50%" valign="top"><b>The same panel as a popover from the session header (light theme)</b><br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/personalization-panel.png" alt="Personalization popover" width="100%"></td>
+</tr>
+<tr>
+<td width="50%" valign="top"><b>Liquid glass (displacement refraction on Custom surfaces)</b><br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/liquid-glass.png" alt="Liquid glass" width="100%"></td>
+<td width="50%" valign="top"><b>Timeline rail with hover preview</b><br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/timeline.png" alt="Timeline rail" width="100%"></td>
+</tr>
+<tr>
+<td colspan="2" valign="top" align="center"><b>Balance and today's per-model usage</b><br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/balance-usage.png" alt="Balance and usage panel" width="100%"></td>
+</tr>
+<tr>
+<td width="33%" valign="top" align="center">Rain — three depth layers<br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/weather-rain.gif" alt="Rain FX" width="100%"></td>
+<td width="33%" valign="top" align="center">Sakura petals<br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/weather-sakura.gif" alt="Sakura FX" width="100%"></td>
+<td width="33%" valign="top" align="center">Snow<br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/weather-snow.gif" alt="Snow FX" width="100%"></td>
+</tr>
+</table>
+
+Weather FX is shown in dark mode, where only "no color" and "aurora" backgrounds are selectable.
 
 ## What it does
 

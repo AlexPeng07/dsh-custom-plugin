@@ -1,10 +1,39 @@
 # dsh-custom-plugin
 
+[![npm version](https://img.shields.io/npm/v/%40alexpeng%2Fdsh-custom-plugin?style=flat-square)](https://www.npmjs.com/package/@alexpeng/dsh-custom-plugin)
+[![license](https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square)](LICENSE)
+[![Node](https://img.shields.io/badge/node-%3E%3D22-339933?style=flat-square)](#安装)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org)
+[![CI](https://github.com/AlexPeng07/dsh-custom-plugin/actions/workflows/ci.yml/badge.svg)](https://github.com/AlexPeng07/dsh-custom-plugin/actions/workflows/ci.yml)
+
 [English](README.md) | 中文
 
 DeepSeek Harness（DSH）Web GUI 的 Custom 便利套件：个性化外观、天气特效、玻璃效果、按用户消息的时间线导航、项目文件夹、提示词库、会话导出、Mermaid 渲染、引用回复，以及 DeepSeek 额度与今日 token 用量。
 
 插件为双半区架构：宿主半区（`src/`）持有状态文档、注册 `/api/custom-plugin` 路由与 `custom_plugin_status` 智能体工具；浏览器半区（`src/client/`）通过 7 个官方 slot 的 8 处注入挂载 UI，以同源 fetch 与宿主通信。经官方 profile 机制挂载，不改 DSH 源码。
+
+## 界面展示
+
+<table>
+<tr>
+<td width="50%" valign="top"><b>「设置 → 个性化」整页外观配置</b><br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/settings-appearance.png" alt="设置 → 个性化 整页外观配置" width="100%"></td>
+<td width="50%" valign="top"><b>会话头部弹出的同一套面板（浅色主题）</b><br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/personalization-panel.png" alt="个性化弹窗面板" width="100%"></td>
+</tr>
+<tr>
+<td width="50%" valign="top"><b>液态玻璃（Custom 面板位移折射）</b><br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/liquid-glass.png" alt="液态玻璃" width="100%"></td>
+<td width="50%" valign="top"><b>时间线轨道与悬停预览</b><br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/timeline.png" alt="时间线轨道" width="100%"></td>
+</tr>
+<tr>
+<td colspan="2" valign="top" align="center"><b>余额与今日分模型用量</b><br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/balance-usage.png" alt="余额与用量面板" width="100%"></td>
+</tr>
+<tr>
+<td width="33%" valign="top" align="center">雨（三层景深）<br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/weather-rain.gif" alt="下雨特效" width="100%"></td>
+<td width="33%" valign="top" align="center">樱花<br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/weather-sakura.gif" alt="樱花特效" width="100%"></td>
+<td width="33%" valign="top" align="center">飘雪<br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/weather-snow.gif" alt="飘雪特效" width="100%"></td>
+</tr>
+</table>
+
+天气特效截自深色模式（深色下仅「无颜色」与「极光」背景可选）。
 
 ## 功能
 
