@@ -166,6 +166,7 @@ Appearance and feature toggles (the `cfg` field, all with defaults):
 
 - The browser talks to the host only through loopback `/api/custom-plugin` routes; every route checks a loopback socket address, a loopback Host header, and browser same-origin markers (`sec-fetch-site` / `Origin`). `X-Forwarded-For` is never trusted.
 - The DeepSeek API key stays in the local state file (or reuses DSH's own credentials) and is only used to call the official DeepSeek balance endpoint.
+- The panel-pasted key is stored in **plaintext** in `$DSH_HOME/custom-plugin-state.json` — the same trust domain as DSH's own `$DSH_HOME/.credentials.yaml` (also plaintext); protect `$DSH_HOME` accordingly.
 - Conversation exports and timeline data stay on the local host.
 
 ## Known limitations

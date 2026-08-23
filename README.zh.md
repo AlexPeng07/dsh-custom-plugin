@@ -166,6 +166,7 @@ dsh plugin --profile web add link:F:/dsh-plugin-dev
 
 - 浏览器仅通过回环地址上的 `/api/custom-plugin` 路由与宿主通信；每条路由同时校验回环 socket 地址、回环 Host 头与浏览器同源标记（`sec-fetch-site` / `Origin`），`X-Forwarded-For` 永不信任。
 - DeepSeek API Key 只保存在本机状态文件（或沿用 DSH 自身凭据），仅用于调用 DeepSeek 官方余额接口。
+- 面板粘贴的 Key 以**明文**保存在 `$DSH_HOME/custom-plugin-state.json`——与 DSH 自身的 `$DSH_HOME/.credentials.yaml`（同为明文）处于同一信任域，请相应保护 `$DSH_HOME` 目录。
 - 会话导出与时间线数据全部停留在本机。
 
 ## 已知限制

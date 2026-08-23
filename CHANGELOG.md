@@ -6,6 +6,13 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Fixed
+
+- Concurrent state saves are serialized per state file: two racing saves could
+  collide on the shared `.tmp` file and fail the rename on Windows; a failed
+  debounced save now surfaces in the status-tool diagnostics instead of being
+  swallowed silently.
+
 ### Added
 
 - CI: bilingual README hash consistency check (`node scripts/check-readme-i18n.mjs`)
@@ -13,6 +20,16 @@ follow [Semantic Versioning](https://semver.org/).
   hashes in `README.i18n.yaml`, now fails the build instead of drifting silently.
 - CI: Dependabot with monthly schedules (GitHub Actions and grouped npm
   minor/patch bumps); workflow actions upgraded to current majors.
+- `pnpm smoke` — post-build smoke script: headless Edge loads `lib/client.js`
+  against a stubbed module loader and asserts the registration handshake, plus
+  artifact contract checks (loader banner/footer, node-half ESM import,
+  patch row, local Mermaid engine).
+- Tests: the balance key resolution chain (panel → environment → DSH
+  credentials, via a new credential-reader seam), state merge edge cases, and
+  concurrent-save serialization.
+- Docs: the security section now states explicitly that the panel-pasted key
+  is stored in plaintext in the state file (same trust domain as DSH's own
+  credentials).
 - This changelog (also shipped in the npm tarball).
 
 ## 0.1.2 — 2026-08-23
