@@ -31,6 +31,8 @@ export interface CustomPluginHostOptions {
   attachments?: AttachmentStore | undefined
   /** Test seam: return the local mermaid engine file path (or null). */
   localMermaidPath?: () => string | null
+  /** Test seam: read the DeepSeek credential from DSH's credentials file. */
+  readCredential?: () => Promise<string>
 }
 
 /** Host capabilities behind the routes and the agent tool. */
@@ -46,6 +48,7 @@ export class CustomPluginHost {
   private mermaidJs = ''
   private mermaidSource = ''
   private localMermaidPath: () => string | null
+  private readCredential: () => Promise<string>
 
   constructor(options: CustomPluginHostOptions) {
     this.sessionQuery = options.sessionQuery
@@ -55,6 +58,7 @@ export class CustomPluginHost {
     this.diagReports = options.diagReports
     this.attachments = options.attachments
     this.localMermaidPath = options.localMermaidPath ?? defaultLocalMermaidPath
+    this.readCredential = options.readCredential ?? readDeepSeekCredential
   }
 
   /** Persist the state document (debounced by the loader entry). */
@@ -184,8 +188,13 @@ export class CustomPluginHost {
     if (key !== '') return key
     try {
       const env = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env
-      const candidate = env?.DEEPSEEK_API_KEY ?? env?.DEEPSEEK_KEY ?? env?.DEEPSEEK_TOKEN
-      if (typeof candidate === 'string' && /^sk-/.test(candidate)) return candidate
+      // First valid candidate wins: an unset, empty, or non-sk value for one
+      // name must not shadow the next name (mirrors the credential-file tier,
+      // where each ref is checked individually).
+      for (const name of ['DEEPSEEK_API_KEY', 'DEEPSEEK_KEY', 'DEEPSEEK_TOKEN']) {
+        const value = env?.[name]
+        if (typeof value === 'string' && /^sk-/.test(value.trim())) return value.trim()
+      }
     } catch {
       // environment unavailable
     }
@@ -193,7 +202,7 @@ export class CustomPluginHost {
       // DSH keeps model keys in $DSH_HOME/.credentials.yaml and never exports
       // them to the process environment; reuse the same file so a key
       // configured once in DSH is picked up automatically here.
-      const candidate = await readDeepSeekCredential()
+      const candidate = await this.readCredential()
       if (/^sk-/.test(candidate)) return candidate
     } catch {
       // credential refs unavailable
