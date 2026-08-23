@@ -1,7 +1,7 @@
 {
   "name": "@alexpeng/dsh-custom-plugin",
   "description": "Custom convenience suite for the dsh web GUI: background colors with weather FX, liquid glass, a per-user-message timeline rail with stars and branching, multi-level project folders, prompt library, conversation export (JSON / Markdown / PDF-with-images), Mermaid rendering, quote reply, DeepSeek balance and daily token usage; dual-face plugin mounted without dsh source changes.",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",
