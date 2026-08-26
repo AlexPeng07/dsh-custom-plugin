@@ -7,10 +7,20 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { CustomPluginHost } from '../src/host-service.ts'
 import { defaultState } from '../src/state.ts'
+import type { CredentialStore } from '../src/system-credentials.ts'
 
-function makeHost(options: { apiKey?: string, credential?: string } = {}): { host: CustomPluginHost, resolve: () => Promise<string> } {
+class MemoryCredentialStore implements CredentialStore {
+  readonly available = true
+  value = ''
+  async get(): Promise<string> { return this.value }
+  async set(value: string): Promise<boolean> { this.value = value; return true }
+  async clear(): Promise<boolean> { this.value = ''; return true }
+}
+
+function makeHost(options: { apiKey?: string, credential?: string, store?: CredentialStore } = {}): { host: CustomPluginHost, resolve: () => Promise<string>, store: CredentialStore } {
   const state = defaultState()
   state.apiKey = options.apiKey ?? ''
+  const store = options.store ?? new MemoryCredentialStore()
   const host = new CustomPluginHost({
     sessionQuery: {} as never,
     state,
@@ -19,8 +29,9 @@ function makeHost(options: { apiKey?: string, credential?: string } = {}): { hos
     reportDiag: () => {},
     diagReports: [],
     readCredential: async () => options.credential ?? '',
+    credentialStore: store,
   })
-  return { host, resolve: () => (host as unknown as { resolveApiKey: () => Promise<string> }).resolveApiKey() }
+  return { host, resolve: () => (host as unknown as { resolveApiKey: () => Promise<string> }).resolveApiKey(), store }
 }
 
 afterEach(() => {
@@ -41,6 +52,37 @@ describe('resolveApiKey three-tier chain', () => {
     vi.stubEnv('DEEPSEEK_API_KEY', 'sk-env-ignored')
     const { resolve } = makeHost({ apiKey: '  sk-panel-value  ', credential: 'sk-cred-ignored' })
     expect(await resolve()).toBe('sk-panel-value')
+  })
+
+  it('prefers the system credential and never exposes the key in the public state view', async () => {
+    vi.stubEnv('DEEPSEEK_API_KEY', 'sk-env-ignored')
+    const store = new MemoryCredentialStore()
+    store.value = 'sk-system-value'
+    const { host, resolve } = makeHost({ apiKey: 'sk-legacy-value', store })
+    expect(await resolve()).toBe('sk-system-value')
+    const view = await host.stateView()
+    expect(view.apiKeyConfigured).toBe(true)
+    expect(view.credentialStorage).toBe('system')
+    expect((view as Record<string, unknown>).apiKey).toBeUndefined()
+  })
+
+  it('migrates a legacy state key into the system credential store', async () => {
+    const store = new MemoryCredentialStore()
+    const { host } = makeHost({ apiKey: 'sk-legacy-value', store })
+    expect(await host.migrateLegacyApiKey()).toBe(true)
+    expect(store.value).toBe('sk-legacy-value')
+    expect((host as unknown as { state: { apiKey: string } }).state.apiKey).toBe('')
+  })
+
+  it('writes and clears the custom key through the system store', async () => {
+    const store = new MemoryCredentialStore()
+    const { host } = makeHost({ store })
+    await host.applyEdit({ apiKey: 'sk-new-value' })
+    expect(store.value).toBe('sk-new-value')
+    expect((await host.credentialStatus()).credentialStorage).toBe('system')
+    await host.applyEdit({ apiKey: '' })
+    expect(store.value).toBe('')
+    expect((await host.credentialStatus()).credentialStorage).toBe('none')
   })
 
   it('falls to the environment when the panel is empty, API_KEY before KEY before TOKEN', async () => {
@@ -84,6 +126,7 @@ describe('resolveApiKey three-tier chain', () => {
       reportDiag: () => {},
       diagReports: [],
       readCredential: async () => { throw new Error('credentials unreadable') },
+      credentialStore: new MemoryCredentialStore(),
     })
     expect(await (host as unknown as { resolveApiKey: () => Promise<string> }).resolveApiKey()).toBe('')
   })

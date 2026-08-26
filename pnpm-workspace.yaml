@@ -1,5 +1,6 @@
 allowBuilds:
   esbuild: true
+  keytar: true
 minimumReleaseAgeExclude:
   - '@deepseek-ai/dsh-agent-default-model@0.1.1-rc.1'
   - '@deepseek-ai/dsh-agent-presets@0.1.1-rc.1'

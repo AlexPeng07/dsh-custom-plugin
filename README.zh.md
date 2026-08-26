@@ -93,9 +93,9 @@ DeepSeek Harness（DSH）Web GUI 的 Custom 便利套件：个性化外观、天
 会话头部常驻额度徽标（可点击固定），额度面板提供：
 
 - **余额**：调用官方 `https://api.deepseek.com/user/balance` 接口，优先显示 CNY，赠送与充值余额分列，并显示账户可用状态。
-- **Key 解析顺序**：面板粘贴（仅存本机状态文件）→ 环境变量 `DEEPSEEK_API_KEY` / `DEEPSEEK_KEY` / `DEEPSEEK_TOKEN`（取值需以 `sk-` 开头）→ DSH 凭据文件 `$DSH_HOME/.credentials.yaml`（自动复用 DSH 已配置的 DeepSeek key，无需重复填写）。
+- **Key 解析顺序**：系统凭据存储（可用时）→ 插件旧状态文件中的 Key → 环境变量 `DEEPSEEK_API_KEY` / `DEEPSEEK_KEY` / `DEEPSEEK_TOKEN`（取值需以 `sk-` 开头）→ DSH 凭据文件 `$DSH_HOME/.credentials.yaml`（自动复用 DSH 已配置的 DeepSeek key，无需重复填写）。
 - **今日用量**：按模型统计输入 / 输出 / 缓存 token 与调用次数，实时折叠自 `session/event` 事件。
-- **费用估算**：按 DeepSeek 官方峰谷价目（2026-08-17 生效）估算——高峰时段（北京时间 9–12 / 14–18 时）全价，空闲时段半价：`deepseek-v4-flash` ¥3 / ¥9，`deepseek-v4-pro` ¥9 / ¥27（每百万 tokens 输入 / 输出，缓存写入 ¥0.1 / ¥0.3；已停用的 `deepseek-chat` / `deepseek-reasoner` 按 v4-flash 计），仅供参考。
+- **费用估算**：按 DeepSeek 当前官方峰谷价目估算——高峰为北京时间周一至周五 9–12、14–18 时；其余时间（含周末）均为空闲时段，按半价计：`deepseek-v4-flash` / `deepseek-v4-flash-vision-exp` ¥3 / ¥9，`deepseek-v4-pro` ¥9 / ¥27（每百万 tokens 输入 / 输出，缓存写入 ¥0.1 / ¥0.3；已停用的 `deepseek-chat` / `deepseek-reasoner` 按 v4-flash 计），仅供参考。
 - **扫描**：「扫描今日会话日志」重放全部会话、按事件自身时间戳归入今日（跨午夜会话不丢量），完成后显示扫描到的活跃会话数。
 
 ### 设置入口
@@ -144,7 +144,7 @@ dsh plugin --profile web add link:F:/dsh-plugin-dev
 
 ## 配置
 
-插件读写 `$DSH_HOME/custom-plugin-state.json` 单个 JSON 文档（默认 `~/.dsh`，可用 `DSH_HOME` 环境变量覆盖），包含外观配置、文件夹、提示词、星标、API Key 与按日用量账本；写入为原子写（临时文件 + 重命名），崩溃不会截断文档。
+插件读写 `$DSH_HOME/custom-plugin-state.json` 单个 JSON 文档（默认 `~/.dsh`，可用 `DSH_HOME` 环境变量覆盖），包含外观配置、文件夹、提示词、星标、兼容旧版的数据与最近 90 个北京时间日的用量账本；写入为原子写（临时文件 + 重命名），崩溃不会截断文档。
 
 外观与功能开关（`cfg` 字段，均有默认值）：
 
@@ -166,14 +166,16 @@ dsh plugin --profile web add link:F:/dsh-plugin-dev
 ## 安全模型
 
 - 浏览器仅通过回环地址上的 `/api/custom-plugin` 路由与宿主通信；每条路由同时校验回环 socket 地址、回环 Host 头与浏览器同源标记（`sec-fetch-site` / `Origin`），`X-Forwarded-For` 永不信任。
-- DeepSeek API Key 只保存在本机状态文件（或沿用 DSH 自身凭据），仅用于调用 DeepSeek 官方余额接口。
-- 面板粘贴的 Key 以**明文**保存在 `$DSH_HOME/custom-plugin-state.json`——与 DSH 自身的 `$DSH_HOME/.credentials.yaml`（同为明文）处于同一信任域，请相应保护 `$DSH_HOME` 目录。
+- 浏览器永远不会收到已保存的 DeepSeek API Key。面板新输入的 Key 优先通过可选的 `keytar` 写入系统凭据存储；旧版状态文件中的明文 Key 会在系统存储可用时启动迁移。
+- 如果系统凭据存储不可用，插件会兼容回退到 `$DSH_HOME/custom-plugin-state.json`；请相应保护 `$DSH_HOME` 目录。DSH 自身的 `$DSH_HOME/.credentials.yaml` 明文凭据仍可复用。
 - 会话导出与时间线数据全部停留在本机。
 
 ## 已知限制
 
 - Mermaid 引擎来自随插件安装的本地依赖，离线可用；仅当依赖缺失时回退 CDN 拉取（宿主在进程生命周期内缓存）。
-- 用量账本折叠自实时 `session/event` 记录；错过实时事件时可手动「扫描」重读今日会话日志。
+- 用量账本折叠自实时 `session/event` 记录，只保留最近 90 个北京时间日；错过实时事件时可手动「扫描」，扫描最多并发读取 4 个会话日志。
+- 额度面板会显示峰/闲 token 与费用分布，并提供官方价目链接；没有峰时字段的历史行会先按闲时估算，重新扫描后可更新。
+- 系统凭据存储依赖可选的 `keytar` 后端；无法加载时使用兼容的状态文件回退。
 - 费用按 DeepSeek 官方峰谷单价估算，仅供参考。
 - 深色模式下背景限制是刻意设计：仅「无颜色」与「极光」可选。
 

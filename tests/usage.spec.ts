@@ -5,7 +5,7 @@
 
 import { describe, expect, it } from 'vitest'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
-import { aggregateDayUsage, dayKey, isPeakHour } from '../src/usage.ts'
+import { aggregateDayUsage, dayKey, isPeakHour, pruneUsage } from '../src/usage.ts'
 
 /** Timestamp whose Beijing (UTC+8) wall clock reads the given fields, so tests
  * are independent of the host timezone. */
@@ -49,6 +49,12 @@ describe('isPeakHour', () => {
     expect(isPeakHour(Date.UTC(2026, 7, 21, 10, 0))).toBe(false)
   })
 
+  it('treats all weekend hours as off-peak', () => {
+    expect(isPeakHour(T(2026, 8, 22, 10))).toBe(false) // Saturday
+    expect(isPeakHour(T(2026, 8, 23, 15))).toBe(false) // Sunday
+    expect(isPeakHour(T(2026, 8, 24, 10))).toBe(true) // Monday
+  })
+
   it('buckets days on the Beijing calendar', () => {
     // 2026-08-20 16:30 UTC == 2026-08-21 00:30 Beijing.
     expect(dayKey(Date.UTC(2026, 7, 20, 16, 30))).toBe('2026-08-21')
@@ -87,5 +93,23 @@ describe('aggregateDayUsage', () => {
     const day = aggregateDayUsage([usageEvent(1, T(2026, 8, 21, 15, 0), { inputTokens: 5 })], dayKey(T(2026, 8, 21, 15)))
     expect(day.unknown.calls).toBe(1)
     expect(day.unknown.in).toBe(5)
+  })
+})
+
+describe('pruneUsage', () => {
+  it('keeps the configured Beijing-day window and removes malformed/expired buckets', () => {
+    const now = T(2026, 8, 24, 12)
+    const dayMs = 86_400_000
+    const usage = {
+      [dayKey(now)]: {},
+      [dayKey(now - 89 * dayMs)]: {},
+      [dayKey(now - 90 * dayMs)]: {},
+      malformed: {},
+    }
+    expect(pruneUsage(usage, now, 90)).toBe(2)
+    expect(usage[dayKey(now)]).toEqual({})
+    expect(usage[dayKey(now - 89 * dayMs)]).toEqual({})
+    expect(usage[dayKey(now - 90 * dayMs)]).toBeUndefined()
+    expect(usage.malformed).toBeUndefined()
   })
 })

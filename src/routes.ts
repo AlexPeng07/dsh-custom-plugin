@@ -60,7 +60,7 @@ export function makeCustomPluginRoutes(host: CustomPluginHost): WebRoute[] {
     handler: async (req, res): Promise<void> => {
       if (!guard(req, res)) return
       if (req.method === 'GET') {
-        json(res, 200, { ok: true, data: host.stateView() })
+        json(res, 200, { ok: true, data: await host.stateView() })
         return
       }
       if (req.method !== 'POST') {
@@ -69,7 +69,7 @@ export function makeCustomPluginRoutes(host: CustomPluginHost): WebRoute[] {
       }
       try {
         const body = (await readBody(req, BODY_LIMIT)) as Record<string, unknown>
-        host.applyEdit({
+        await host.applyEdit({
           cfg: body.cfg as never,
           folders: Array.isArray(body.folders) ? (body.folders as never) : undefined,
           prompts: Array.isArray(body.prompts) ? (body.prompts as never) : undefined,
@@ -77,7 +77,7 @@ export function makeCustomPluginRoutes(host: CustomPluginHost): WebRoute[] {
           apiKey: typeof body.apiKey === 'string' ? body.apiKey : undefined,
         })
         await host.persist()
-        json(res, 200, { ok: true })
+        json(res, 200, { ok: true, ...(await host.credentialStatus()) })
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
         json(res, message === 'body-too-large' ? 413 : 400, { ok: false, error: message })

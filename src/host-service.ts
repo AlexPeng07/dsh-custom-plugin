@@ -11,8 +11,32 @@ import { createRequire } from 'node:module'
 import { readFileSync } from 'node:fs'
 import { buildExportRows, buildMarkdown, buildPdfHtml, extractTurns } from './extract.ts'
 import { readDeepSeekCredential } from './credentials.ts'
-import type { BalanceInfo, CustomPluginState, TimelineItem, UsageRow } from './protocol.ts'
-import { aggregateDayUsage, dayKey, foldUsageRecord, isPeakHour, mergeUsageRow, type UsageRecord } from './usage.ts'
+import { SystemCredentialStore, type CredentialStore } from './system-credentials.ts'
+import type { BalanceInfo, CredentialStorage, CustomPluginPublicState, CustomPluginState, TimelineItem, UsageRow } from './protocol.ts'
+import { aggregateDayUsage, dayKey, foldUsageRecord, isPeakHour, mergeUsageRow, pruneUsage, type UsageRecord } from './usage.ts'
+
+const USAGE_SCAN_CONCURRENCY = 4
+
+type UsageScanResult = { ok: true; usageToday: unknown; scannedSessions: number } | { ok: false; error: string }
+
+interface ScanEntry {
+  readable: boolean
+  usage: Record<string, UsageRow>
+}
+
+async function mapConcurrent<T, R>(items: readonly T[], limit: number, worker: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length)
+  let next = 0
+  const run = async (): Promise<void> => {
+    while (true) {
+      const index = next++
+      if (index >= items.length) return
+      results[index] = await worker(items[index])
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => run()))
+  return results
+}
 
 /** Options the loader entry supplies to the host service. */
 export interface CustomPluginHostOptions {
@@ -33,6 +57,8 @@ export interface CustomPluginHostOptions {
   localMermaidPath?: () => string | null
   /** Test seam: read the DeepSeek credential from DSH's credentials file. */
   readCredential?: () => Promise<string>
+  /** Test seam and optional platform adapter for OS credential storage. */
+  credentialStore?: CredentialStore
 }
 
 /** Host capabilities behind the routes and the agent tool. */
@@ -43,7 +69,10 @@ export class CustomPluginHost {
   private readonly persistNow: () => Promise<void>
   private readonly diagReports: string[]
   private readonly attachments: AttachmentStore | undefined
+  private readonly credentialStore: CredentialStore
   private readonly sessionModel = new Map<string, string | null>()
+  private usageScanPromise: Promise<UsageScanResult> | null = null
+  private lastUsagePruneDay = ''
   private mermaidBytesValue = 0
   private mermaidJs = ''
   private mermaidSource = ''
@@ -57,6 +86,7 @@ export class CustomPluginHost {
     this.persistNow = options.saveNow
     this.diagReports = options.diagReports
     this.attachments = options.attachments
+    this.credentialStore = options.credentialStore ?? new SystemCredentialStore()
     this.localMermaidPath = options.localMermaidPath ?? defaultLocalMermaidPath
     this.readCredential = options.readCredential ?? readDeepSeekCredential
   }
@@ -85,31 +115,55 @@ export class CustomPluginHost {
    * decides both the day bucket and the peak/off-peak portion. */
   foldUsage(sessionId: string, usage: UsageRecord, time?: number): void {
     const at = time ?? Date.now()
-    const day = this.state.usage[dayKey(at)] ?? (this.state.usage[dayKey(at)] = {})
+    const dayName = dayKey(at)
+    const day = this.state.usage[dayName] ?? (this.state.usage[dayName] = {})
+    if (this.lastUsagePruneDay !== dayName) {
+      pruneUsage(this.state.usage, at)
+      this.lastUsagePruneDay = dayName
+    }
     const model = this.sessionModel.get(sessionId) ?? 'unknown'
     const row = day[model] ?? (day[model] = { in: 0, out: 0, cacheIn: 0, cacheW: 0, reason: 0, calls: 0 })
     foldUsageRecord(row, usage, isPeakHour(at))
   }
 
-  /** Snapshot of the whole state document for the browser. */
-  stateView(): Pick<CustomPluginState, 'cfg' | 'folders' | 'prompts' | 'stars' | 'apiKey' | 'usage'> {
+  /** Snapshot of browser-safe state; the API key value never crosses this boundary. */
+  async stateView(): Promise<CustomPluginPublicState> {
+    const credential = await this.credentialStatus()
     return {
       cfg: this.state.cfg,
       folders: this.state.folders,
       prompts: this.state.prompts,
       stars: this.state.stars,
-      apiKey: this.state.apiKey,
       usage: this.state.usage,
+      ...credential,
     }
   }
 
   /** Apply a browser-side state edit (config, folders, prompts, stars, api key). */
-  applyEdit(edit: { cfg?: Partial<CustomPluginState['cfg']>; folders?: CustomPluginState['folders']; prompts?: CustomPluginState['prompts']; stars?: CustomPluginState['stars']; apiKey?: string }): void {
+  async applyEdit(edit: { cfg?: Partial<CustomPluginState['cfg']>; folders?: CustomPluginState['folders']; prompts?: CustomPluginState['prompts']; stars?: CustomPluginState['stars']; apiKey?: string }): Promise<void> {
     if (edit.cfg !== undefined && edit.cfg !== null && typeof edit.cfg === 'object') this.state.cfg = { ...this.state.cfg, ...edit.cfg }
     if (Array.isArray(edit.folders)) this.state.folders = edit.folders
     if (Array.isArray(edit.prompts)) this.state.prompts = edit.prompts
     if (edit.stars !== undefined && edit.stars !== null && typeof edit.stars === 'object') this.state.stars = edit.stars
-    if (typeof edit.apiKey === 'string') this.state.apiKey = edit.apiKey
+    if (typeof edit.apiKey === 'string') {
+      const key = edit.apiKey.trim()
+      if (key === '') {
+        await this.credentialStore.clear()
+        this.state.apiKey = ''
+      } else {
+        if (!/^sk-/.test(key)) throw new Error('DeepSeek API Key 必须以 sk- 开头')
+        this.state.apiKey = await this.credentialStore.set(key) ? '' : key
+      }
+    }
+  }
+
+  /** Move a legacy plaintext state key into the OS store when available. */
+  async migrateLegacyApiKey(): Promise<boolean> {
+    const key = (this.state.apiKey ?? '').trim()
+    if (!/^sk-/.test(key) || !this.credentialStore.available) return false
+    if (!await this.credentialStore.set(key)) return false
+    this.state.apiKey = ''
+    return true
   }
 
   /** Timeline nodes for one session, capped to the 400-node tail. The tail cap
@@ -182,10 +236,16 @@ export class CustomPluginHost {
     }
   }
 
-  /** Resolve the DeepSeek balance API key: state value first, then environment, then DSH credential refs. */
-  private async resolveApiKey(): Promise<string> {
+  /** Resolve the key and its source without returning either value to the browser. */
+  private async resolveApiKeyWithSource(): Promise<{ key: string; source: CredentialStorage }> {
+    try {
+      const system = (await this.credentialStore.get()).trim()
+      if (/^sk-/.test(system)) return { key: system, source: 'system' }
+    } catch {
+      // OS credential store unavailable — continue through compatibility tiers.
+    }
     const key = (this.state.apiKey ?? '').trim()
-    if (key !== '') return key
+    if (/^sk-/.test(key)) return { key, source: 'legacy-state' }
     try {
       const env = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env
       // First valid candidate wins: an unset, empty, or non-sk value for one
@@ -193,7 +253,7 @@ export class CustomPluginHost {
       // where each ref is checked individually).
       for (const name of ['DEEPSEEK_API_KEY', 'DEEPSEEK_KEY', 'DEEPSEEK_TOKEN']) {
         const value = env?.[name]
-        if (typeof value === 'string' && /^sk-/.test(value.trim())) return value.trim()
+        if (typeof value === 'string' && /^sk-/.test(value.trim())) return { key: value.trim(), source: 'environment' }
       }
     } catch {
       // environment unavailable
@@ -203,11 +263,21 @@ export class CustomPluginHost {
       // them to the process environment; reuse the same file so a key
       // configured once in DSH is picked up automatically here.
       const candidate = await this.readCredential()
-      if (/^sk-/.test(candidate)) return candidate
+      if (/^sk-/.test(candidate)) return { key: candidate.trim(), source: 'dsh' }
     } catch {
       // credential refs unavailable
     }
-    return ''
+    return { key: '', source: 'none' }
+  }
+
+  private async resolveApiKey(): Promise<string> {
+    return (await this.resolveApiKeyWithSource()).key
+  }
+
+  /** Browser-safe credential status used by state and save responses. */
+  async credentialStatus(): Promise<Pick<CustomPluginPublicState, 'apiKeyConfigured' | 'credentialStorage'>> {
+    const resolved = await this.resolveApiKeyWithSource()
+    return { apiKeyConfigured: resolved.key !== '', credentialStorage: resolved.source }
   }
 
   /** Query the DeepSeek balance endpoint (15s timeout). */
@@ -239,7 +309,18 @@ export class CustomPluginHost {
    * is replayed but only usage events whose own timestamp falls on today are
    * folded, so sessions created before midnight keep contributing the usage
    * they produced today. */
-  async usageScan(): Promise<{ ok: true; usageToday: unknown; scannedSessions: number } | { ok: false; error: string }> {
+  async usageScan(): Promise<UsageScanResult> {
+    if (this.usageScanPromise !== null) return await this.usageScanPromise
+    const run = this.usageScanImpl()
+    this.usageScanPromise = run
+    try {
+      return await run
+    } finally {
+      if (this.usageScanPromise === run) this.usageScanPromise = null
+    }
+  }
+
+  private async usageScanImpl(): Promise<UsageScanResult> {
     let records
     try {
       records = await this.sessionQuery.listSessions()
@@ -247,24 +328,34 @@ export class CustomPluginHost {
       return { ok: false, error: '列会话失败' }
     }
     const today = dayKey()
+    pruneUsage(this.state.usage)
     const agg: Record<string, UsageRow> = {}
     let scanned = 0
-    for (const record of records) {
+    const entries = await mapConcurrent(records, USAGE_SCAN_CONCURRENCY, async (record): Promise<ScanEntry> => {
       try {
         const snapshot = await this.sessionQuery.readSession(record.header.id as never)
         const dayUsage = aggregateDayUsage(snapshot.events, today)
-        const models = Object.keys(dayUsage)
-        if (models.length === 0) continue
-        scanned++
-        for (const model of models) {
-          const row = agg[model] ?? (agg[model] = { in: 0, out: 0, cacheIn: 0, cacheW: 0, reason: 0, calls: 0 })
-          mergeUsageRow(row, dayUsage[model])
-        }
+        return { readable: true, usage: dayUsage }
       } catch {
         // skip unreadable session
+        return { readable: false, usage: {} }
+      }
+    })
+    let readableSessions = 0
+    for (const entry of entries) {
+      if (!entry.readable) continue
+      readableSessions++
+      const models = Object.keys(entry.usage)
+      if (models.length === 0) continue
+      scanned++
+      for (const model of models) {
+        const row = agg[model] ?? (agg[model] = { in: 0, out: 0, cacheIn: 0, cacheW: 0, reason: 0, calls: 0 })
+        mergeUsageRow(row, entry.usage[model])
       }
     }
-    if (scanned > 0) this.state.usage[today] = agg
+    // A successful empty listing means today's ledger is empty. If records
+    // exist but every read failed, preserve live data rather than erasing it.
+    if (records.length === 0 || readableSessions > 0) this.state.usage[today] = agg
     void this.persist()
     return { ok: true, usageToday: this.state.usage[today] ?? {}, scannedSessions: scanned }
   }

@@ -33,13 +33,6 @@ function applyImpl(ctx: Context): void {
     if (diagReports.length > 20) diagReports.splice(0, diagReports.length - 20)
   }
 
-  void loadStateFile(state).then((path) => {
-    statePath = path
-    return saveStateFile(state)
-  }).catch((error) => {
-    reportDiag(`state load failed: ${String((error as Error)?.message ?? error)}`)
-  })
-
   const saveSoon = (() => {
     let timer: ReturnType<typeof setTimeout> | undefined
     return (): void => {
@@ -61,6 +54,14 @@ function applyImpl(ctx: Context): void {
     reportDiag,
     diagReports,
     attachments: ctx.get('attachments'),
+  })
+
+  void loadStateFile(state).then(async (path) => {
+    statePath = path
+    if (await host.migrateLegacyApiKey()) reportDiag('legacy API key migrated to system credentials')
+    return saveStateFile(state)
+  }).catch((error) => {
+    reportDiag(`state load failed: ${String((error as Error)?.message ?? error)}`)
   })
 
   // Daily token usage: fold request/context (model) + assistant/message (usage).

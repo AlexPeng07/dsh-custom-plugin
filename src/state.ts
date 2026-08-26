@@ -14,6 +14,7 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { dshHome } from './dsh-home.ts'
 import { DEFAULT_CONFIG, type CustomPluginConfig, type CustomPluginState, type FolderNode, type PromptItem, type StarsMap, type UsageMap } from './protocol.ts'
+import { pruneUsage } from './usage.ts'
 
 /** State file name of this plugin. */
 export const STATE_FILE = 'custom-plugin-state.json'
@@ -76,6 +77,10 @@ export async function loadStateFile(
     raw = null
   }
   if (raw !== null) mergeState(state, raw)
+  // Keep the JSON document bounded even when the user has not opened the
+  // usage panel for a long time. The loader saves the normalized state after
+  // this function resolves.
+  pruneUsage(state.usage)
   return statePath
 }
 

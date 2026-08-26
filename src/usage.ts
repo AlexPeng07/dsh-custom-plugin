@@ -4,7 +4,7 @@
  */
 
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
-import type { UsageRow } from './protocol.ts'
+import type { UsageMap, UsageRow } from './protocol.ts'
 
 /** One adapter-reported token accounting record (counters are disjoint). */
 export interface UsageRecord {
@@ -19,12 +19,16 @@ export interface UsageRecord {
  * exact. The published peak/off-peak schedule and the ledger day buckets are
  * both defined on this clock, independent of the host's local timezone. */
 const CST_OFFSET_MS = 8 * 3_600_000
+const DAY_MS = 86_400_000
 
-interface CSTParts { year: number, month: number, day: number, hour: number, minute: number }
+/** Number of Beijing calendar days retained in the local usage ledger. */
+export const USAGE_RETENTION_DAYS = 90
+
+interface CSTParts { year: number, month: number, day: number, hour: number, minute: number, weekday: number }
 
 function cstParts(time: number): CSTParts {
   const d = new Date(time + CST_OFFSET_MS)
-  return { year: d.getUTCFullYear(), month: d.getUTCMonth() + 1, day: d.getUTCDate(), hour: d.getUTCHours(), minute: d.getUTCMinutes() }
+  return { year: d.getUTCFullYear(), month: d.getUTCMonth() + 1, day: d.getUTCDate(), hour: d.getUTCHours(), minute: d.getUTCMinutes(), weekday: d.getUTCDay() }
 }
 
 /** Beijing-time (UTC+8) day key `YYYY-MM-DD`. */
@@ -34,12 +38,26 @@ export function dayKey(time?: number): string {
   return `${p.year}-${pad(p.month)}-${pad(p.day)}`
 }
 
-/** DeepSeek peak billing window: Beijing 09:00-12:00 / 14:00-18:00, off-peak is
- * the remainder at half price. Evaluated on China Standard Time so the split
- * matches the published schedule on any host timezone. */
+/** DeepSeek peak billing window: Beijing Monday-Friday 09:00-12:00 /
+ * 14:00-18:00; all weekend hours are off-peak. Evaluated on China Standard
+ * Time so the split matches the published schedule on any host timezone. */
 export function isPeakHour(time: number): boolean {
-  const { hour } = cstParts(time)
-  return (hour >= 9 && hour < 12) || (hour >= 14 && hour < 18)
+  const { hour, weekday } = cstParts(time)
+  return weekday >= 1 && weekday <= 5 && ((hour >= 9 && hour < 12) || (hour >= 14 && hour < 18))
+}
+
+/** Remove malformed or expired day buckets from the persisted usage ledger. */
+export function pruneUsage(usage: UsageMap, now: number = Date.now(), retentionDays: number = USAGE_RETENTION_DAYS): number {
+  const keepDays = Math.max(1, Math.floor(retentionDays))
+  const cutoff = dayKey(now - (keepDays - 1) * DAY_MS)
+  let removed = 0
+  for (const key of Object.keys(usage)) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(key) || key < cutoff) {
+      delete usage[key]
+      removed++
+    }
+  }
+  return removed
 }
 
 /** Fold one usage record into a ledger row, tracking the peak-hour portion. */

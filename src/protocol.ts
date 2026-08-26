@@ -87,9 +87,9 @@ export interface UsageRow {
   cacheW: number
   reason: number
   calls: number
-  /** Peak-hour (Beijing 09-12 / 14-18) portion of each counter; the rest is
-   * off-peak. Optional because rows persisted before the peak/off-peak split
-   * predate these fields. */
+  /** Peak-hour (Beijing Monday-Friday 09-12 / 14-18) portion of each counter;
+   * the rest, including weekends, is off-peak. Optional because rows persisted
+   * before the peak/off-peak split predate these fields. */
   peakIn?: number
   peakCacheIn?: number
   peakCacheW?: number
@@ -98,6 +98,9 @@ export interface UsageRow {
 
 /** Day -> model -> counters. */
 export type UsageMap = Record<string, Record<string, UsageRow>>
+
+/** Where the balance API key was resolved from, without exposing its value. */
+export type CredentialStorage = 'system' | 'legacy-state' | 'environment' | 'dsh' | 'none'
 
 /** The complete persisted state file shape. */
 export interface CustomPluginState {
@@ -108,6 +111,12 @@ export interface CustomPluginState {
   /** DeepSeek API key for the balance panel; kept out of settings config. */
   apiKey: string
   usage: UsageMap
+}
+
+/** Browser-safe state projection; the API key itself never crosses this boundary. */
+export type CustomPluginPublicState = Omit<CustomPluginState, 'apiKey'> & {
+  apiKeyConfigured: boolean
+  credentialStorage: CredentialStorage
 }
 
 /** One timeline node: one direct user message in a session. */

@@ -15,7 +15,9 @@ import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SessionListState, TurnLocation, WorkspaceListState } from '@deepseek-ai/dsh-client-runtime/client'
 import type { ThemeRuntime } from '@deepseek-ai/dsh-client-ui-theme/client'
 import type { Context } from '@deepseek-ai/cordis'
-import type { CustomPluginConfig, FolderNode, PromptItem, TimelineItem, UsageRow } from '../protocol.ts'
+import type { CredentialStorage, CustomPluginConfig, FolderNode, PromptItem, TimelineItem, UsageRow } from '../protocol.ts'
+import { dayKey } from '../usage.ts'
+import { DEEPSEEK_PRICING_CHECKED_ON, DEEPSEEK_PRICING_SOURCE_URL, usageCostBreakdown } from '../pricing.ts'
 import {
   apiBalanceGet,
   apiDebugInfo,
@@ -49,17 +51,14 @@ interface WorkspaceRowLike {
   path?: string
 }
 
-/** Locale-independent date key (mirrors the host ledger). */
-function dayKey(): string {
-  const d = new Date()
-  const pad = (n: number): string => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
-}
-
 function fmtClock(time: number): string {
   const d = new Date(time)
   const pad = (n: number): string => String(n).padStart(2, '0')
   return `${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+function formatTokenCount(value: number): string {
+  return Math.round(value).toLocaleString('zh-CN')
 }
 
 /** Shared mutable store. */
@@ -69,6 +68,9 @@ interface Store {
   prompts: PromptItem[]
   stars: Record<string, Record<string, boolean>>
   apiKey: string
+  apiKeyDirty: boolean
+  apiKeyConfigured: boolean
+  credentialStorage: CredentialStorage
   usage: Record<string, Record<string, UsageRow>>
   sessionId: string | null
   turns: { sessionId: string; items: TimelineItem[] } | null
@@ -220,6 +222,9 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     prompts: [],
     stars: {},
     apiKey: '',
+    apiKeyDirty: false,
+    apiKeyConfigured: false,
+    credentialStorage: 'none',
     usage: {},
     sessionId: null,
     turns: null,
@@ -464,7 +469,8 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
         if (Array.isArray(data.folders)) S.folders = data.folders
         if (Array.isArray(data.prompts)) S.prompts = data.prompts
         if (data.stars !== undefined && data.stars !== null && typeof data.stars === 'object') S.stars = data.stars
-        if (typeof data.apiKey === 'string') S.apiKey = data.apiKey
+        if (typeof data.apiKeyConfigured === 'boolean') S.apiKeyConfigured = data.apiKeyConfigured
+        if (data.credentialStorage === 'system' || data.credentialStorage === 'legacy-state' || data.credentialStorage === 'environment' || data.credentialStorage === 'dsh' || data.credentialStorage === 'none') S.credentialStorage = data.credentialStorage
         if (data.usage !== undefined && data.usage !== null && typeof data.usage === 'object') S.usage = data.usage
       }
     } catch { /* first load may race the host */ }
@@ -480,7 +486,21 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     const cfg = { ...S.cfg }
     delete (cfg as Record<string, unknown>).clouds
     delete (cfg as Record<string, unknown>).wind
-    void apiStateSave({ cfg, folders: S.folders, prompts: S.prompts, stars: S.stars, apiKey: S.apiKey }).catch(() => {})
+    const keyDirty = S.apiKeyDirty
+    const edit = { cfg, folders: S.folders, prompts: S.prompts, stars: S.stars, ...(keyDirty ? { apiKey: S.apiKey } : {}) }
+    void apiStateSave(edit).then((result) => {
+      if (result.ok !== true) {
+        if (keyDirty) toast(result.error ?? 'Key 保存失败', 'error')
+        return
+      }
+      if (keyDirty && S.apiKeyDirty && S.apiKey === (edit.apiKey ?? '')) {
+        setS({
+          apiKeyDirty: false,
+          apiKeyConfigured: result.apiKeyConfigured ?? S.apiKey.trim() !== '',
+          credentialStorage: result.credentialStorage ?? S.credentialStorage,
+        })
+      }
+    }).catch(() => { if (keyDirty) toast('Key 保存失败', 'error') })
   }
 
   // ================= weather FX =================
@@ -1214,32 +1234,20 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     }
   }
 
-  /** Peak-hour CNY unit prices per 1M tokens (official peak/off-peak table
-   * effective 2026-08-17); off-peak hours are exactly half. deepseek-chat and
-   * deepseek-reasoner were deprecated 2026-07-24 and both map onto
-   * deepseek-v4-flash pricing. */
-  function priceOf(model: string): { in: number; out: number; cache: number } {
-    const peak: Record<string, { in: number; out: number; cache: number }> = {
-      'deepseek-v4-flash': { in: 3, cache: 0.1, out: 9 },
-      'deepseek-v4-pro': { in: 9, cache: 0.3, out: 27 },
-      'deepseek-chat': { in: 3, cache: 0.1, out: 9 },
-      'deepseek-reasoner': { in: 3, cache: 0.1, out: 9 },
-    }
-    return peak[model] ?? peak['deepseek-v4-flash']
-  }
   async function refreshBalance(): Promise<void> {
     try {
       const result = await apiBalanceGet()
       S.balance = result as unknown as Record<string, unknown>
+      S.apiKeyConfigured = result.keyConfigured === true
       // The route also carries the host's live usage ledger; fold today's row
       // in so the 「今日 N 次」 badge refreshes together with the figure.
       const usageToday = result.usageToday
       if (usageToday !== undefined && usageToday !== null && typeof usageToday === 'object') {
         S.usage = { ...S.usage }
         S.usage[dayKey()] = usageToday as Store['usage'][string]
-        setS({ balance: S.balance, usage: S.usage })
+        setS({ balance: S.balance, usage: S.usage, apiKeyConfigured: S.apiKeyConfigured })
       } else {
-        setS({ balance: S.balance })
+        setS({ balance: S.balance, apiKeyConfigured: S.apiKeyConfigured })
       }
     } catch (error) {
       S.balance = { ok: false, error: String((error as Error)?.message ?? error) }
@@ -1443,35 +1451,32 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     const day = s.usage[dayKey()] ?? {}
     const models = Object.keys(day)
     if (models.length === 0) return React.createElement('div', { className: 'vx-muted' }, '今日暂无 token 用量记录')
+    const rows = models.map((model) => ({ model, row: day[model], breakdown: usageCostBreakdown(day[model], model) }))
+    const totalPeakTokens = rows.reduce((sum, item) => sum + item.breakdown.peakTokens, 0)
+    const totalOffPeakTokens = rows.reduce((sum, item) => sum + item.breakdown.offPeakTokens, 0)
+    const totalPeakCost = rows.reduce((sum, item) => sum + item.breakdown.peakCostCny, 0)
+    const totalOffPeakCost = rows.reduce((sum, item) => sum + item.breakdown.offPeakCostCny, 0)
     return React.createElement('div', null,
       React.createElement('table', { className: 'vx-table' },
         React.createElement('thead', null, React.createElement('tr', null,
           React.createElement('th', null, '模型'), React.createElement('th', null, '输入'), React.createElement('th', null, '缓存'), React.createElement('th', null, '输出'), React.createElement('th', null, '调用'), React.createElement('th', null, '费用 ¥'),
         )),
-        React.createElement('tbody', null, models.map((model) => {
-          const row = day[model]
-          const p = priceOf(model)
-          // Peak-hour volume bills at the table price, the rest of the day at
-          // half; cache writes bill at the cache-miss input rate. Rows folded
-          // before the peak split have no peak* fields (treated as off-peak).
-          const pin = row.peakIn ?? 0
-          const pcacheIn = row.peakCacheIn ?? 0
-          const pcacheW = row.peakCacheW ?? 0
-          const pout = row.peakOut ?? 0
-          const peakCost = pin * p.in + pcacheIn * p.cache + pcacheW * p.in + pout * p.out
-          const offCost = ((row.in ?? 0) - pin) * p.in + ((row.cacheIn ?? 0) - pcacheIn) * p.cache + ((row.cacheW ?? 0) - pcacheW) * p.in + ((row.out ?? 0) - pout) * p.out
-          const cost = (peakCost + offCost / 2) / 1e6
+        React.createElement('tbody', null, rows.map(({ model, row, breakdown }) => {
           return React.createElement('tr', { key: model },
             React.createElement('td', null, model),
             React.createElement('td', null, row.in ?? 0),
             React.createElement('td', null, row.cacheIn ?? 0),
             React.createElement('td', null, row.out ?? 0),
             React.createElement('td', null, row.calls ?? 0),
-            React.createElement('td', null, cost.toFixed(4)),
+            React.createElement('td', { title: `峰 ¥${breakdown.peakCostCny.toFixed(4)} · 闲 ¥${breakdown.offPeakCostCny.toFixed(4)}` }, breakdown.totalCostCny.toFixed(4)),
           )
         })),
       ),
-      React.createElement('div', { className: 'vx-muted' }, '费用按 DeepSeek 官方峰谷单价估算（¥/百万 tokens，高峰时段 9-12/14-18 时，空闲时段半价），仅供参考'),
+      React.createElement('div', { className: 'vx-muted' }, `峰 token ${formatTokenCount(totalPeakTokens)} · 闲 token ${formatTokenCount(totalOffPeakTokens)} · 峰费用 ¥${totalPeakCost.toFixed(4)} · 闲费用 ¥${totalOffPeakCost.toFixed(4)}`),
+      React.createElement('div', { className: 'vx-muted' }, `规则核对于 ${DEEPSEEK_PRICING_CHECKED_ON} · `,
+        React.createElement('a', { href: DEEPSEEK_PRICING_SOURCE_URL, target: '_blank', rel: 'noreferrer' }, 'DeepSeek 官方价目'),
+        ' · 费用仅供参考',
+      ),
     )
   }
 
@@ -1483,14 +1488,16 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
         React.createElement('input', {
           className: 'vx-input',
           type: 'password',
-          placeholder: 'DeepSeek API Key (sk-…)',
+          placeholder: s.apiKeyConfigured ? '已配置 Key；输入新 Key 覆盖' : 'DeepSeek API Key (sk-…)',
           value: s.apiKey,
           onFocus: () => { props.onInteract?.() },
-          onChange: (e: React.ChangeEvent<HTMLInputElement>) => { setS({ apiKey: e.target.value }); saveCfg() },
+          onChange: (e: React.ChangeEvent<HTMLInputElement>) => { setS({ apiKey: e.target.value, apiKeyDirty: true }) },
+          onBlur: () => { if (S.apiKeyDirty) saveCfg() },
         }),
+        React.createElement('button', { className: 'vx-btn', onClick: () => { if (S.apiKeyDirty) saveCfg() } }, '保存'),
         React.createElement('button', { className: 'vx-btn', onClick: () => { void refreshBalance() } }, React.createElement(Icon, { n: 'refresh', size: 13 }), ' 刷新'),
       ),
-      React.createElement('div', { className: 'vx-muted' }, 'Key 仅保存在本机状态文件；留空时自动读取 DSH 已配置的 DeepSeek 凭据。'),
+      React.createElement('div', { className: 'vx-muted' }, `Key 不回传浏览器；当前来源：${s.credentialStorage === 'system' ? '系统凭据' : s.credentialStorage === 'legacy-state' ? '旧状态文件（待迁移）' : s.credentialStorage === 'environment' ? '环境变量' : s.credentialStorage === 'dsh' ? 'DSH 凭据' : '未配置'}。留空后保存可清除插件自定义 Key。`),
       b !== null && b.ok === true && b.balance !== null && b.balance !== undefined
         ? (() => {
           const info = b.balance as { currency?: string, total?: string, granted?: string, toppedUp?: string }

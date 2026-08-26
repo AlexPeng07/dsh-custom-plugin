@@ -5,7 +5,7 @@
  * @module @alexpeng/dsh-custom-plugin/client/api
  */
 
-import { CUSTOM_PLUGIN_API_PREFIX, type CustomPluginConfig, type CustomPluginState, type TimelineItem } from '../protocol.ts'
+import { CUSTOM_PLUGIN_API_PREFIX, type CredentialStorage, type CustomPluginConfig, type CustomPluginPublicState, type CustomPluginState, type TimelineItem } from '../protocol.ts'
 
 const REQUEST_TIMEOUT_MS = 20_000
 
@@ -55,12 +55,12 @@ function postJson<T>(path: string, body: unknown): Promise<T> {
 }
 
 /** Read the whole state document. */
-export async function apiStateGet(): Promise<{ ok: true; data: CustomPluginState } | { ok: false; error?: string }> {
+export async function apiStateGet(): Promise<{ ok: true; data: CustomPluginPublicState } | { ok: false; error?: string }> {
   return await request('/state', { cache: 'no-store' })
 }
 
 /** Persist a state edit. */
-export async function apiStateSave(edit: StateEdit): Promise<{ ok: true } | { ok: false; error?: string }> {
+export async function apiStateSave(edit: StateEdit): Promise<{ ok: true; apiKeyConfigured?: boolean; credentialStorage?: CredentialStorage } | { ok: false; error?: string }> {
   return await postJson('/state', edit)
 }
 

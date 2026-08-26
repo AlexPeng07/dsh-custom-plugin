@@ -93,9 +93,9 @@ Tool rows carry the tool name and an argument digest (resolved from the paired t
 A balance badge sits in the session header (clickable to pin); the balance panel provides:
 
 - **Balance**: the official `https://api.deepseek.com/user/balance` endpoint, CNY preferred, granted and topped-up balances listed separately, with the account availability flag.
-- **Key resolution order**: pasted in the panel (stored only in the local state file) → environment variables `DEEPSEEK_API_KEY` / `DEEPSEEK_KEY` / `DEEPSEEK_TOKEN` (values must start with `sk-`) → the DSH credentials file `$DSH_HOME/.credentials.yaml` (reuses the DeepSeek key already configured in DSH — no duplicate setup).
+- **Key resolution order**: the system credential store (when available) → the legacy plugin state-file key → environment variables `DEEPSEEK_API_KEY` / `DEEPSEEK_KEY` / `DEEPSEEK_TOKEN` (values must start with `sk-`) → the DSH credentials file `$DSH_HOME/.credentials.yaml` (reuses the DeepSeek key already configured in DSH — no duplicate setup).
 - **Today's usage**: per-model input / output / cache token counters and call counts, folded live from `session/event` records.
-- **Cost estimate**: DeepSeek's official peak/off-peak table (effective 2026-08-17) — peak hours (Beijing 09:00–12:00 / 14:00–18:00) at full price, off-peak at half: `deepseek-v4-flash` ¥3 / ¥9, `deepseek-v4-pro` ¥9 / ¥27 (CNY per 1M tokens in / out, cache writes ¥0.1 / ¥0.3; the retired `deepseek-chat` / `deepseek-reasoner` price as v4-flash). Indicative only.
+- **Cost estimate**: DeepSeek's current official peak/off-peak table — peak hours are Beijing Monday–Friday 09:00–12:00 / 14:00–18:00; all other hours, including weekends, are off-peak at half price: `deepseek-v4-flash` / `deepseek-v4-flash-vision-exp` ¥3 / ¥9, `deepseek-v4-pro` ¥9 / ¥27 (CNY per 1M tokens in / out, cache writes ¥0.1 / ¥0.3; the retired `deepseek-chat` / `deepseek-reasoner` price as v4-flash). Indicative only.
 - **Scan**: "scan today's session logs" replays every session and buckets usage events by their own timestamp (cross-midnight sessions keep contributing today's usage), reporting how many active sessions were scanned.
 
 ### Settings entry
@@ -144,7 +144,7 @@ The package declares its manifest per the official bundle protocol: `dsh.bundle.
 
 ## Config
 
-The plugin reads and writes one JSON document at `$DSH_HOME/custom-plugin-state.json` (`~/.dsh` by default, overridable via the `DSH_HOME` environment variable): appearance config, folders, prompts, stars, the API key, and the per-day usage ledger. Writes are atomic (temp file + rename), so a crash never truncates the document.
+The plugin reads and writes one JSON document at `$DSH_HOME/custom-plugin-state.json` (`~/.dsh` by default, overridable via the `DSH_HOME` environment variable): appearance config, folders, prompts, stars, legacy compatibility data, and a 90-day per-day usage ledger. Writes are atomic (temp file + rename), so a crash never truncates the document.
 
 Appearance and feature toggles (the `cfg` field, all with defaults):
 
@@ -166,14 +166,16 @@ Appearance and feature toggles (the `cfg` field, all with defaults):
 ## Security model
 
 - The browser talks to the host only through loopback `/api/custom-plugin` routes; every route checks a loopback socket address, a loopback Host header, and browser same-origin markers (`sec-fetch-site` / `Origin`). `X-Forwarded-For` is never trusted.
-- The DeepSeek API key stays in the local state file (or reuses DSH's own credentials) and is only used to call the official DeepSeek balance endpoint.
-- The panel-pasted key is stored in **plaintext** in `$DSH_HOME/custom-plugin-state.json` — the same trust domain as DSH's own `$DSH_HOME/.credentials.yaml` (also plaintext); protect `$DSH_HOME` accordingly.
+- The browser never receives the saved DeepSeek API key. New panel keys use the optional OS credential store through `keytar`; older plaintext state keys are migrated on startup when that store is available.
+- If the OS credential store is unavailable, the plugin keeps a compatibility fallback in `$DSH_HOME/custom-plugin-state.json`; protect `$DSH_HOME` accordingly. DSH's own `$DSH_HOME/.credentials.yaml` remains a supported plaintext fallback.
 - Conversation exports and timeline data stay on the local host.
 
 ## Known limitations
 
 - The Mermaid engine comes from the dependency installed with the plugin and works offline; only a missing dependency falls back to a CDN fetch (cached for the host process lifetime).
-- The usage ledger folds token counts from live `session/event` records; a manual "scan" re-reads today's session logs when live events were missed.
+- The usage ledger folds token counts from live `session/event` records, retains 90 Beijing calendar days, and a manual "scan" re-reads today's session logs with four concurrent reads when live events were missed.
+- The balance panel shows the peak/off-peak token and cost split plus a link to the official pricing page; legacy rows without peak counters are estimated as off-peak until rescanned.
+- OS credential storage depends on the optional `keytar` backend; when it cannot be loaded, the compatibility state-file fallback is used.
 - Cost estimates use DeepSeek's official peak/off-peak list prices and are indicative only.
 - Dark-mode background restriction is deliberate: only "no color" and "aurora" are selectable in dark mode.
 

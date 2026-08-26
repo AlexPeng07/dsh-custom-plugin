@@ -88,5 +88,8 @@
     "README.zh.md",
     "README.i18n.yaml"
   ],
-  "license": "Apache-2.0"
+  "license": "Apache-2.0",
+  "optionalDependencies": {
+    "keytar": "7.9.0"
+  }
 }
