@@ -1259,9 +1259,10 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       const result = await apiUsageScan()
       if (result.ok === true) {
         S.usage = { ...S.usage }
-        S.usage[dayKey()] = result.usageToday as Store['usage'][string]
+        const scanDay = result.day || dayKey()
+        S.usage[scanDay] = result.usageToday as Store['usage'][string]
         setS({ usage: S.usage })
-        toast(`已扫描今日会话日志（${String(result.scannedSessions)} 个今日活跃会话）`, 'info')
+        toast(`已扫描 ${scanDay} 会话日志（${String(result.scannedSessions)} 个活跃会话）`, 'info')
       } else {
         toast(result.error ?? '扫描失败', 'error')
       }
@@ -1452,6 +1453,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     const models = Object.keys(day)
     if (models.length === 0) return React.createElement('div', { className: 'vx-muted' }, '今日暂无 token 用量记录')
     const rows = models.map((model) => ({ model, row: day[model], breakdown: usageCostBreakdown(day[model], model) }))
+    const allSplitsKnown = rows.every((item) => item.breakdown.exact)
     const totalPeakTokens = rows.reduce((sum, item) => sum + item.breakdown.peakTokens, 0)
     const totalOffPeakTokens = rows.reduce((sum, item) => sum + item.breakdown.offPeakTokens, 0)
     const totalPeakCost = rows.reduce((sum, item) => sum + item.breakdown.peakCostCny, 0)
@@ -1468,11 +1470,13 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
             React.createElement('td', null, row.cacheIn ?? 0),
             React.createElement('td', null, row.out ?? 0),
             React.createElement('td', null, row.calls ?? 0),
-            React.createElement('td', { title: `峰 ¥${breakdown.peakCostCny.toFixed(4)} · 闲 ¥${breakdown.offPeakCostCny.toFixed(4)}` }, breakdown.totalCostCny.toFixed(4)),
+            React.createElement('td', { title: breakdown.exact ? `峰 ¥${breakdown.peakCostCny.toFixed(4)} · 闲 ¥${breakdown.offPeakCostCny.toFixed(4)}` : '旧用量缺少峰闲时拆分，请先扫描今日会话日志' }, breakdown.exact ? breakdown.totalCostCny.toFixed(4) : '—'),
           )
         })),
       ),
-      React.createElement('div', { className: 'vx-muted' }, `峰 token ${formatTokenCount(totalPeakTokens)} · 闲 token ${formatTokenCount(totalOffPeakTokens)} · 峰费用 ¥${totalPeakCost.toFixed(4)} · 闲费用 ¥${totalOffPeakCost.toFixed(4)}`),
+      allSplitsKnown
+        ? React.createElement('div', { className: 'vx-muted' }, `峰 token ${formatTokenCount(totalPeakTokens)} · 闲 token ${formatTokenCount(totalOffPeakTokens)} · 峰费用 ¥${totalPeakCost.toFixed(4)} · 闲费用 ¥${totalOffPeakCost.toFixed(4)}`)
+        : React.createElement('div', { className: 'vx-muted' }, '部分旧用量缺少峰闲时拆分，费用暂不估算；请先扫描今日会话日志。'),
       React.createElement('div', { className: 'vx-muted' }, `规则核对于 ${DEEPSEEK_PRICING_CHECKED_ON} · `,
         React.createElement('a', { href: DEEPSEEK_PRICING_SOURCE_URL, target: '_blank', rel: 'noreferrer' }, 'DeepSeek 官方价目'),
         ' · 费用仅供参考',

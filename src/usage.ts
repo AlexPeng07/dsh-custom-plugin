@@ -26,6 +26,43 @@ export const USAGE_RETENTION_DAYS = 90
 
 interface CSTParts { year: number, month: number, day: number, hour: number, minute: number, weekday: number }
 
+const PEAK_COUNTER_KEYS = ['peakIn', 'peakCacheIn', 'peakCacheW', 'peakOut'] as const
+
+/** Create a row whose peak/off-peak split is exact from its first event. */
+export function createUsageRow(): UsageRow {
+  return {
+    in: 0,
+    out: 0,
+    cacheIn: 0,
+    cacheW: 0,
+    reason: 0,
+    calls: 0,
+    peakIn: 0,
+    peakCacheIn: 0,
+    peakCacheW: 0,
+    peakOut: 0,
+    peakSplitKnown: true,
+  }
+}
+
+function hasAllPeakCounters(row: UsageRow): boolean {
+  return PEAK_COUNTER_KEYS.every((key) => typeof row[key] === 'number')
+}
+
+/** Whether a row has enough persisted information for exact tariff math. */
+export function hasKnownPeakSplit(row: UsageRow): boolean {
+  return row.peakSplitKnown === true || (row.peakSplitKnown === undefined && hasAllPeakCounters(row))
+}
+
+function ensurePeakCounters(row: UsageRow): void {
+  const known = hasKnownPeakSplit(row)
+  row.peakIn ??= 0
+  row.peakCacheIn ??= 0
+  row.peakCacheW ??= 0
+  row.peakOut ??= 0
+  row.peakSplitKnown = known
+}
+
 function cstParts(time: number): CSTParts {
   const d = new Date(time + CST_OFFSET_MS)
   return { year: d.getUTCFullYear(), month: d.getUTCMonth() + 1, day: d.getUTCDate(), hour: d.getUTCHours(), minute: d.getUTCMinutes(), weekday: d.getUTCDay() }
@@ -62,6 +99,7 @@ export function pruneUsage(usage: UsageMap, now: number = Date.now(), retentionD
 
 /** Fold one usage record into a ledger row, tracking the peak-hour portion. */
 export function foldUsageRecord(row: UsageRow, usage: UsageRecord, peak: boolean): void {
+  ensurePeakCounters(row)
   row.in += usage.inputTokens ?? 0
   row.out += usage.outputTokens ?? 0
   row.cacheIn += usage.cacheReadTokens ?? 0
@@ -78,6 +116,9 @@ export function foldUsageRecord(row: UsageRow, usage: UsageRecord, peak: boolean
 
 /** Merge one aggregated row into a target row (scan folds per-session rows). */
 export function mergeUsageRow(target: UsageRow, source: UsageRow): void {
+  const targetKnown = hasKnownPeakSplit(target)
+  const sourceKnown = hasKnownPeakSplit(source)
+  ensurePeakCounters(target)
   target.in += source.in
   target.out += source.out
   target.cacheIn += source.cacheIn
@@ -88,6 +129,7 @@ export function mergeUsageRow(target: UsageRow, source: UsageRow): void {
   target.peakCacheIn = (target.peakCacheIn ?? 0) + (source.peakCacheIn ?? 0)
   target.peakCacheW = (target.peakCacheW ?? 0) + (source.peakCacheW ?? 0)
   target.peakOut = (target.peakOut ?? 0) + (source.peakOut ?? 0)
+  target.peakSplitKnown = targetKnown && sourceKnown
 }
 
 /** Replay a session log and aggregate one day's per-model usage rows.
@@ -104,7 +146,7 @@ export function aggregateDayUsage(events: readonly SessionEvent[], day: string):
       model = event.data.model ?? null
     } else if (event.type === 'assistant/message' && event.data.usage !== undefined && dayKey(event.time) === day) {
       const key = model ?? 'unknown'
-      const row = agg[key] ?? (agg[key] = { in: 0, out: 0, cacheIn: 0, cacheW: 0, reason: 0, calls: 0 })
+      const row = agg[key] ?? (agg[key] = createUsageRow())
       foldUsageRecord(row, event.data.usage, isPeakHour(event.time))
     }
   }

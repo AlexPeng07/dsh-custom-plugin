@@ -5,6 +5,7 @@
  * @module @alexpeng/dsh-custom-plugin/pricing
  */
 
+import { hasKnownPeakSplit } from './usage.ts'
 import type { UsageRow } from './protocol.ts'
 
 /** Official source used for the built-in estimate and shown in the panel. */
@@ -22,6 +23,8 @@ export interface DeepSeekUnitPrice {
 }
 
 export interface UsageCostBreakdown {
+  /** False for pre-split rows whose tariff allocation is not recoverable. */
+  exact: boolean
   peakTokens: number
   offPeakTokens: number
   peakCostCny: number
@@ -48,9 +51,8 @@ export function priceOf(model: string): DeepSeekUnitPrice {
 
 /**
  * Split one row into peak/off-peak token volume and CNY cost. Rows without
- * peak counters are treated as
- * entirely off-peak for compatibility with state written before peak
- * tracking existed; a rescan can rebuild the row with exact split counters.
+ * peak counters retain the old all-off-peak numeric fallback for compatibility,
+ * but `exact` is false until a rescan rebuilds the row with split counters.
  */
 export function usageCostBreakdown(row: UsageRow, model: string): UsageCostBreakdown {
   const price = priceOf(model)
@@ -67,6 +69,7 @@ export function usageCostBreakdown(row: UsageRow, model: string): UsageCostBreak
     + (row.cacheW - peakCacheW) * price.input
     + (row.out - peakOut) * price.output
   return {
+    exact: hasKnownPeakSplit(row),
     peakTokens: peakIn + peakCacheIn + peakCacheW + peakOut,
     offPeakTokens: (row.in - peakIn) + (row.cacheIn - peakCacheIn) + (row.cacheW - peakCacheW) + (row.out - peakOut),
     peakCostCny: peakCost / 1e6,

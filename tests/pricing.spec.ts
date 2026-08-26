@@ -10,6 +10,7 @@ const fullRow = {
   cacheW: 1_000_000,
   reason: 100,
   calls: 1,
+  peakSplitKnown: true,
 }
 
 describe('DeepSeek pricing', () => {
@@ -29,5 +30,13 @@ describe('DeepSeek pricing', () => {
     expect(peak.peakTokens).toBe(4_000_000)
     expect(peak.offPeakTokens).toBe(0)
     expect(peak.totalCostCny).toBeCloseTo(15.1, 8)
+  })
+
+  it('marks pre-split rows as inexact instead of presenting a false tariff split', () => {
+    const legacy = { ...fullRow }
+    delete (legacy as { peakSplitKnown?: boolean }).peakSplitKnown
+    const breakdown = usageCostBreakdown(legacy, 'deepseek-v4-flash')
+    expect(breakdown.exact).toBe(false)
+    expect(breakdown.totalCostCny).toBeCloseTo(7.55, 8)
   })
 })

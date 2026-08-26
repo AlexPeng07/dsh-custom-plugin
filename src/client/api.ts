@@ -80,7 +80,7 @@ export async function apiBalanceGet(): Promise<BalancePayload> {
 }
 
 /** Re-scan today's session logs for usage. */
-export async function apiUsageScan(): Promise<{ ok: true; usageToday: Record<string, unknown>; scannedSessions: number } | { ok: false; error?: string }> {
+export async function apiUsageScan(): Promise<{ ok: true; day: string; usageToday: Record<string, unknown>; scannedSessions: number } | { ok: false; error?: string }> {
   return await postJson('/usage-scan', {})
 }
 

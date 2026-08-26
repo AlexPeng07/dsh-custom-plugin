@@ -8,6 +8,13 @@ follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Usage scans now preserve the live ledger when a session read fails or new
+  usage arrives during replay, and return the replayed Beijing day so a
+  midnight-crossing scan cannot relabel its result.
+- Legacy API-key migration no longer overwrites an existing system credential;
+  failed system-key deletion is reported instead of being treated as success.
+- Legacy usage rows without a recoverable peak/off-peak split are marked as
+  inexact and are no longer shown with a misleading cost estimate.
 - DeepSeek peak/off-peak cost estimates now treat only Beijing Monday-Friday
   09:00–12:00 / 14:00–18:00 as peak; weekends are off-peak.
 - The browser usage panel now uses the same Beijing-time day bucket as the

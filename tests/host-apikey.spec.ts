@@ -74,6 +74,15 @@ describe('resolveApiKey three-tier chain', () => {
     expect((host as unknown as { state: { apiKey: string } }).state.apiKey).toBe('')
   })
 
+  it('does not overwrite an existing system credential during legacy migration', async () => {
+    const store = new MemoryCredentialStore()
+    store.value = 'sk-system-value'
+    const { host } = makeHost({ apiKey: 'sk-old-state-value', store })
+    expect(await host.migrateLegacyApiKey()).toBe(true)
+    expect(store.value).toBe('sk-system-value')
+    expect((host as unknown as { state: { apiKey: string } }).state.apiKey).toBe('')
+  })
+
   it('writes and clears the custom key through the system store', async () => {
     const store = new MemoryCredentialStore()
     const { host } = makeHost({ store })
@@ -83,6 +92,19 @@ describe('resolveApiKey three-tier chain', () => {
     await host.applyEdit({ apiKey: '' })
     expect(store.value).toBe('')
     expect((await host.credentialStatus()).credentialStorage).toBe('none')
+  })
+
+  it('does not report success when the system credential cannot be cleared', async () => {
+    const store: CredentialStore = {
+      available: true,
+      get: async () => 'sk-system-value',
+      set: async () => true,
+      clear: async () => false,
+    }
+    const { host } = makeHost({ apiKey: 'sk-legacy-value', store })
+    await expect(host.applyEdit({ apiKey: '' })).rejects.toThrow('系统凭据清除失败')
+    expect((host as unknown as { state: { apiKey: string } }).state.apiKey).toBe('sk-legacy-value')
+    expect(await host.credentialStatus()).toMatchObject({ apiKeyConfigured: true, credentialStorage: 'system' })
   })
 
   it('falls to the environment when the panel is empty, API_KEY before KEY before TOKEN', async () => {

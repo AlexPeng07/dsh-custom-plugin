@@ -94,6 +94,10 @@ export interface UsageRow {
   peakCacheIn?: number
   peakCacheW?: number
   peakOut?: number
+  /** True when the complete row was rebuilt or recorded with an exact
+   * peak/off-peak split. Omitted/false marks legacy rows whose historical
+   * portion cannot be assigned to either tariff from persisted counters. */
+  peakSplitKnown?: boolean
 }
 
 /** Day -> model -> counters. */

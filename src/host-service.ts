@@ -13,11 +13,11 @@ import { buildExportRows, buildMarkdown, buildPdfHtml, extractTurns } from './ex
 import { readDeepSeekCredential } from './credentials.ts'
 import { SystemCredentialStore, type CredentialStore } from './system-credentials.ts'
 import type { BalanceInfo, CredentialStorage, CustomPluginPublicState, CustomPluginState, TimelineItem, UsageRow } from './protocol.ts'
-import { aggregateDayUsage, dayKey, foldUsageRecord, isPeakHour, mergeUsageRow, pruneUsage, type UsageRecord } from './usage.ts'
+import { aggregateDayUsage, createUsageRow, dayKey, foldUsageRecord, isPeakHour, mergeUsageRow, pruneUsage, type UsageRecord } from './usage.ts'
 
 const USAGE_SCAN_CONCURRENCY = 4
 
-type UsageScanResult = { ok: true; usageToday: unknown; scannedSessions: number } | { ok: false; error: string }
+type UsageScanResult = { ok: true; day: string; usageToday: unknown; scannedSessions: number } | { ok: false; error: string }
 
 interface ScanEntry {
   readable: boolean
@@ -72,6 +72,7 @@ export class CustomPluginHost {
   private readonly credentialStore: CredentialStore
   private readonly sessionModel = new Map<string, string | null>()
   private usageScanPromise: Promise<UsageScanResult> | null = null
+  private usageRevision = 0
   private lastUsagePruneDay = ''
   private mermaidBytesValue = 0
   private mermaidJs = ''
@@ -122,8 +123,9 @@ export class CustomPluginHost {
       this.lastUsagePruneDay = dayName
     }
     const model = this.sessionModel.get(sessionId) ?? 'unknown'
-    const row = day[model] ?? (day[model] = { in: 0, out: 0, cacheIn: 0, cacheW: 0, reason: 0, calls: 0 })
+    const row = day[model] ?? (day[model] = createUsageRow())
     foldUsageRecord(row, usage, isPeakHour(at))
+    this.usageRevision++
   }
 
   /** Snapshot of browser-safe state; the API key value never crosses this boundary. */
@@ -148,7 +150,8 @@ export class CustomPluginHost {
     if (typeof edit.apiKey === 'string') {
       const key = edit.apiKey.trim()
       if (key === '') {
-        await this.credentialStore.clear()
+        const cleared = await this.credentialStore.clear()
+        if (this.credentialStore.available && !cleared) throw new Error('系统凭据清除失败，请重试')
         this.state.apiKey = ''
       } else {
         if (!/^sk-/.test(key)) throw new Error('DeepSeek API Key 必须以 sk- 开头')
@@ -161,6 +164,22 @@ export class CustomPluginHost {
   async migrateLegacyApiKey(): Promise<boolean> {
     const key = (this.state.apiKey ?? '').trim()
     if (!/^sk-/.test(key) || !this.credentialStore.available) return false
+    let existing = ''
+    try {
+      existing = (await this.credentialStore.get()).trim()
+    } catch {
+      // Do not overwrite a credential that could not be read safely.
+      return false
+    }
+    if (existing !== '') {
+      if (/^sk-/.test(existing)) {
+        this.state.apiKey = ''
+        return true
+      }
+      // Keep the legacy value as a compatibility fallback rather than
+      // overwriting an unexpected non-empty OS-store entry.
+      return false
+    }
     if (!await this.credentialStore.set(key)) return false
     this.state.apiKey = ''
     return true
@@ -321,6 +340,7 @@ export class CustomPluginHost {
   }
 
   private async usageScanImpl(): Promise<UsageScanResult> {
+    const revisionAtStart = this.usageRevision
     let records
     try {
       records = await this.sessionQuery.listSessions()
@@ -328,7 +348,6 @@ export class CustomPluginHost {
       return { ok: false, error: '列会话失败' }
     }
     const today = dayKey()
-    pruneUsage(this.state.usage)
     const agg: Record<string, UsageRow> = {}
     let scanned = 0
     const entries = await mapConcurrent(records, USAGE_SCAN_CONCURRENCY, async (record): Promise<ScanEntry> => {
@@ -341,23 +360,30 @@ export class CustomPluginHost {
         return { readable: false, usage: {} }
       }
     })
-    let readableSessions = 0
+    let failedSessions = 0
     for (const entry of entries) {
-      if (!entry.readable) continue
-      readableSessions++
+      if (!entry.readable) {
+        failedSessions++
+        continue
+      }
       const models = Object.keys(entry.usage)
       if (models.length === 0) continue
       scanned++
       for (const model of models) {
-        const row = agg[model] ?? (agg[model] = { in: 0, out: 0, cacheIn: 0, cacheW: 0, reason: 0, calls: 0 })
+        const row = agg[model] ?? (agg[model] = createUsageRow())
         mergeUsageRow(row, entry.usage[model])
       }
     }
-    // A successful empty listing means today's ledger is empty. If records
-    // exist but every read failed, preserve live data rather than erasing it.
-    if (records.length === 0 || readableSessions > 0) this.state.usage[today] = agg
-    void this.persist()
-    return { ok: true, usageToday: this.state.usage[today] ?? {}, scannedSessions: scanned }
+    // Never replace a complete live ledger with a partial replay. The caller
+    // can retry after the unreadable sessions recover.
+    if (failedSessions > 0) return { ok: false, error: '部分会话读取失败，未覆盖现有用量，请稍后重试' }
+    // Live session events may arrive while the asynchronous replay is in
+    // flight. Keep them rather than replacing them with an older snapshot.
+    if (this.usageRevision !== revisionAtStart) return { ok: false, error: '扫描期间产生了新用量，未覆盖现有用量，请稍后重试' }
+    pruneUsage(this.state.usage)
+    this.state.usage[today] = agg
+    void this.persist().catch((error) => this.pushDiag(`usage scan save failed: ${String((error as Error)?.message ?? error)}`))
+    return { ok: true, day: today, usageToday: this.state.usage[today] ?? {}, scannedSessions: scanned }
   }
 
   /** Resolve the Mermaid engine: the bundled `mermaid` dependency on disk

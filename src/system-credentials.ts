@@ -51,11 +51,9 @@ export class SystemCredentialStore implements CredentialStore {
 
   async get(): Promise<string> {
     if (this.keytar === null) return ''
-    try {
-      return (await this.keytar.getPassword(CREDENTIAL_SERVICE, CREDENTIAL_ACCOUNT) ?? '').trim()
-    } catch {
-      return ''
-    }
+    // Let the host distinguish an unreadable store from an empty one during
+    // legacy migration; normal key resolution catches this and fails soft.
+    return (await this.keytar.getPassword(CREDENTIAL_SERVICE, CREDENTIAL_ACCOUNT) ?? '').trim()
   }
 
   async set(value: string): Promise<boolean> {
@@ -71,6 +69,8 @@ export class SystemCredentialStore implements CredentialStore {
   async clear(): Promise<boolean> {
     if (this.keytar === null) return false
     try {
+      // keytar returns false when the item was already absent; the desired
+      // postcondition is still satisfied in that case.
       await this.keytar.deletePassword(CREDENTIAL_SERVICE, CREDENTIAL_ACCOUNT)
       return true
     } catch {
