@@ -13,6 +13,10 @@ Custom convenience suite for the DeepSeek Harness (DSH) Web GUI: personalization
 
 The plugin is dual-face: the host half (`src/`) owns the state document, registers the `/api/custom-plugin` routes and the `custom_plugin_status` agent tool; the browser half (`src/client/`) injects its UI through eight injections into seven official slots and talks to the host over same-origin fetch. Mounted through the official profile mechanism — no DSH source changes.
 
+<p align="center">
+  <img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/overview.png" alt="dsh-custom-plugin overview" width="100%">
+</p>
+
 ## Selected screenshots
 
 <table>
