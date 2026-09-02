@@ -885,4 +885,68 @@ export const STATIC_CSS = `/* dsh-custom-plugin static styles. Every rule is glo
   .vx-mmd-stage svg {
     max-width: 100%;
     height: auto;
-  }`
+  }
+
+  /* DSH can select a theme independently of the operating system. The root
+     classes are applied from the resolved GUI theme and intentionally win
+     over the media-query fallback above. */
+  .vx-root.vx-dark .vx-glass {
+    background: rgba(13, 17, 25, .62);
+    color: #eef1f7;
+  }
+  .vx-root.vx-dark .vx-liquid .vx-glass {
+    background: rgba(0, 0, 0, .06);
+  }
+  .vx-root.vx-dark .vx-liquid .vx-pattern {
+    background-image: radial-gradient(rgba(110, 110, 128, .5) 3px, transparent 3px);
+  }
+  .vx-root.vx-dark .vx-pattern {
+    background-image: radial-gradient(rgba(100, 100, 116, .5) 1px, transparent 1px);
+  }
+  .vx-root.vx-dark .vx-dot {
+    background: rgba(205, 215, 230, .95);
+    border-color: rgba(28, 34, 46, .9);
+  }
+  .vx-root.vx-dark .vx-thumb {
+    background: rgba(165, 180, 205, .45);
+  }
+  .vx-root.vx-dark .vx-balance-hover,
+  .vx-root.vx-dark .vx-panel,
+  .vx-root.vx-dark .vx-modal,
+  .vx-root.vx-dark .vx-folders {
+    color: #e8ebf2;
+  }
+  .vx-root.vx-dark .vx-toast {
+    background: rgba(18, 22, 30, .94);
+  }
+
+  .vx-root.vx-light .vx-glass {
+    background: rgba(255, 255, 255, .64);
+    color: #20242e;
+  }
+  .vx-root.vx-light .vx-liquid .vx-glass {
+    background: rgba(255, 255, 255, .06);
+  }
+  .vx-root.vx-light .vx-liquid .vx-pattern {
+    background-image: radial-gradient(rgba(150, 150, 160, .5) 3px, transparent 3px);
+  }
+  .vx-root.vx-light .vx-pattern {
+    background-image: radial-gradient(rgba(150, 150, 160, .42) 1px, transparent 1px);
+  }
+  .vx-root.vx-light .vx-dot {
+    background: rgba(70, 85, 110, .92);
+    border-color: rgba(255, 255, 255, .92);
+  }
+  .vx-root.vx-light .vx-thumb {
+    background: rgba(90, 105, 135, .5);
+  }
+  .vx-root.vx-light .vx-balance-hover,
+  .vx-root.vx-light .vx-panel,
+  .vx-root.vx-light .vx-modal,
+  .vx-root.vx-light .vx-folders {
+    color: #20242e;
+  }
+  .vx-root.vx-light .vx-toast {
+    background: rgba(26, 32, 44, .92);
+  }
+}`

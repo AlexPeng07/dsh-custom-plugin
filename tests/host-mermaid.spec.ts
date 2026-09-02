@@ -68,6 +68,27 @@ describe('mermaidFetch local-first', () => {
     }
   })
 
+  it('shares one in-flight CDN load between concurrent callers', async () => {
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const fetchSpy = vi.fn(async () => {
+      await gate
+      return new Response('// mermaid stub', { status: 200 })
+    })
+    vi.stubGlobal('fetch', fetchSpy)
+    try {
+      const host = makeHost(() => null)
+      const first = host.mermaidFetch()
+      const second = host.mermaidFetch()
+      await Promise.resolve()
+      expect(fetchSpy).toHaveBeenCalledTimes(1)
+      release()
+      await expect(Promise.all([first, second])).resolves.toEqual([{ ok: true, bytes: 15 }, { ok: true, bytes: 15 }])
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
   it('reports a failure envelope when local is absent and every mirror fails', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('nope', { status: 503 })))
     try {

@@ -744,6 +744,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
 
   // ================= timeline =================
   let lastRefetchAt = 0
+  let turnsRequestSerial = 0
   // Rows already counted when the last rows>items refetch went out; one
   // attempt per rendered-row growth stops the every-2s re-read loop when the
   // host's own tail cap is what leaves the oldest loaded rows uncovered.
@@ -762,11 +763,14 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     void fetchTurns(S.sessionId as string)
   }
   async function fetchTurns(sessionId: string): Promise<void> {
+    const requestSerial = ++turnsRequestSerial
     try {
       const result = await apiTimelineGet(sessionId)
       // A slower fetch for a previously open session must not paint its turns
       // onto the newly opened one's rows.
-      if (sessionId !== S.sessionId) return
+      // The serial also protects the same session from an older polling result
+      // arriving after a newer one.
+      if (sessionId !== S.sessionId || requestSerial !== turnsRequestSerial) return
       if (result.ok === true) {
         S.turns = { sessionId, items: result.items ?? [] }
         setS({ turns: S.turns })
@@ -865,9 +869,11 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     let viewH = height
     let railRight = 4
     let railLeft = 56
+    let scrollerRect: DOMRect | null = null
     if (scroller !== null) {
       try {
         const r = scroller.getBoundingClientRect()
+        scrollerRect = r
         top = Math.max(0, r.top)
         height = Math.max(60, r.height)
         viewH = Math.max(1, scroller.clientHeight || r.height)
@@ -889,7 +895,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     // rail without any node. Rows are tail-aligned with the host's turns data
     // (the newest rendered row is the last item): loading older history
     // prepends rows and keeps the alignment correct without a refetch.
-    if (scroller !== null) {
+    if (scroller !== null && scrollerRect !== null) {
       const rows = queryUserRows(scroller)
       const offset = items.length - rows.length
       // More rendered rows than the turns data covers (older history loaded
@@ -904,8 +910,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
         if (item === undefined) continue
         try {
           const r = rows[i].getBoundingClientRect()
-          const sr = scroller.getBoundingClientRect()
-          const pct = Math.max(0, Math.min(1, (r.top + r.height / 2 - sr.top + scrollTop) / Math.max(1, scroller.scrollHeight || 1)))
+          const pct = Math.max(0, Math.min(1, (r.top + r.height / 2 - scrollerRect.top + scrollTop) / Math.max(1, scroller.scrollHeight || 1)))
           const starred = S.stars[S.sessionId as string]?.[item.seq] === true
           seqAnchor.set(item.seq, rows[i])
           pos.push({ seq: item.seq, y: Math.round(pct * trackH), st: starred })
@@ -1420,20 +1425,22 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       ? ((bal.currency ?? 'CNY') === 'CNY' ? '¥' + (bal.total ?? '') : `${bal.total ?? ''} ${bal.currency ?? ''}`)
       : (b?.ok === false ? ((b as { keyConfigured?: boolean }).keyConfigured === true ? '额度?' : '未配置密钥') : '额度…')
     const open = hover || pinned
-    return React.createElement('span', { className: 'vx-balance-wrap' },
+    return React.createElement('span', {
+      className: 'vx-balance-wrap',
+      onMouseEnter: () => setHover(true),
+      onMouseLeave: () => setHover(false),
+    },
       React.createElement('span', {
         className: 'vx-balance-text' + (pinned ? ' vx-balance-pinned' : ''),
         title: pinned ? '再次点击取消固定' : '点击固定密钥面板',
         onClick: () => setPinned(!pinned),
-        onMouseEnter: () => setHover(true),
-        onMouseLeave: () => setHover(false),
       },
         React.createElement(Icon, { n: 'wallet', size: 13 }),
         React.createElement('span', null, balance),
         calls > 0 ? React.createElement('span', { className: 'vx-balance-today' }, `今日 ${calls} 次`) : null,
       ),
       open
-        ? React.createElement('div', { className: 'vx-glass vx-balance-hover', onMouseEnter: () => setHover(true), onMouseLeave: () => setHover(false) },
+        ? React.createElement('div', { className: 'vx-glass vx-balance-hover' },
           React.createElement('div', { className: 'vx-pattern' }),
           pinned
             ? React.createElement('div', { className: 'vx-balance-head' },
@@ -1693,9 +1700,10 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     }, [current])
     React.useEffect(() => {
       if (s.cfg.timeline !== true || S.sessionId === null) return
-      const handle = setInterval(() => { if (summary !== null && summary.running === true) void fetchTurns(S.sessionId as string) }, 3000)
+      const running = summary?.running === true
+      const handle = setInterval(() => { if (running) void fetchTurns(S.sessionId as string) }, 3000)
       return () => clearInterval(handle)
-    }, [s.cfg.timeline, current])
+    }, [s.cfg.timeline, current, summary?.running])
     React.useEffect(() => {
       if (s.cfg.timeline !== true || S.sessionId === null) return
       const el = trackRef.current
@@ -2247,7 +2255,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
         setLoading(false)
       })()
       return () => { alive = false }
-    }, [mm?.index])
+    }, [mm])
     if (mm === null) return null
     return React.createElement('div', { className: 'vx-modal-mask', onClick: () => setS({ mermaidModal: null }) },
       React.createElement('div', { className: 'vx-glass vx-modal', onClick: (e: React.MouseEvent) => e.stopPropagation() },
@@ -2559,7 +2567,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     if (s.ask !== null) children.push(React.createElement(AskModal, { key: 'ask' }))
     if (s.confirmAsk !== null) children.push(React.createElement(ConfirmModal, { key: 'confirm' }))
     children.push(React.createElement(Toasts, { key: 'toasts' }))
-    return React.createElement('div', { className: 'vx-root' }, children)
+    return React.createElement('div', { className: `vx-root ${s.dark ? 'vx-dark' : 'vx-light'}` }, children)
   }
 
   // ================= install =================

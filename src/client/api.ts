@@ -27,6 +27,8 @@ export interface BalancePayload {
   usageToday?: Record<string, unknown>
 }
 
+type StateSaveResult = { ok: true; apiKeyConfigured?: boolean; credentialStorage?: CredentialStorage } | { ok: false; error?: string }
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const controller = new AbortController()
   const timer = globalThis.setTimeout(() => { controller.abort() }, REQUEST_TIMEOUT_MS)
@@ -54,14 +56,23 @@ function postJson<T>(path: string, body: unknown): Promise<T> {
   })
 }
 
+/**
+ * State POSTs carry a complete snapshot rather than an operation log. Keep
+ * them on one client-side queue so a quick sequence of toggles cannot be
+ * applied out of order when the network completes requests differently.
+ */
+let stateSaveQueue: Promise<void> = Promise.resolve()
+
 /** Read the whole state document. */
 export async function apiStateGet(): Promise<{ ok: true; data: CustomPluginPublicState } | { ok: false; error?: string }> {
   return await request('/state', { cache: 'no-store' })
 }
 
 /** Persist a state edit. */
-export async function apiStateSave(edit: StateEdit): Promise<{ ok: true; apiKeyConfigured?: boolean; credentialStorage?: CredentialStorage } | { ok: false; error?: string }> {
-  return await postJson('/state', edit)
+export async function apiStateSave(edit: StateEdit): Promise<StateSaveResult> {
+  const run: Promise<StateSaveResult> = stateSaveQueue.catch(() => {}).then(() => postJson<StateSaveResult>('/state', edit))
+  stateSaveQueue = run.then(() => {}, () => {})
+  return await run
 }
 
 /** Timeline nodes for one session (tail-capped by the host). */

@@ -44,7 +44,9 @@ export default (): UserConfig[] => {
     clean: false,
     // The cordis framework and the dsh tool SDK resolve at runtime from the
     // dsh profile tree (both are peerDependencies — harness convention).
-    external: ['@deepseek-ai/cordis', '@deepseek-ai/dsh-tools', 'keytar'],
+    deps: {
+      neverBundle: ['@deepseek-ai/cordis', '@deepseek-ai/dsh-tools', 'keytar'],
+    },
   }]
 
   if (existsSync(resolve(process.cwd(), 'src/client/index.ts'))) {
@@ -58,7 +60,10 @@ export default (): UserConfig[] => {
       dts: false,
       sourcemap: true,
       clean: false,
-      external: [...PLATFORM_MODULES],
+      deps: {
+        neverBundle: [...PLATFORM_MODULES],
+        alwaysBundle: (id: string) => (PLATFORM_MODULES.includes(id as never) ? undefined : true),
+      },
       define: {
         'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV ?? 'production'),
         'import.meta.env.MODE': JSON.stringify(process.env.NODE_ENV ?? 'production'),
@@ -66,7 +71,6 @@ export default (): UserConfig[] => {
       },
       // tsdown auto-externalizes package dependencies; anything NOT in the
       // loader module table must inline instead (wire layers, zod, etc.).
-      noExternal: (id: string) => (PLATFORM_MODULES.includes(id as never) ? undefined : true),
       outputOptions: {
         entryFileNames: 'client.js',
         banner: `window.__ModuleLoader__.load({ id: ${JSON.stringify(ID)}, factory: (require) => {`,

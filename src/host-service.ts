@@ -18,6 +18,7 @@ import { aggregateDayUsage, createUsageRow, dayKey, foldUsageRecord, isPeakHour,
 const USAGE_SCAN_CONCURRENCY = 4
 
 type UsageScanResult = { ok: true; day: string; usageToday: unknown; scannedSessions: number } | { ok: false; error: string }
+type MermaidFetchResult = { ok: true; bytes: number } | { ok: false; error: string }
 
 interface ScanEntry {
   readable: boolean
@@ -74,6 +75,7 @@ export class CustomPluginHost {
   private usageScanPromise: Promise<UsageScanResult> | null = null
   private usageRevision = 0
   private lastUsagePruneDay = ''
+  private mermaidFetchPromise: Promise<MermaidFetchResult> | null = null
   private mermaidBytesValue = 0
   private mermaidJs = ''
   private mermaidSource = ''
@@ -389,8 +391,19 @@ export class CustomPluginHost {
   /** Resolve the Mermaid engine: the bundled `mermaid` dependency on disk
    * first (no runtime network), CDN mirrors only as a fallback (cached for
    * the host lifetime). */
-  async mermaidFetch(): Promise<{ ok: true; bytes: number } | { ok: false; error: string }> {
+  async mermaidFetch(): Promise<MermaidFetchResult> {
     if (this.mermaidBytesValue > 0) return { ok: true, bytes: this.mermaidBytesValue }
+    if (this.mermaidFetchPromise !== null) return await this.mermaidFetchPromise
+    const run = this.mermaidFetchImpl()
+    this.mermaidFetchPromise = run
+    try {
+      return await run
+    } finally {
+      if (this.mermaidFetchPromise === run) this.mermaidFetchPromise = null
+    }
+  }
+
+  private async mermaidFetchImpl(): Promise<MermaidFetchResult> {
     const localPath = this.localMermaidPath()
     if (localPath !== null && localPath !== '') {
       try {

@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format loosely
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions
 follow [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## 0.1.6 — 2026-09-02
 
 ### Fixed
 
@@ -19,6 +19,13 @@ follow [Semantic Versioning](https://semver.org/).
   09:00–12:00 / 14:00–18:00 as peak; weekends are off-peak.
 - The browser usage panel now uses the same Beijing-time day bucket as the
   Host, including when the desktop host runs outside UTC+8.
+- Client state snapshots are serialized in invocation order so rapid settings
+  changes cannot be overwritten by an older save completing later.
+- Timeline refreshes ignore stale session/request responses and follow live
+  conversation running-state changes.
+- Mermaid modal changes reload correctly, while concurrent CDN loads share one
+  in-flight request; the balance hover panel also remains reachable across its
+  trigger gap.
 
 ### Changed
 
@@ -30,6 +37,14 @@ follow [Semantic Versioning](https://semver.org/).
   source link, and the built-in rule check date.
 - Saved panel keys prefer the optional OS credential store, migrate legacy
   state-file keys when possible, and no longer cross the browser state boundary.
+- Light/dark root theme styles now take precedence over the host OS preference,
+  and the build uses the current tsdown dependency configuration without
+  deprecation warnings.
+
+### Added
+
+- Regression coverage for ordered state saves and shared in-flight Mermaid
+  loading.
 
 ## 0.1.3 — 2026-08-23
 
