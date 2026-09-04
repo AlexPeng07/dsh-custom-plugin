@@ -4,6 +4,39 @@ All notable changes to this project are documented here. The format loosely
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions
 follow [Semantic Versioning](https://semver.org/).
 
+## 0.4.0 — 2026-09-03
+
+### Added
+
+- 7 / 30 / 90-day usage trends, per-model summaries, CSV export, and local monthly CNY budget warnings.
+- Versioned, secret-free state backup with previewed merge/replace import and automatic recovery copies.
+- Editable, tagged, sortable favorite prompts with usage recency, `{{variable}}` templates, and JSON / Markdown portability.
+- Indexed current-session search and a Ctrl/Cmd+K command palette backed by DSH's official search APIs.
+
+### Changed
+
+- Batch archive skips running sessions and reports separate success and failure counts.
+- Existing prompt and config documents are normalized for the new optional fields.
+
+### Fixed
+
+- State-dependent routes now wait for the initial local state load; usage events
+  arriving during an import, edit, or usage scan are queued and persisted instead
+  of racing a stale snapshot.
+- Backup imports reject malformed counters/configuration, honor imported folder
+  parents and sibling order, and keep the 5 MiB document boundary distinct from
+  the JSON request envelope.
+- Search hits carry their session id and archive batches retain per-item errors;
+  stale cross-session clicks and swallowed archive failures now surface clearly.
+- Malformed persisted peak counters, invalid calendar buckets, failed usage
+  rebuilds, and partial state edits are handled without presenting or keeping
+  a misleading snapshot; backup requests now validate their envelope fields.
+
+### Security
+
+- Backups exclude API keys and credential metadata; imports preserve the active credential.
+- Archive restore remains deferred until DSH exposes an official API.
+
 ## 0.1.6 — 2026-09-02
 
 ### Fixed

@@ -13,9 +13,14 @@ import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import type { CustomPluginHost } from './host-service.ts'
 import { isLoopbackRequest } from './loopback.ts'
 import { CUSTOM_PLUGIN_API_PREFIX, MERMAID_SCRIPT_PATH } from './protocol.ts'
+import { BACKUP_BODY_LIMIT } from './backup.ts'
 
 const BODY_LIMIT = 256 * 1024
 const TIMELINE_LIMIT = 64 * 1024
+// The request envelope contains JSON keys around the document. Keep a small
+// reserve so a document at the documented 5 MiB limit is not rejected solely
+// because of that envelope; the document itself is checked below as well.
+const BACKUP_REQUEST_LIMIT = BACKUP_BODY_LIMIT + 64 * 1024
 
 function json(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
@@ -53,12 +58,13 @@ function isMethod(req: IncomingMessage, method: string, res: ServerResponse): bo
 }
 
 /** Build the plugin's route set. */
-export function makeCustomPluginRoutes(host: CustomPluginHost): WebRoute[] {
+export function makeCustomPluginRoutes(host: CustomPluginHost, ready: Promise<void> = Promise.resolve()): WebRoute[] {
   const stateRoute: WebRoute = {
     kind: 'exact',
     path: `${CUSTOM_PLUGIN_API_PREFIX}/state`,
     handler: async (req, res): Promise<void> => {
       if (!guard(req, res)) return
+      await ready
       if (req.method === 'GET') {
         json(res, 200, { ok: true, data: await host.stateView() })
         return
@@ -76,7 +82,7 @@ export function makeCustomPluginRoutes(host: CustomPluginHost): WebRoute[] {
           stars: body.stars as never,
           apiKey: typeof body.apiKey === 'string' ? body.apiKey : undefined,
         })
-        await host.persist()
+        await host.persistWhenIdle()
         json(res, 200, { ok: true, ...(await host.credentialStatus()) })
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
@@ -99,6 +105,85 @@ export function makeCustomPluginRoutes(host: CustomPluginHost): WebRoute[] {
       }
       const result = await host.timelineGet(sessionId)
       json(res, result.ok ? 200 : 500, result)
+    },
+  }
+
+  const backupRoute: WebRoute = {
+    kind: 'exact',
+    path: `${CUSTOM_PLUGIN_API_PREFIX}/backup`,
+    handler: async (req, res): Promise<void> => {
+      if (!guard(req, res)) return
+      await ready
+      if (req.method === 'GET') {
+        json(res, 200, { ok: true, data: host.backupExport() })
+        return
+      }
+      if (!isMethod(req, 'POST', res)) return
+      try {
+        const rawBody = await readBody(req, BACKUP_REQUEST_LIMIT)
+        if (rawBody === null || typeof rawBody !== 'object' || Array.isArray(rawBody)) {
+          json(res, 400, { ok: false, error: '备份请求结构无效' })
+          return
+        }
+        const body = rawBody as Record<string, unknown>
+        if (body.mode !== 'merge' && body.mode !== 'replace') {
+          json(res, 400, { ok: false, error: '导入模式无效' })
+          return
+        }
+        if (!Object.prototype.hasOwnProperty.call(body, 'document')) {
+          json(res, 400, { ok: false, error: '备份文档缺失' })
+          return
+        }
+        if (body.dryRun !== undefined && typeof body.dryRun !== 'boolean') {
+          json(res, 400, { ok: false, error: 'dryRun 字段无效' })
+          return
+        }
+        const encodedDocument = JSON.stringify(body.document)
+        if (encodedDocument === undefined) {
+          json(res, 400, { ok: false, error: '备份文档无效' })
+          return
+        }
+        if (Buffer.byteLength(encodedDocument, 'utf8') > BACKUP_BODY_LIMIT) {
+          json(res, 413, { ok: false, error: '备份文档不能超过 5 MB' })
+          return
+        }
+        const result = await host.backupImport(body.document, body.mode, body.dryRun === true)
+        json(res, result.ok ? 200 : 400, result)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        json(res, message === 'body-too-large' ? 413 : 400, { ok: false, error: message })
+      }
+    },
+  }
+
+  const searchRoute: WebRoute = {
+    kind: 'exact',
+    path: `${CUSTOM_PLUGIN_API_PREFIX}/search`,
+    handler: async (req, res): Promise<void> => {
+      if (!guard(req, res)) return
+      if (!isMethod(req, 'POST', res)) return
+      try {
+        const body = (await readBody(req, TIMELINE_LIMIT)) as { sessionId?: string; query?: string; kinds?: unknown }
+        if (typeof body.sessionId !== 'string' || body.sessionId === '' || typeof body.query !== 'string' || body.query.trim() === '') {
+          json(res, 400, { ok: false, error: '会话或搜索词为空' })
+          return
+        }
+        const allowed = new Set(['user', 'assistant', 'tool'])
+        if (body.kinds !== undefined && !Array.isArray(body.kinds)) {
+          json(res, 400, { ok: false, error: '角色筛选无效' })
+          return
+        }
+        if (Array.isArray(body.kinds) && body.kinds.some((kind) => typeof kind !== 'string' || !allowed.has(kind))) {
+          json(res, 400, { ok: false, error: '角色筛选无效' })
+          return
+        }
+        const kinds = Array.isArray(body.kinds) ? body.kinds as Array<'user' | 'assistant' | 'tool'> : []
+        const result = await host.conversationSearch(body.sessionId, body.query.trim(), kinds)
+        json(res, result.ok ? 200 : 500, result)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        json(res, message === 'body-too-large' ? 413 : 400, { ok: false, error: message })
+      }
     },
   }
 
@@ -128,6 +213,7 @@ export function makeCustomPluginRoutes(host: CustomPluginHost): WebRoute[] {
     path: `${CUSTOM_PLUGIN_API_PREFIX}/balance`,
     handler: async (req, res): Promise<void> => {
       if (!guard(req, res)) return
+      await ready
       if (!isMethod(req, 'GET', res)) return
       const result = await host.balanceGet()
       // 200 either way: the { ok, error } envelope carries the failure detail
@@ -141,6 +227,7 @@ export function makeCustomPluginRoutes(host: CustomPluginHost): WebRoute[] {
     path: `${CUSTOM_PLUGIN_API_PREFIX}/usage-scan`,
     handler: async (req, res): Promise<void> => {
       if (!guard(req, res)) return
+      await ready
       if (!isMethod(req, 'POST', res)) return
       const result = await host.usageScan()
       json(res, result.ok ? 200 : 500, result)
@@ -200,9 +287,9 @@ export function makeCustomPluginRoutes(host: CustomPluginHost): WebRoute[] {
     handler: (req, res): void => {
       if (!guard(req, res)) return
       if (!isMethod(req, 'GET', res)) return
-      void host.debugInfo().then((info) => { json(res, 200, { ok: true, ...info }) }).catch(() => { json(res, 200, { ok: false, error: '调试信息不可用' }) })
+      void ready.then(() => host.debugInfo()).then((info) => { json(res, 200, { ok: true, ...info }) }).catch(() => { json(res, 200, { ok: false, error: '调试信息不可用' }) })
     },
   }
 
-  return [stateRoute, timelineRoute, exportRoute, balanceRoute, usageScanRoute, mermaidFetchRoute, mermaidScriptRoute, diagRoute, debugRoute]
+  return [stateRoute, timelineRoute, backupRoute, searchRoute, exportRoute, balanceRoute, usageScanRoute, mermaidFetchRoute, mermaidScriptRoute, diagRoute, debugRoute]
 }

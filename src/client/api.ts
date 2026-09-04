@@ -5,7 +5,7 @@
  * @module @alexpeng/dsh-custom-plugin/client/api
  */
 
-import { CUSTOM_PLUGIN_API_PREFIX, type CredentialStorage, type CustomPluginConfig, type CustomPluginPublicState, type CustomPluginState, type TimelineItem } from '../protocol.ts'
+import { CUSTOM_PLUGIN_API_PREFIX, type BackupImportMode, type BackupImportPreview, type ConversationSearchKind, type ConversationSearchResult, type CredentialStorage, type CustomPluginBackupV1, type CustomPluginConfig, type CustomPluginPublicState, type CustomPluginState, type TimelineItem } from '../protocol.ts'
 
 const REQUEST_TIMEOUT_MS = 20_000
 
@@ -29,9 +29,12 @@ export interface BalancePayload {
 
 type StateSaveResult = { ok: true; apiKeyConfigured?: boolean; credentialStorage?: CredentialStorage } | { ok: false; error?: string }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+async function request<T>(path: string, init?: RequestInit, externalSignal?: AbortSignal): Promise<T> {
   const controller = new AbortController()
   const timer = globalThis.setTimeout(() => { controller.abort() }, REQUEST_TIMEOUT_MS)
+  const abort = (): void => controller.abort()
+  externalSignal?.addEventListener('abort', abort, { once: true })
+  if (externalSignal?.aborted === true) controller.abort()
   try {
     const response = await fetch(`${CUSTOM_PLUGIN_API_PREFIX}${path}`, { ...init, signal: controller.signal })
     try {
@@ -45,6 +48,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     return { ok: false, error: String((error as Error)?.message ?? error) } as unknown as T
   } finally {
     globalThis.clearTimeout(timer)
+    externalSignal?.removeEventListener('abort', abort)
   }
 }
 
@@ -78,6 +82,18 @@ export async function apiStateSave(edit: StateEdit): Promise<StateSaveResult> {
 /** Timeline nodes for one session (tail-capped by the host). */
 export async function apiTimelineGet(sessionId: string): Promise<{ ok: true; sessionId: string; items: TimelineItem[] } | { ok: false; error?: string }> {
   return await request(`/timeline?sessionId=${encodeURIComponent(sessionId)}`, { cache: 'no-store' })
+}
+
+export async function apiBackupExport(): Promise<{ ok: true; data: CustomPluginBackupV1 } | { ok: false; error?: string }> {
+  return await request('/backup', { cache: 'no-store' })
+}
+
+export async function apiBackupImport(document: unknown, mode: BackupImportMode, dryRun: boolean): Promise<{ ok: true; preview: BackupImportPreview; recoveryPath?: string } | { ok: false; error?: string }> {
+  return await postJson('/backup', { document, mode, dryRun })
+}
+
+export async function apiConversationSearch(sessionId: string, query: string, kinds: ConversationSearchKind[], signal?: AbortSignal): Promise<{ ok: true; } & ConversationSearchResult | { ok: false; error?: string }> {
+  return await request('/search', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sessionId, query, kinds }) }, signal)
 }
 
 /** Export one session in the given format. */

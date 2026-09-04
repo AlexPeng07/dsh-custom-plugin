@@ -9,7 +9,7 @@
 
 English | [中文](README.zh.md)
 
-Custom convenience suite for the DeepSeek Harness (DSH) Web GUI: personalization, weather FX, glass effects, a per-user-message timeline rail, project folders, prompts, conversation export, Mermaid rendering, quote reply, and DeepSeek balance / daily token usage.
+Custom convenience suite for the DeepSeek Harness (DSH) Web GUI: personalization, weather FX, glass effects, a per-user-message timeline rail, project folders, enhanced prompts, conversation export/search, Mermaid rendering, quote reply, 7/30/90-day usage analytics, budget and key-free local backups, plus a Ctrl/Cmd+K command palette.
 
 The plugin is dual-face: the host half (`src/`) owns the state document, registers the `/api/custom-plugin` routes and the `custom_plugin_status` agent tool; the browser half (`src/client/`) injects its UI through eight injections into seven official slots and talks to the host over same-origin fetch. Mounted through the official profile mechanism — no DSH source changes.
 
@@ -42,7 +42,7 @@ The plugin is dual-face: the host half (`src/`) owns the state document, registe
 </tr>
 </table>
 
-Weather FX is shown in dark mode, where only "no color" and "aurora" backgrounds are selectable.
+Weather FX is shown in dark mode, where only "no color" and "aurora" backgrounds are selectable. Usage history, backup-import previews, session search, and the command palette are dynamic views of the same panel; open them inside DSH to inspect the live UI — no additional fixed screenshots are included.
 
 ## What it does
 
@@ -69,7 +69,7 @@ A multi-level folder tree persisted in the `$DSH_HOME` state file, shared across
 
 ### Prompts
 
-A prompt library with add / copy / delete, search, and a "Prompts" button in the session header for one-click insertion into the input box.
+A prompt library with add / edit / copy / delete, search, favorites, tags, drag sorting, recency and use counts. `{{variable}}` placeholders open a fill-in form before insertion. The library supports versioned JSON and heading-based Markdown import/export.
 
 ### Conversation export
 
@@ -81,6 +81,8 @@ Export the current session in three formats (file names carry a date stamp):
 
 Tool rows carry the tool name and an argument digest (resolved from the paired tool/call events).
 
+Plugin state can be exported as a versioned JSON backup containing appearance, folders, prompts, stars, usage, and budget settings. API keys and credential metadata are excluded. Imports show a conflict preview, support merge or non-secret replacement, and create a recovery copy first.
+
 ### Mermaid
 
 ```mermaid blocks anywhere in the chat — assistant replies included (mindmaps, flowcharts, sequence diagrams, …) — render in place automatically: a diagram/code toggle bar with a mermaid.live fallback link appears above the block, streaming blocks preview once their content is complete, diagrams re-render on GUI theme flips, and a failed render keeps the raw code. Detection keys off the fence language label; with a blank label (mid-stream) a content heuristic decides (keyword prefix + completeness checks, so blocks labeled with a real language are never touched). The engine loads from the mermaid 11 dependency installed with the plugin (works offline), falling back to jsdelivr / fastly / unpkg mirrors and caching in the host process; the render chips under user messages and the multi-diagram modal stay, and the mermaid.live link uses the DEFLATE-compressed `#pako:` format that restores the diagram on open.
@@ -90,7 +92,10 @@ Tool rows carry the tool name and an argument digest (resolved from the paired t
 - **Quote reply**: select text in the conversation and a "quote reply" button inserts it as a blockquote into the input box;
 - **Anti auto-scroll**: force `scroll-behavior: auto` so sends never yank the view to the bottom (off by default);
 - **Formula copy**: LaTeX / MathML copy chips under matching messages (MathML pastes into Word);
-- **Batch archive**: select sessions and archive them in bulk with a confirmation guard (logs stay in storage).
+- **Batch archive**: select sessions and archive them in bulk; running sessions are unavailable and completion reports separate success/failure counts. DSH exposes no restore API yet, so the plugin provides no restore entry point.
+- **Session search**: search current-session user, assistant, and tool content through DSH's official index and jump to the containing turn; superseded requests are cancelled.
+- **Command palette**: press `Ctrl+K` / `Cmd+K` outside editors to search sessions, workspaces, prompts, and common actions; cross-session content search uses DSH's official API.
+- **Reliable archive**: running sessions are unavailable by default and batch completion reports separate success and failure counts.
 
 ### Balance and usage
 
@@ -101,6 +106,7 @@ A balance badge sits in the session header (clickable to pin); the balance panel
 - **Today's usage**: per-model input / output / cache token counters and call counts, folded live from `session/event` records.
 - **Cost estimate**: DeepSeek's current official peak/off-peak table — peak hours are Beijing Monday–Friday 09:00–12:00 / 14:00–18:00; all other hours, including weekends, are off-peak at half price: `deepseek-v4-flash` / `deepseek-v4-flash-vision-exp` ¥3 / ¥9, `deepseek-v4-pro` ¥9 / ¥27 (CNY per 1M tokens in / out, cache writes ¥0.1 / ¥0.3; the retired `deepseek-chat` / `deepseek-reasoner` price as v4-flash). Indicative only.
 - **Scan**: "scan today's session logs" replays every session and buckets usage events by their own timestamp (cross-midnight sessions keep contributing today's usage), reporting how many active sessions were scanned.
+- **History and budget**: inspect 7 / 30 / 90-day trends and per-model totals, export UTF-8 CSV, and set a local monthly CNY budget with an in-plugin warning threshold.
 
 ### Settings entry
 
@@ -166,6 +172,8 @@ Appearance and feature toggles (the `cfg` field, all with defaults):
 | `antiScroll` | `false` | anti auto-scroll |
 | `mermaid` | `true` | automatic in-place Mermaid rendering (plus render chips) |
 | `formula` | `true` | LaTeX / MathML copy chips |
+| `monthlyBudgetCny` | `0` | Monthly CNY budget; `0` disables warnings |
+| `budgetWarningPercent` | `80` | Monthly warning threshold (1–100) |
 
 ## Security model
 
@@ -178,10 +186,11 @@ Appearance and feature toggles (the `cfg` field, all with defaults):
 
 - The Mermaid engine comes from the dependency installed with the plugin and works offline; only a missing dependency falls back to a CDN fetch (cached for the host process lifetime).
 - The usage ledger folds token counts from live `session/event` records, retains 90 Beijing calendar days, and a manual "scan" re-reads today's session logs with four concurrent reads when live events were missed.
-- The balance panel shows the peak/off-peak token and cost split plus a link to the official pricing page; legacy rows without peak counters are estimated as off-peak until rescanned.
+- The balance panel shows the peak/off-peak token and cost split plus a link to the official pricing page; legacy rows without peak counters are marked inexact and excluded from cost totals until rescanned.
 - OS credential storage depends on the optional `keytar` backend; when it cannot be loaded, the compatibility state-file fallback is used.
 - Cost estimates use DeepSeek's official peak/off-peak list prices and are indicative only.
 - Dark-mode background restriction is deliberate: only "no color" and "aurora" are selectable in dark mode.
+- DSH currently exposes no archive-restore API; the plugin does not bypass that boundary by editing the underlying registry.
 
 ## Development
 

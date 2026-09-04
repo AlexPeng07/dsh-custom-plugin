@@ -39,4 +39,12 @@ describe('DeepSeek pricing', () => {
     expect(breakdown.exact).toBe(false)
     expect(breakdown.totalCostCny).toBeCloseTo(7.55, 8)
   })
+
+  it('does not trust an exact marker when peak counters are incomplete or impossible', () => {
+    const incomplete = { ...fullRow, peakSplitKnown: true }
+    const incompleteBreakdown = usageCostBreakdown(incomplete, 'deepseek-v4-flash')
+    expect(incompleteBreakdown.exact).toBe(false)
+    const impossible = { ...fullRow, peakSplitKnown: true, peakIn: 2_000_000, peakCacheIn: 0, peakCacheW: 0, peakOut: 0 }
+    expect(usageCostBreakdown(impossible, 'deepseek-v4-flash').exact).toBe(false)
+  })
 })

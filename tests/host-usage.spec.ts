@@ -144,4 +144,26 @@ describe('CustomPluginHost.usageScan', () => {
 
     await expect(host.usageScan()).resolves.toMatchObject({ ok: true, day: dayKey(time) })
   })
+
+  it('restores the previous ledger when the rebuilt usage cannot be persisted', async () => {
+    const state = defaultState()
+    const time = Date.now()
+    state.usage[dayKey(time)] = { 'deepseek-v4-flash': { in: 99, out: 1, cacheIn: 0, cacheW: 0, reason: 0, calls: 1 } }
+    const sessionQuery = {
+      listSessions: async () => [{ header: { id: 'session-1' } }],
+      readSession: async () => ({ events: [requestContext(time), usageEvent(time, 1)] }),
+    }
+    const host = new CustomPluginHost({
+      sessionQuery: sessionQuery as never,
+      state,
+      statePath: () => 'custom-plugin-state.json',
+      saveNow: async () => { throw new Error('disk full') },
+      reportDiag: () => {},
+      diagReports: [],
+      credentialStore: { available: false, get: async () => '', set: async () => false, clear: async () => false },
+    })
+
+    await expect(host.usageScan()).resolves.toEqual({ ok: false, error: expect.stringContaining('用量保存失败') })
+    expect(state.usage[dayKey(time)]['deepseek-v4-flash'].in).toBe(99)
+  })
 })

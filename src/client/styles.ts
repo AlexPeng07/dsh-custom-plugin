@@ -558,6 +558,14 @@ export const STATIC_CSS = `/* dsh-custom-plugin static styles. Every rule is glo
   .vx-list-item:hover {
     background: rgba(255, 255, 255, .22);
   }
+  .vx-list-item.on {
+    background: rgba(127, 164, 224, .28);
+    box-shadow: inset 0 0 0 1px rgba(127, 164, 224, .45);
+  }
+  .vx-list-item:disabled {
+    opacity: .55;
+    cursor: not-allowed;
+  }
   .vx-check-row {
     display: flex;
     gap: 8px;

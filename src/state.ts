@@ -42,13 +42,36 @@ export function normalizeCfg(raw: unknown): CustomPluginConfig {
     const current = cfg[key]
     if (typeof current === 'boolean') {
       if (typeof value === 'boolean') (cfg as Record<string, unknown>)[key] = value
+    } else if (typeof current === 'number') {
+      if (typeof value === 'number' && Number.isFinite(value)) (cfg as Record<string, unknown>)[key] = value
     } else if (typeof current === 'string') {
       if (typeof value === 'string') (cfg as Record<string, unknown>)[key] = value
     }
   }
+  // Budget values are user-facing numeric settings. Keep malformed or stale
+  // values inside the documented range even when they came from an older
+  // state file or an external backup.
+  cfg.monthlyBudgetCny = Math.max(0, cfg.monthlyBudgetCny ?? 0)
+  cfg.budgetWarningPercent = Math.max(1, Math.min(100, cfg.budgetWarningPercent ?? 80))
   // Retired keys (clouds / wind) are dropped by construction: only the keys
   // listed in DEFAULT_CONFIG are ever copied.
   return cfg
+}
+
+/** Normalize one prompt while retaining its stable identity and order. */
+export function normalizePrompt(raw: unknown): PromptItem | null {
+  if (raw === null || typeof raw !== 'object') return null
+  const src = raw as Record<string, unknown>
+  if (typeof src.id !== 'string' || src.id === '' || typeof src.name !== 'string' || typeof src.text !== 'string') return null
+  return {
+    id: src.id,
+    name: src.name,
+    text: src.text,
+    tags: Array.isArray(src.tags) ? [...new Set(src.tags.filter((tag): tag is string => typeof tag === 'string').map((tag) => tag.trim()).filter(Boolean))] : [],
+    favorite: src.favorite === true,
+    useCount: typeof src.useCount === 'number' && Number.isFinite(src.useCount) && src.useCount >= 0 ? Math.floor(src.useCount) : 0,
+    lastUsedAt: typeof src.lastUsedAt === 'number' && Number.isFinite(src.lastUsedAt) && src.lastUsedAt > 0 ? src.lastUsedAt : undefined,
+  }
 }
 
 /** Merge a persisted document into the default state, ignoring unknown shapes. */
@@ -57,7 +80,7 @@ export function mergeState(target: CustomPluginState, raw: unknown): void {
   const src = raw as Record<string, unknown>
   if (src.cfg !== undefined) target.cfg = normalizeCfg(src.cfg)
   if (Array.isArray(src.folders)) target.folders = src.folders as FolderNode[]
-  if (Array.isArray(src.prompts)) target.prompts = src.prompts as PromptItem[]
+  if (Array.isArray(src.prompts)) target.prompts = src.prompts.map(normalizePrompt).filter((item): item is PromptItem => item !== null)
   if (src.stars !== null && typeof src.stars === 'object' && !Array.isArray(src.stars)) target.stars = src.stars as StarsMap
   if (typeof src.apiKey === 'string') target.apiKey = src.apiKey
   if (src.usage !== null && typeof src.usage === 'object' && !Array.isArray(src.usage)) target.usage = src.usage as UsageMap

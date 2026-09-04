@@ -40,6 +40,13 @@ describe('normalizeCfg', () => {
     expect(cfg.timelineLeft).toBe(true)
     expect((cfg as Record<string, unknown>).bogus).toBeUndefined()
   })
+
+  it('normalizes numeric budget fields', () => {
+    expect(normalizeCfg({ monthlyBudgetCny: 120, budgetWarningPercent: 75 })).toMatchObject({ monthlyBudgetCny: 120, budgetWarningPercent: 75 })
+    expect(normalizeCfg({ monthlyBudgetCny: '120' }).monthlyBudgetCny).toBe(0)
+    expect(normalizeCfg({ monthlyBudgetCny: -1, budgetWarningPercent: 0 }).budgetWarningPercent).toBe(1)
+    expect(normalizeCfg({ monthlyBudgetCny: -1, budgetWarningPercent: 101 })).toMatchObject({ monthlyBudgetCny: 0, budgetWarningPercent: 100 })
+  })
 })
 
 describe('mergeState', () => {
@@ -56,6 +63,7 @@ describe('mergeState', () => {
     expect(state.cfg.bg).toBe('石板蓝')
     expect(state.folders).toHaveLength(1)
     expect(state.prompts[0].name).toBe('周报')
+    expect(state.prompts[0]).toMatchObject({ tags: [], favorite: false, useCount: 0 })
     expect(state.stars.s1[12]).toBe(true)
     expect(state.apiKey).toBe('sk-test')
     expect(state.usage['2026-08-22']['deepseek-v4-flash'].in).toBe(1)

@@ -28,6 +28,10 @@ interface CSTParts { year: number, month: number, day: number, hour: number, min
 
 const PEAK_COUNTER_KEYS = ['peakIn', 'peakCacheIn', 'peakCacheW', 'peakOut'] as const
 
+function isCounter(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+}
+
 /** Create a row whose peak/off-peak split is exact from its first event. */
 export function createUsageRow(): UsageRow {
   return {
@@ -46,20 +50,20 @@ export function createUsageRow(): UsageRow {
 }
 
 function hasAllPeakCounters(row: UsageRow): boolean {
-  return PEAK_COUNTER_KEYS.every((key) => typeof row[key] === 'number')
+  return PEAK_COUNTER_KEYS.every((key) => isCounter(row[key]))
 }
 
 /** Whether a row has enough persisted information for exact tariff math. */
 export function hasKnownPeakSplit(row: UsageRow): boolean {
-  return row.peakSplitKnown === true || (row.peakSplitKnown === undefined && hasAllPeakCounters(row))
+  if (!isCounter(row.in) || !isCounter(row.out) || !isCounter(row.cacheIn) || !isCounter(row.cacheW) || !isCounter(row.reason) || !isCounter(row.calls)) return false
+  if (!hasAllPeakCounters(row)) return false
+  if (row.peakIn! > row.in || row.peakCacheIn! > row.cacheIn || row.peakCacheW! > row.cacheW || row.peakOut! > row.out) return false
+  return row.peakSplitKnown === true || row.peakSplitKnown === undefined
 }
 
 function ensurePeakCounters(row: UsageRow): void {
   const known = hasKnownPeakSplit(row)
-  row.peakIn ??= 0
-  row.peakCacheIn ??= 0
-  row.peakCacheW ??= 0
-  row.peakOut ??= 0
+  for (const key of PEAK_COUNTER_KEYS) if (!isCounter(row[key])) row[key] = 0
   row.peakSplitKnown = known
 }
 
@@ -89,7 +93,12 @@ export function pruneUsage(usage: UsageMap, now: number = Date.now(), retentionD
   const cutoff = dayKey(now - (keepDays - 1) * DAY_MS)
   let removed = 0
   for (const key of Object.keys(usage)) {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(key) || key < cutoff) {
+    const valid = /^\d{4}-\d{2}-\d{2}$/.test(key)
+      && (() => {
+        const parsed = new Date(`${key}T00:00:00.000Z`)
+        return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === key
+      })()
+    if (!valid || key < cutoff) {
       delete usage[key]
       removed++
     }

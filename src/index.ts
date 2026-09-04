@@ -3,7 +3,7 @@
  *
  * The Host owns the state document, the daily token-usage ledger (folded
  * from `session/event`), the `/api/custom-plugin` routes (state, timeline,
- * export, balance, usage scan, Mermaid fetch, diagnostics), and the
+ * export, backup, search, balance, usage scan, Mermaid fetch, diagnostics), and the
  * `custom_plugin_status` agent tool. The browser is a same-origin view over
  * those routes; this half has no UI of its own.
  * @module @alexpeng/dsh-custom-plugin
@@ -12,9 +12,10 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import { join } from 'node:path'
 import { dshHome } from './dsh-home.ts'
 import { mountOnce } from './mount-once.ts'
-import { defaultState, loadStateFile, saveStateFile } from './state.ts'
+import { defaultState, loadStateFile, saveStateFile, STATE_FILE } from './state.ts'
 import { CustomPluginHost } from './host-service.ts'
 import { makeCustomPluginRoutes } from './routes.ts'
 import { dayKey } from './usage.ts'
@@ -25,7 +26,12 @@ export const apply = mountOnce('@alexpeng/dsh-custom-plugin', applyImpl)
 
 function applyImpl(ctx: Context): void {
   const state = defaultState()
-  let statePath = dshHome()
+  // Keep diagnostics truthful even before the asynchronous load resolves.
+  // `dshHome()` is a directory; the state path is its sibling file.
+  let statePath = join(dshHome(), STATE_FILE)
+  let stateLoaded = false
+  const sessionModels = new Map<string, string | null>()
+  const pendingUsage: Array<{ sessionId: string; usage: NonNullable<Extract<SessionEvent, { type: 'assistant/message' }>['data']['usage']>; time: number; model: string | null }> = []
 
   const diagReports: string[] = []
   const reportDiag = (message: string): void => {
@@ -39,7 +45,7 @@ function applyImpl(ctx: Context): void {
       if (timer !== undefined) clearTimeout(timer)
       timer = setTimeout(() => {
         timer = undefined
-        void saveStateFile(state).catch((error) => {
+        void host.persistWhenIdle().catch((error) => {
           reportDiag(`state save failed: ${String((error as Error)?.message ?? error)}`)
         })
       }, 500)
@@ -56,12 +62,18 @@ function applyImpl(ctx: Context): void {
     attachments: ctx.get('attachments'),
   })
 
-  void loadStateFile(state).then(async (path) => {
+  const stateReady = loadStateFile(state).then(async (path) => {
     statePath = path
     if (await host.migrateLegacyApiKey()) reportDiag('legacy API key migrated to system credentials')
+    stateLoaded = true
+    for (const item of pendingUsage.splice(0)) host.foldUsage(item.sessionId, item.usage, item.time, item.model)
     return saveStateFile(state)
   }).catch((error) => {
+    // Keep the default state usable when the file is unreadable. Events are
+    // still folded after the failed load so they are not silently discarded.
     reportDiag(`state load failed: ${String((error as Error)?.message ?? error)}`)
+    stateLoaded = true
+    for (const item of pendingUsage.splice(0)) host.foldUsage(item.sessionId, item.usage, item.time, item.model)
   })
 
   // Daily token usage: fold request/context (model) + assistant/message (usage).
@@ -70,22 +82,29 @@ function applyImpl(ctx: Context): void {
       if (event === undefined || event === null) return
       const sessionId = String(session.id)
       if (event.type === 'request/context') {
-        host.rememberModel(sessionId, event.data.model ?? null)
+        const model = event.data.model ?? null
+        sessionModels.set(sessionId, model)
+        host.rememberModel(sessionId, model)
       } else if (event.type === 'assistant/message' && event.data.usage !== undefined) {
-        host.foldUsage(sessionId, event.data.usage, event.time)
-        saveSoon()
+        if (!stateLoaded) pendingUsage.push({ sessionId, usage: event.data.usage, time: event.time, model: sessionModels.get(sessionId) ?? null })
+        else {
+          host.foldUsage(sessionId, event.data.usage, event.time)
+          saveSoon()
+        }
       }
     } catch (error) {
       reportDiag(`usage fold failed: ${String((error as Error)?.message ?? error)}`)
     }
   })
   ctx.on('session/disposed', (session: Session) => {
-    host.forgetSession(String(session.id))
+    const sessionId = String(session.id)
+    sessionModels.delete(sessionId)
+    host.forgetSession(sessionId)
   })
 
-  // Routes: state document, timeline, export, balance, usage scan, Mermaid.
+  // Routes: state document, timeline, export, backup, search, balance, usage scan, Mermaid.
   const routeDisposers: Array<() => void> = []
-  for (const route of makeCustomPluginRoutes(host)) {
+  for (const route of makeCustomPluginRoutes(host, stateReady)) {
     routeDisposers.push(ctx.webServer.register(route))
   }
 
@@ -121,6 +140,7 @@ function applyImpl(ctx: Context): void {
     },
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     async execute(): Promise<Record<string, any>> {
+      await stateReady
       const out: Record<string, unknown> = {
         today: dayKey(),
         cfg: state.cfg,

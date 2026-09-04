@@ -12,8 +12,10 @@ import { readFileSync } from 'node:fs'
 import { buildExportRows, buildMarkdown, buildPdfHtml, extractTurns } from './extract.ts'
 import { readDeepSeekCredential } from './credentials.ts'
 import { SystemCredentialStore, type CredentialStore } from './system-credentials.ts'
-import type { BalanceInfo, CredentialStorage, CustomPluginPublicState, CustomPluginState, TimelineItem, UsageRow } from './protocol.ts'
+import type { BackupImportMode, BalanceInfo, ConversationSearchItem, ConversationSearchKind, ConversationSearchResult, CredentialStorage, CustomPluginBackupV1, CustomPluginPublicState, CustomPluginState, TimelineItem, UsageRow } from './protocol.ts'
 import { aggregateDayUsage, createUsageRow, dayKey, foldUsageRecord, isPeakHour, mergeUsageRow, pruneUsage, type UsageRecord } from './usage.ts'
+import { backupPreview, createBackup, importedState, parseBackup, writeRecoveryBackup } from './backup.ts'
+import { normalizeCfg, normalizePrompt } from './state.ts'
 
 const USAGE_SCAN_CONCURRENCY = 4
 
@@ -72,6 +74,13 @@ export class CustomPluginHost {
   private readonly attachments: AttachmentStore | undefined
   private readonly credentialStore: CredentialStore
   private readonly sessionModel = new Map<string, string | null>()
+  // Serialize asynchronous state mutations (edits, imports, and scans).
+  // Session events are synchronous, so they are queued while an operation is
+  // waiting on disk or session I/O and folded before the next operation.
+  private stateOperation: Promise<void> = Promise.resolve()
+  private stateOperationActive = false
+  private stateOperationPending = 0
+  private readonly queuedUsage: Array<{ usage: UsageRecord; time?: number; model: string }> = []
   private usageScanPromise: Promise<UsageScanResult> | null = null
   private usageRevision = 0
   private lastUsagePruneDay = ''
@@ -99,6 +108,40 @@ export class CustomPluginHost {
     await this.persistNow()
   }
 
+  /** Persist after all queued state mutations have reached a stable point. */
+  async persistWhenIdle(): Promise<void> {
+    await this.runStateOperation(() => this.persist())
+  }
+
+  private runStateOperation<T>(operation: () => Promise<T>): Promise<T> {
+    this.stateOperationPending++
+    // Mark the gate synchronously, before the promise continuation runs. A
+    // session event delivered in the same turn as an import/edit must not
+    // slip into a stale snapshot between scheduling and execution.
+    this.stateOperationActive = true
+    const run = this.stateOperation.catch(() => {}).then(async () => {
+      try {
+        return await operation()
+      } finally {
+        // Keep the gate closed while persisting the queued events. This
+        // avoids a tiny window in which a new event could bypass the flush.
+        while (this.queuedUsage.length > 0) {
+          const pending = this.queuedUsage.splice(0)
+          for (const item of pending) this.foldUsageNow(item.usage, item.time, item.model)
+          try {
+            await this.persist()
+          } catch (error) {
+            this.pushDiag(`queued usage save failed: ${String((error as Error)?.message ?? error)}`)
+          }
+        }
+        this.stateOperationPending--
+        if (this.stateOperationPending === 0) this.stateOperationActive = false
+      }
+    })
+    this.stateOperation = run.then(() => {}, () => {})
+    return run
+  }
+
   /** Record a bounded client diagnostic line. */
   pushDiag(message: string): void {
     this.diagReports.push(String(message ?? '').slice(0, 400))
@@ -116,7 +159,19 @@ export class CustomPluginHost {
 
   /** Fold one assistant/message usage record into the ledger. The event time
    * decides both the day bucket and the peak/off-peak portion. */
-  foldUsage(sessionId: string, usage: UsageRecord, time?: number): void {
+  foldUsage(sessionId: string, usage: UsageRecord, time?: number, modelOverride?: string | null): void {
+    const model = modelOverride !== undefined ? (modelOverride ?? 'unknown') : (this.sessionModel.get(sessionId) ?? 'unknown')
+    if (this.stateOperationActive) {
+      this.queuedUsage.push({ usage, time, model })
+      // Count the arrival immediately so an in-flight replay cannot replace
+      // the ledger with a snapshot that predates this event.
+      this.usageRevision++
+      return
+    }
+    this.foldUsageNow(usage, time, model)
+  }
+
+  private foldUsageNow(usage: UsageRecord, time: number | undefined, model: string): void {
     const at = time ?? Date.now()
     const dayName = dayKey(at)
     const day = this.state.usage[dayName] ?? (this.state.usage[dayName] = {})
@@ -124,7 +179,6 @@ export class CustomPluginHost {
       pruneUsage(this.state.usage, at)
       this.lastUsagePruneDay = dayName
     }
-    const model = this.sessionModel.get(sessionId) ?? 'unknown'
     const row = day[model] ?? (day[model] = createUsageRow())
     foldUsageRecord(row, usage, isPeakHour(at))
     this.usageRevision++
@@ -145,9 +199,23 @@ export class CustomPluginHost {
 
   /** Apply a browser-side state edit (config, folders, prompts, stars, api key). */
   async applyEdit(edit: { cfg?: Partial<CustomPluginState['cfg']>; folders?: CustomPluginState['folders']; prompts?: CustomPluginState['prompts']; stars?: CustomPluginState['stars']; apiKey?: string }): Promise<void> {
-    if (edit.cfg !== undefined && edit.cfg !== null && typeof edit.cfg === 'object') this.state.cfg = { ...this.state.cfg, ...edit.cfg }
+    await this.runStateOperation(async () => {
+      const previous = JSON.parse(JSON.stringify(this.state)) as CustomPluginState
+      try {
+        await this.applyEditNow(edit)
+      } catch (error) {
+        // A credential-store failure must not leave the non-sensitive fields
+        // half-applied in memory while the route reports an error.
+        Object.assign(this.state, previous)
+        throw error
+      }
+    })
+  }
+
+  private async applyEditNow(edit: { cfg?: Partial<CustomPluginState['cfg']>; folders?: CustomPluginState['folders']; prompts?: CustomPluginState['prompts']; stars?: CustomPluginState['stars']; apiKey?: string }): Promise<void> {
+    if (edit.cfg !== undefined && edit.cfg !== null && typeof edit.cfg === 'object') this.state.cfg = normalizeCfg({ ...this.state.cfg, ...edit.cfg })
     if (Array.isArray(edit.folders)) this.state.folders = edit.folders
-    if (Array.isArray(edit.prompts)) this.state.prompts = edit.prompts
+    if (Array.isArray(edit.prompts)) this.state.prompts = edit.prompts.map(normalizePrompt).filter((item): item is NonNullable<ReturnType<typeof normalizePrompt>> => item !== null)
     if (edit.stars !== undefined && edit.stars !== null && typeof edit.stars === 'object') this.state.stars = edit.stars
     if (typeof edit.apiKey === 'string') {
       const key = edit.apiKey.trim()
@@ -159,6 +227,38 @@ export class CustomPluginHost {
         if (!/^sk-/.test(key)) throw new Error('DeepSeek API Key 必须以 sk- 开头')
         this.state.apiKey = await this.credentialStore.set(key) ? '' : key
       }
+    }
+  }
+
+  /** Build the portable backup projection; credentials never enter it. */
+  backupExport(): CustomPluginBackupV1 {
+    return createBackup(this.state)
+  }
+
+  /** Validate/preview or atomically apply a portable backup. */
+  async backupImport(raw: unknown, mode: BackupImportMode, dryRun: boolean): Promise<{ ok: true; preview: ReturnType<typeof backupPreview>; recoveryPath?: string } | { ok: false; error: string }> {
+    return await this.runStateOperation(() => this.backupImportNow(raw, mode, dryRun))
+  }
+
+  private async backupImportNow(raw: unknown, mode: BackupImportMode, dryRun: boolean): Promise<{ ok: true; preview: ReturnType<typeof backupPreview>; recoveryPath?: string } | { ok: false; error: string }> {
+    try {
+      if (mode !== 'merge' && mode !== 'replace') return { ok: false, error: '导入模式无效' }
+      const backup = parseBackup(raw)
+      const preview = backupPreview(this.state, backup)
+      if (dryRun) return { ok: true, preview }
+      const previous = JSON.parse(JSON.stringify(this.state)) as CustomPluginState
+      const recoveryPath = await writeRecoveryBackup(this.statePath(), previous)
+      const next = importedState(previous, backup, mode)
+      Object.assign(this.state, next)
+      try {
+        await this.persist()
+      } catch (error) {
+        Object.assign(this.state, previous)
+        throw error
+      }
+      return { ok: true, preview, recoveryPath }
+    } catch (error) {
+      return { ok: false, error: String((error as Error)?.message ?? error) }
     }
   }
 
@@ -291,6 +391,37 @@ export class CustomPluginHost {
     return { key: '', source: 'none' }
   }
 
+  /** Search one session using DSH's indexed event search and bind hits to a user-turn anchor. */
+  async conversationSearch(sessionId: string, query: string, kinds: readonly ConversationSearchKind[]): Promise<{ ok: true; } & ConversationSearchResult | { ok: false; error: string }> {
+    const wanted = new Set(kinds.length > 0 ? kinds : ['user', 'assistant', 'tool'])
+    try {
+      const eventTypes = kinds.length > 0
+        ? kinds.flatMap((kind) => kind === 'user' ? ['user/message'] : kind === 'assistant' ? ['assistant/message'] : ['tool/call', 'tool/result'])
+        : []
+      const [page, snapshot] = await Promise.all([
+        this.sessionQuery.searchEvents({ sessionId: sessionId as never, query, limit: 100, ...(eventTypes.length > 0 ? { filters: [{ kind: 'type', values: eventTypes }] } : {}) } as never),
+        this.sessionQuery.readSession(sessionId as never),
+      ])
+      const anchors = new Map<number, number>()
+      let anchor: number | undefined
+      for (const event of snapshot.events) {
+        if (event.type === 'user/message') anchor = event.seq
+        if (anchor !== undefined) anchors.set(event.seq, anchor)
+      }
+      const items: ConversationSearchItem[] = []
+      for (const hit of page.items) {
+        const kind: ConversationSearchKind | null = hit.type === 'user/message' ? 'user' : hit.type === 'assistant/message' ? 'assistant' : hit.type.startsWith('tool/') ? 'tool' : null
+        if (kind === null || !wanted.has(kind)) continue
+        const anchorSeq = anchors.get(hit.seq)
+        if (anchorSeq === undefined) continue
+        items.push({ sessionId, seq: hit.seq, anchorSeq, kind, time: hit.time, snippet: hit.snippet.slice(0, 500) })
+      }
+      return { ok: true, items, hasMore: page.nextCursor !== undefined }
+    } catch (error) {
+      return { ok: false, error: String((error as Error)?.message ?? error) }
+    }
+  }
+
   private async resolveApiKey(): Promise<string> {
     return (await this.resolveApiKeyWithSource()).key
   }
@@ -332,7 +463,7 @@ export class CustomPluginHost {
    * they produced today. */
   async usageScan(): Promise<UsageScanResult> {
     if (this.usageScanPromise !== null) return await this.usageScanPromise
-    const run = this.usageScanImpl()
+    const run = this.runStateOperation(() => this.usageScanImpl())
     this.usageScanPromise = run
     try {
       return await run
@@ -382,9 +513,15 @@ export class CustomPluginHost {
     // Live session events may arrive while the asynchronous replay is in
     // flight. Keep them rather than replacing them with an older snapshot.
     if (this.usageRevision !== revisionAtStart) return { ok: false, error: '扫描期间产生了新用量，未覆盖现有用量，请稍后重试' }
+    const previousUsage = JSON.parse(JSON.stringify(this.state.usage)) as CustomPluginState['usage']
     pruneUsage(this.state.usage)
     this.state.usage[today] = agg
-    void this.persist().catch((error) => this.pushDiag(`usage scan save failed: ${String((error as Error)?.message ?? error)}`))
+    try {
+      await this.persist()
+    } catch (error) {
+      this.state.usage = previousUsage
+      return { ok: false, error: `用量保存失败: ${String((error as Error)?.message ?? error)}` }
+    }
     return { ok: true, day: today, usageToday: this.state.usage[today] ?? {}, scannedSessions: scanned }
   }
 

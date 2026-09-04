@@ -15,11 +15,14 @@ import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SessionListState, TurnLocation, WorkspaceListState } from '@deepseek-ai/dsh-client-runtime/client'
 import type { ThemeRuntime } from '@deepseek-ai/dsh-client-ui-theme/client'
 import type { Context } from '@deepseek-ai/cordis'
-import type { CredentialStorage, CustomPluginConfig, FolderNode, PromptItem, TimelineItem, UsageRow } from '../protocol.ts'
-import { dayKey } from '../usage.ts'
+import { DEFAULT_CONFIG, type ConversationSearchItem, type ConversationSearchKind, type CredentialStorage, type CustomPluginConfig, type FolderNode, type PromptItem, type TimelineItem, type UsageRow } from '../protocol.ts'
+import { createUsageRow, dayKey, mergeUsageRow } from '../usage.ts'
 import { DEEPSEEK_PRICING_CHECKED_ON, DEEPSEEK_PRICING_SOURCE_URL, usageCostBreakdown } from '../pricing.ts'
 import {
   apiBalanceGet,
+  apiBackupExport,
+  apiBackupImport,
+  apiConversationSearch,
   apiDebugInfo,
   apiDiagReport,
   apiExportRun,
@@ -29,6 +32,7 @@ import {
   apiTimelineGet,
   apiUsageScan,
 } from './api.ts'
+import { archiveBatch, fillPromptTemplate, isCommandPaletteShortcut, normalizePromptItem, parsePromptsMarkdown, promptsMarkdown, promptVariables, summarizeUsage, usageCsv } from '../productivity.ts'
 import { MERMAID_SCRIPT_PATH } from '../protocol.ts'
 import { isGenericInfostring, isMermaidCode, normalizeMermaidText } from './mermaid-code.ts'
 import { mermaidLiveUrl } from './mermaid-url.ts'
@@ -99,13 +103,17 @@ interface Store {
   batchModal: boolean
   mermaidModal: { title: string; codes: string[]; index: number } | null
   quoteSel: { text: string; x: number; y: number } | null
-  ask: { title: string; value: string; cb: (text: string) => void } | null
+  ask: { title: string; value: string; cb: (text: string) => void; allowEmpty?: boolean } | null
   confirmAsk: { message: string; cb: (ok: boolean) => void } | null
   toasts: Array<{ id: number; text: string; kind: string; action: { label: string; run: () => void } | null }>
   booted: boolean
   dark: boolean
   balance: Record<string, unknown> | null
   exporting: boolean
+  usageRange: 7 | 30 | 90
+  templatePrompt: PromptItem | null
+  templateValues: Record<string, string>
+  commandOpen: boolean
   insertDraft: ((text: string, replace: boolean) => boolean) | null
   greeted: boolean
 }
@@ -217,7 +225,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
   const C = ctx
 
   const S: Store = {
-    cfg: { bg: '天青灰', weather: 'none', glass: true, glassMode: 'frost', globalGlass: true, timeline: true, timelineLeft: false, starsOnly: false, quote: true, antiScroll: false, mermaid: true, formula: true },
+    cfg: { ...DEFAULT_CONFIG },
     folders: [],
     prompts: [],
     stars: {},
@@ -260,6 +268,10 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     dark: false,
     balance: null,
     exporting: false,
+    usageRange: 7,
+    templatePrompt: null,
+    templateValues: {},
+    commandOpen: false,
     insertDraft: null,
     greeted: false,
   }
@@ -358,8 +370,8 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     }).catch(() => {})
   }
 
-  function askText(title: string, value: string, cb: (text: string) => void): void {
-    setS({ ask: { title, value: value ?? '', cb } })
+  function askText(title: string, value: string, cb: (text: string) => void, allowEmpty = false): void {
+    setS({ ask: { title, value: value ?? '', cb, allowEmpty } })
   }
   function askConfirm(message: string, cb: (ok: boolean) => void): void {
     setS({ confirmAsk: { message, cb } })
@@ -1275,6 +1287,35 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       toast('扫描失败: ' + String((error as Error)?.message ?? error), 'error')
     }
   }
+  function downloadText(content: string, fileName: string, mime: string): void {
+    const d = typeof document !== 'undefined' ? document : null
+    if (d === null) throw new Error('no document')
+    const url = URL.createObjectURL(new Blob([content], { type: mime }))
+    const a = d.createElement('a')
+    a.href = url
+    a.download = fileName
+    d.body.appendChild(a)
+    a.click()
+    a.remove()
+    setTimeout(() => { try { URL.revokeObjectURL(url) } catch { /* revoked already */ } }, 30000)
+  }
+
+  function insertPrompt(prompt: PromptItem): void {
+    const vars = promptVariables(prompt.text)
+    if (vars.length > 0) {
+      const values: Record<string, string> = {}
+      for (const name of vars) values[name] = ''
+      setS({ templatePrompt: prompt, templateValues: values, promptOpen: null })
+      return
+    }
+    const ok = S.insertDraft !== null ? S.insertDraft(prompt.text, false) : false
+    if (!ok) { toast('请在会话输入框中重试', 'error'); return }
+    S.prompts = S.prompts.map((item) => item.id === prompt.id ? { ...item, useCount: (item.useCount ?? 0) + 1, lastUsedAt: Date.now() } : item)
+    setS({ prompts: S.prompts, promptOpen: null })
+    saveCfg()
+    toast('已插入提示词: ' + prompt.name, 'info')
+  }
+
   function runExport(format: string): void {
     if (S.sessionId === null) { toast('当前没有打开的会话', 'error'); return }
     setS({ exporting: true })
@@ -1284,17 +1325,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
         return
       }
       try {
-        const d = typeof document !== 'undefined' ? document : null
-        if (d === null) throw new Error('no document')
-        const blob = new Blob([result.content], { type: result.mime })
-        const url = URL.createObjectURL(blob)
-        const a = d.createElement('a')
-        a.href = url
-        a.download = result.fileName
-        d.body.appendChild(a)
-        a.click()
-        a.remove()
-        setTimeout(() => { try { URL.revokeObjectURL(url) } catch { /* revoked already */ } }, 30000)
+        downloadText(result.content, result.fileName, result.mime)
         toast('已导出 ' + result.fileName, 'info')
       } catch (error) {
         toast('导出失败: ' + String((error as Error)?.message ?? error), 'error')
@@ -1373,7 +1404,8 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     if (s.promptOpen === null) return null
     const p = s.promptOpen
     const q = (s.promptQuery ?? '').toLowerCase()
-    const list = s.prompts.filter((x) => q === '' || String(x.name ?? '').toLowerCase().includes(q) || String(x.text ?? '').toLowerCase().includes(q))
+    const list = s.prompts.filter((x) => q === '' || String(x.name ?? '').toLowerCase().includes(q) || String(x.text ?? '').toLowerCase().includes(q) || (x.tags ?? []).some((tag) => tag.toLowerCase().includes(q)))
+      .sort((a, b) => Number(b.favorite === true) - Number(a.favorite === true) || (b.lastUsedAt ?? 0) - (a.lastUsedAt ?? 0))
     return React.createElement('div', { className: 'vx-glass vx-prompt-pop', style: { left: p.x, top: p.y } },
       React.createElement('div', { className: 'vx-pattern' }),
       React.createElement('div', { className: 'vx-pop-head' },
@@ -1390,12 +1422,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
             key: x.id,
             className: 'vx-list-item',
             title: x.text,
-            onClick: () => {
-              const ok = S.insertDraft !== null ? S.insertDraft(x.text, false) : false
-              setS({ promptOpen: null })
-              if (ok) toast('已插入提示词: ' + x.name, 'info')
-              else toast('请在会话输入框中重试', 'error')
-            },
+            onClick: () => insertPrompt(x),
           },
           React.createElement('div', { className: 'vx-prompt-title' }, x.name),
           React.createElement('div', { className: 'vx-prompt-body' }, x.text)))
@@ -1491,6 +1518,58 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     )
   }
 
+  function recentDayKeys(count: number): string[] {
+    const keys: string[] = []
+    for (let i = count - 1; i >= 0; i--) keys.push(dayKey(Date.now() - i * 86_400_000))
+    return keys
+  }
+
+  function UsageHistory(): React.ReactElement {
+    const s = useS()
+    const keys = recentDayKeys(s.usageRange)
+    const selected = new Set(keys)
+    const summary = summarizeUsage(s.usage, selected)
+    const daily = keys.map((day) => ({ day, ...summarizeUsage(s.usage, new Set([day])) }))
+    const maxTokens = Math.max(1, ...daily.map((row) => row.tokens))
+    const byModel: Record<string, UsageRow> = Object.create(null) as Record<string, UsageRow>
+    for (const day of keys) {
+      for (const [model, row] of Object.entries(s.usage[day] ?? {})) {
+        const target = byModel[model] ?? (byModel[model] = createUsageRow())
+        mergeUsageRow(target, row)
+      }
+    }
+    const monthPrefix = dayKey().slice(0, 7) + '-'
+    const monthDays = new Set(Object.keys(s.usage).filter((day) => day.startsWith(monthPrefix)))
+    const month = summarizeUsage(s.usage, monthDays)
+    const budget = Math.max(0, Number(s.cfg.monthlyBudgetCny ?? 0))
+    const warning = Math.max(1, Math.min(100, Number(s.cfg.budgetWarningPercent ?? 80)))
+    const ratio = budget > 0 && month.exact ? month.costCny / budget * 100 : 0
+    const budgetText = budget <= 0 ? '预算提醒已关闭' : !month.exact ? '历史峰闲数据不完整，无法判断预算' : ratio >= 100 ? `已超出月预算（${ratio.toFixed(0)}%）` : ratio >= warning ? `已达到月预算 ${ratio.toFixed(0)}%` : `本月预算使用 ${ratio.toFixed(0)}%`
+    return React.createElement('div', { className: 'vx-col' },
+      React.createElement('div', { className: 'vx-row wrap' },
+        ([7, 30, 90] as const).map((range) => React.createElement('button', { key: range, className: 'vx-btn' + (s.usageRange === range ? ' on' : ''), onClick: () => setS({ usageRange: range }) }, `${range} 天`)),
+        React.createElement('span', { className: 'vx-flex1' }),
+        React.createElement('button', { className: 'vx-btn', onClick: () => { try { downloadText(usageCsv(s.usage), `custom-usage-${dayKey()}.csv`, 'text/csv;charset=utf-8') } catch { toast('CSV 导出失败', 'error') } } }, React.createElement(Icon, { n: 'download', size: 12 }), ' CSV'),
+      ),
+      React.createElement('div', { className: 'vx-balance-lines' },
+        React.createElement('div', null, `${formatTokenCount(summary.tokens)} token · ${summary.calls} 次调用 · ${summary.exact ? `¥${summary.costCny.toFixed(4)}` : '费用不精确'}`),
+      ),
+      React.createElement('div', { className: 'vx-col', style: { gap: 3 } }, daily.map((row) => React.createElement('div', { key: row.day, className: 'vx-row', title: `${row.day} · ${formatTokenCount(row.tokens)} token · ${row.calls} 次` },
+        React.createElement('span', { className: 'vx-muted', style: { width: 46 } }, row.day.slice(5)),
+        React.createElement('span', { style: { height: 7, borderRadius: 8, minWidth: 2, width: `${Math.max(1, row.tokens / maxTokens * 100)}%`, background: 'var(--dsw-alias-color-primary, #4876d9)' } }),
+      ))),
+      Object.keys(byModel).length > 0 ? React.createElement('table', { className: 'vx-table' },
+        React.createElement('thead', null, React.createElement('tr', null, React.createElement('th', null, '模型'), React.createElement('th', null, 'Token'), React.createElement('th', null, '调用'), React.createElement('th', null, '费用 ¥'))),
+        React.createElement('tbody', null, Object.entries(byModel).map(([model, row]) => { const cost = usageCostBreakdown(row, model); return React.createElement('tr', { key: model }, React.createElement('td', null, model), React.createElement('td', null, formatTokenCount(row.in + row.out + row.cacheIn + row.cacheW)), React.createElement('td', null, row.calls), React.createElement('td', null, cost.exact ? cost.totalCostCny.toFixed(4) : '—')) })),
+      ) : null,
+      React.createElement('div', { className: ratio >= 100 ? 'vx-error' : 'vx-muted' }, budgetText),
+      React.createElement('div', { className: 'vx-row wrap' },
+        React.createElement('label', { className: 'vx-muted' }, '月预算 ¥ ', React.createElement('input', { className: 'vx-input', style: { width: 100 }, type: 'number', min: 0, step: 1, value: budget, onChange: (e: React.ChangeEvent<HTMLInputElement>) => setS({ cfg: { ...S.cfg, monthlyBudgetCny: Math.max(0, Number(e.target.value) || 0) } }), onBlur: saveCfg })),
+        React.createElement('label', { className: 'vx-muted' }, '预警 ', React.createElement('input', { className: 'vx-input', style: { width: 72 }, type: 'number', min: 1, max: 100, value: warning, onChange: (e: React.ChangeEvent<HTMLInputElement>) => setS({ cfg: { ...S.cfg, budgetWarningPercent: Math.max(1, Math.min(100, Number(e.target.value) || 80)) } }), onBlur: saveCfg }), ' %'),
+      ),
+    )
+  }
+
   function BalancePanelContent(props: { onInteract?: () => void }): React.ReactElement {
     const s = useS()
     const b = s.balance
@@ -1520,7 +1599,9 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
         })()
         : null,
       b !== null && b.ok === false ? React.createElement('div', { className: 'vx-error' }, String((b as { error?: unknown }).error ?? '未知错误')) : null,
-      React.createElement('div', { className: 'vx-section-title' }, '今日消费与 Token'),
+      React.createElement('div', { className: 'vx-section-title' }, '用量趋势与预算'),
+      React.createElement(UsageHistory, null),
+      React.createElement('div', { className: 'vx-section-title' }, '今日模型明细'),
       React.createElement(UsageTable, null),
       React.createElement('button', { className: 'vx-btn', onClick: () => { void refreshUsageScan() } }, React.createElement(Icon, { n: 'list', size: 13 }), ' 扫描今日会话日志更新用量'),
     )
@@ -1615,6 +1696,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     const seq = props.matched !== undefined && props.matched !== null ? props.matched : (typeof props.seq === 'number' ? props.seq : null)
     const turn = props.turn
     const s = useS()
+    let registered: HTMLElement | null = null
     const item = (seq !== null && s.turns !== null && s.turns.sessionId === S.sessionId) ? s.turns.items.find((t) => t.seq === seq) ?? null : null
     const btns: React.ReactElement[] = []
     if (item !== null && s.cfg.formula === true) {
@@ -1628,8 +1710,16 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       className: 'vx-anchor',
       'data-vx-seq': seq === null ? '' : String(seq),
       ref: (el: HTMLSpanElement | null): void => {
-        if (el !== null && seq !== null) S.anchors.set(seq, { el, turn: turn ?? null })
-        else if (el === null && seq !== null) S.anchors.delete(seq)
+        if (el !== null && seq !== null) {
+          registered = el
+          S.anchors.set(seq, { el, turn: turn ?? null })
+        } else if (el === null && seq !== null) {
+          // A session switch can unmount an old row after a new row with the
+          // same sequence has mounted. Delete only the element this callback
+          // registered, never the replacement anchor.
+          if (S.anchors.get(seq)?.el === registered) S.anchors.delete(seq)
+          registered = null
+        }
       },
     }, btns.length > 0 ? React.createElement('span', { className: 'vx-turn-actions' }, btns) : null)
   }
@@ -1692,9 +1782,15 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     const trackRef = React.useRef<HTMLDivElement | null>(null)
     React.useEffect(() => {
       if (current !== null && current !== S.sessionId) {
+        // Clear DOM anchors from the previous session before a search result or
+        // rail action can reuse the same sequence number in the new session.
+        S.anchors.clear()
+        S.seqAnchor.clear()
         setS({ sessionId: current, turns: null, railPositions: [], railSig: '', railHover: null })
         void fetchTurns(String(current))
       } else if (current === null && S.sessionId !== null) {
+        S.anchors.clear()
+        S.seqAnchor.clear()
         setS({ sessionId: null, turns: null, railPositions: [], railSig: '', railHover: null })
       }
     }, [current])
@@ -2024,11 +2120,14 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
   }
 
   function PromptsTab(): React.ReactElement {
+    const s = useS()
+    const [query, setQuery] = React.useState('')
+    const dragId = React.useRef<string | null>(null)
     const addPrompt = (): void => {
       askText('提示词名称：', '', (name) => {
         askText('提示词内容：', '', (text) => {
           if (text.trim() === '') { toast('内容不能为空', 'error'); return }
-          S.prompts = S.prompts.concat({ id: 'p' + Date.now() + Math.floor(Math.random() * 9999), name: name || '未命名', text })
+          S.prompts = S.prompts.concat({ id: 'p' + Date.now() + Math.floor(Math.random() * 9999), name: name || '未命名', text, tags: [], favorite: false, useCount: 0 })
           setS({ prompts: S.prompts })
           saveCfg()
         })
@@ -2039,19 +2138,57 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       setS({ prompts: S.prompts })
       saveCfg()
     }
+    const editPrompt = (prompt: PromptItem): void => {
+      askText('提示词名称：', prompt.name, (name) => askText('提示词内容：', prompt.text, (text) => askText('标签（逗号分隔）：', (prompt.tags ?? []).join(', '), (tags) => {
+        if (text.trim() === '') { toast('内容不能为空', 'error'); return }
+        S.prompts = S.prompts.map((item) => item.id === prompt.id ? { ...item, name: name.trim() || '未命名', text, tags: [...new Set(tags.split(/[,，]/).map((tag) => tag.trim()).filter(Boolean))] } : item)
+        setS({ prompts: S.prompts }); saveCfg()
+      }, true)))
+    }
+    const importPrompts = async (file: File): Promise<void> => {
+      try {
+        const text = await file.text()
+        let incoming: PromptItem[]
+        let skipped = 0
+        if (/\.md$/i.test(file.name)) incoming = parsePromptsMarkdown(text)
+        else {
+          const doc = JSON.parse(text) as { format?: unknown; version?: unknown; prompts?: unknown }
+          if (doc.format !== 'dsh-custom-plugin-prompts' || doc.version !== 1 || !Array.isArray(doc.prompts)) throw new Error('不支持的提示词文件')
+          incoming = doc.prompts.map(normalizePromptItem).filter((item): item is PromptItem => item !== null)
+          skipped = doc.prompts.length - incoming.length
+        }
+        // A portable file may repeat an id; use its last occurrence once so
+        // the conflict result is deterministic and the count is not inflated.
+        incoming = [...new Map(incoming.map((item) => [item.id, item])).values()]
+        const map = new Map(incoming.map((item) => [item.id, item]))
+        S.prompts = S.prompts.map((item) => map.get(item.id) ?? item)
+        for (const item of incoming) if (!S.prompts.some((old) => old.id === item.id)) S.prompts.push(item)
+        setS({ prompts: S.prompts }); saveCfg(); toast(skipped > 0 ? `已导入 ${incoming.length} 条提示词，跳过 ${skipped} 条无效记录` : `已导入 ${incoming.length} 条提示词`, skipped > 0 ? 'error' : 'info')
+      } catch (error) { toast('提示词导入失败: ' + String((error as Error)?.message ?? error), 'error') }
+    }
+    const visible = s.prompts.filter((prompt) => query === '' || prompt.name.toLowerCase().includes(query.toLowerCase()) || prompt.text.toLowerCase().includes(query.toLowerCase()) || (prompt.tags ?? []).some((tag) => tag.toLowerCase().includes(query.toLowerCase())))
     return React.createElement('div', { className: 'vx-col' },
-      React.createElement('div', { className: 'vx-muted' }, '常用提示词收藏；点击会话顶部的「提示词」按钮搜索插入，也可直接复制。'),
-      S.prompts.map((p) => React.createElement('div', { key: p.id, className: 'vx-prompt-card' },
+      React.createElement('div', { className: 'vx-muted' }, '支持收藏、标签、变量模板与拖拽排序；同 ID 导入项会更新现有内容。'),
+      React.createElement('input', { className: 'vx-input', placeholder: '搜索名称、内容或标签…', value: query, onChange: (e: React.ChangeEvent<HTMLInputElement>) => setQuery(e.target.value) }),
+      visible.map((p) => React.createElement('div', { key: p.id, className: 'vx-prompt-card', draggable: true, onDragStart: () => { dragId.current = p.id }, onDragOver: (e: React.DragEvent) => e.preventDefault(), onDrop: (e: React.DragEvent) => { e.preventDefault(); const from = dragId.current; if (from === null || from === p.id) return; const next = [...S.prompts]; const oldIndex = next.findIndex((item) => item.id === from); const newIndex = next.findIndex((item) => item.id === p.id); if (oldIndex < 0 || newIndex < 0) return; const moved = next.splice(oldIndex, 1)[0]; next.splice(newIndex, 0, moved); setS({ prompts: next }); saveCfg() } },
         React.createElement('div', { className: 'vx-row' },
+          React.createElement('button', { className: 'vx-mini', title: p.favorite ? '取消收藏' : '收藏', onClick: () => { S.prompts = S.prompts.map((item) => item.id === p.id ? { ...item, favorite: !item.favorite } : item); setS({ prompts: S.prompts }); saveCfg() } }, React.createElement(Icon, { n: 'star', size: 11, filled: p.favorite === true })),
           React.createElement('span', { className: 'vx-prompt-title' }, p.name),
           React.createElement('span', { className: 'vx-flex1' }),
+          React.createElement('span', { className: 'vx-muted' }, `使用 ${p.useCount ?? 0} 次`),
+          React.createElement('button', { className: 'vx-mini', title: '插入', onClick: () => insertPrompt(p) }, React.createElement(Icon, { n: 'zap', size: 11 })),
+          React.createElement('button', { className: 'vx-mini', title: '编辑', onClick: () => editPrompt(p) }, React.createElement(Icon, { n: 'wrench', size: 11 })),
           React.createElement('button', { className: 'vx-mini', title: '复制', onClick: () => void copyText(p.text).then((ok) => toast(ok ? '已复制提示词' : '复制失败', ok ? 'info' : 'error')) }, React.createElement(Icon, { n: 'copy', size: 11 })),
           React.createElement('button', { className: 'vx-mini', title: '删除', onClick: () => delPrompt(p.id) }, React.createElement(Icon, { n: 'trash', size: 11 })),
         ),
+        (p.tags ?? []).length > 0 ? React.createElement('div', { className: 'vx-muted' }, (p.tags ?? []).map((tag) => `#${tag}`).join(' ')) : null,
         React.createElement('div', { className: 'vx-prompt-body' }, p.text),
       )),
       React.createElement('div', { className: 'vx-row vx-pad-sm' },
         React.createElement('button', { className: 'vx-btn', onClick: addPrompt }, React.createElement(Icon, { n: 'plus', size: 13 }), ' 新增提示词'),
+        React.createElement('button', { className: 'vx-btn', onClick: () => downloadText(JSON.stringify({ format: 'dsh-custom-plugin-prompts', version: 1, prompts: S.prompts }, null, 2), `custom-prompts-${dayKey()}.json`, 'application/json') }, '导出 JSON'),
+        React.createElement('button', { className: 'vx-btn', onClick: () => downloadText(promptsMarkdown(S.prompts), `custom-prompts-${dayKey()}.md`, 'text/markdown') }, '导出 Markdown'),
+        React.createElement('label', { className: 'vx-btn' }, '导入', React.createElement('input', { type: 'file', accept: '.json,.md,application/json,text/markdown', style: { display: 'none' }, onChange: (e: React.ChangeEvent<HTMLInputElement>) => { const file = e.target.files?.[0]; if (file !== undefined) void importPrompts(file); e.target.value = '' } })),
       ),
     )
   }
@@ -2070,6 +2207,108 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     )
   }
 
+  function BackupControls(): React.ReactElement {
+    const [mode, setMode] = React.useState<'merge' | 'replace'>('merge')
+    const exportBackup = async (): Promise<void> => {
+      try {
+        const result = await apiBackupExport()
+        if (!result.ok) { toast(result.error ?? '备份导出失败', 'error'); return }
+        downloadText(JSON.stringify(result.data, null, 2), `custom-backup-${dayKey()}.json`, 'application/json')
+        toast('已导出无密钥备份', 'info')
+      } catch (error) { toast(String((error as Error)?.message ?? error), 'error') }
+    }
+    const importFile = async (file: File): Promise<void> => {
+      if (file.size > 5 * 1024 * 1024) { toast('备份文件不能超过 5 MB', 'error'); return }
+      let documentValue: unknown
+      try { documentValue = JSON.parse(await file.text()) as unknown } catch { toast('备份文件不是有效 JSON', 'error'); return }
+      try {
+        const preview = await apiBackupImport(documentValue, mode, true)
+        if (!preview.ok) { toast(preview.error ?? '备份校验失败', 'error'); return }
+        const p = preview.preview
+        askConfirm(`导入 ${p.folders} 个文件夹、${p.prompts} 条提示词、${p.starredSessions} 个星标会话、${p.usageDays} 天用量？冲突：文件夹 ${p.conflicts.folders}、提示词 ${p.conflicts.prompts}、用量 ${p.conflicts.usageDays}。`, (ok) => {
+          if (!ok) return
+          void apiBackupImport(documentValue, mode, false).then(async (result) => {
+            if (!result.ok) { toast(result.error ?? '备份导入失败', 'error'); return }
+            await loadCfg()
+            toast('备份导入完成；原状态已生成恢复副本', 'info')
+          }).catch((error) => toast(String((error as Error)?.message ?? error), 'error'))
+        })
+      } catch (error) { toast(String((error as Error)?.message ?? error), 'error') }
+    }
+    return React.createElement('div', { className: 'vx-col' },
+      React.createElement('div', { className: 'vx-section-title' }, '本地状态备份'),
+      React.createElement('div', { className: 'vx-muted' }, '包含外观、文件夹、提示词、星标、用量和预算；不会包含 API Key。'),
+      React.createElement('div', { className: 'vx-row wrap' },
+        React.createElement('button', { className: 'vx-btn', onClick: () => { void exportBackup() } }, React.createElement(Icon, { n: 'download', size: 12 }), ' 导出 JSON 备份'),
+        React.createElement('select', { className: 'vx-input', value: mode, onChange: (e: React.ChangeEvent<HTMLSelectElement>) => setMode(e.target.value === 'replace' ? 'replace' : 'merge') }, React.createElement('option', { value: 'merge' }, '合并导入'), React.createElement('option', { value: 'replace' }, '覆盖非敏感状态')),
+        React.createElement('label', { className: 'vx-btn' }, '选择备份文件', React.createElement('input', { type: 'file', accept: 'application/json,.json', style: { display: 'none' }, onChange: (e: React.ChangeEvent<HTMLInputElement>) => { const file = e.target.files?.[0]; if (file !== undefined) void importFile(file); e.target.value = '' } })),
+      ),
+    )
+  }
+
+  async function revealSearchResult(item: ConversationSearchItem): Promise<void> {
+    try {
+      if (S.sessionId !== item.sessionId) { toast('搜索结果所属会话已切换，请重新搜索', 'error'); return }
+      const expectedSessionId = item.sessionId
+      const sessions = C.get('sessions') as { binding(id: string): { session: { loadOlder(): Promise<void>; getSnapshot(): { hasMore: boolean } } } | undefined } | undefined
+      const face = sessions?.binding(expectedSessionId)?.session
+      if (face === undefined) { toast('目标会话不可用', 'error'); return }
+      const rendered = (): boolean => S.seqAnchor.get(item.anchorSeq) !== undefined || S.anchors.get(item.anchorSeq)?.el !== undefined
+      for (let page = 0; !rendered() && face.getSnapshot().hasMore && page < 20; page++) {
+        if (S.sessionId !== expectedSessionId) { toast('会话已切换，搜索结果已失效', 'error'); return }
+        await face.loadOlder()
+        await new Promise<void>((resolve) => setTimeout(resolve, 60))
+        updateRailPositions()
+      }
+      if (S.sessionId !== expectedSessionId) { toast('会话已切换，搜索结果已失效', 'error'); return }
+      if (!rendered()) { toast('结果所在消息尚未加载，请继续加载历史后重试', 'error'); return }
+      scrollToSeq(item.anchorSeq)
+    } catch (error) {
+      toast('加载搜索结果失败: ' + String((error as Error)?.message ?? error), 'error')
+    }
+  }
+
+  function Highlight(props: { text: string; query: string }): React.ReactElement {
+    const q = props.query.trim()
+    const index = q === '' ? -1 : props.text.toLowerCase().indexOf(q.toLowerCase())
+    if (index < 0) return React.createElement('span', null, props.text)
+    return React.createElement('span', null, props.text.slice(0, index), React.createElement('mark', null, props.text.slice(index, index + q.length)), props.text.slice(index + q.length))
+  }
+
+  function SearchTab(): React.ReactElement {
+    const [query, setQuery] = React.useState('')
+    const [kinds, setKinds] = React.useState<ConversationSearchKind[]>(['user', 'assistant', 'tool'])
+    const [items, setItems] = React.useState<ConversationSearchItem[]>([])
+    const [status, setStatus] = React.useState('')
+    const [hasMore, setHasMore] = React.useState(false)
+    React.useEffect(() => {
+      if (query.trim() === '' || S.sessionId === null) { setItems([]); setStatus(''); setHasMore(false); return }
+      const controller = new AbortController()
+      const timer = setTimeout(() => {
+        setStatus('搜索中…')
+        void apiConversationSearch(S.sessionId as string, query.trim(), kinds, controller.signal).then((result) => {
+          if (controller.signal.aborted) return
+          if (!result.ok) { setItems([]); setStatus(result.error ?? '搜索不可用'); return }
+          setItems(result.items); setHasMore(result.hasMore); setStatus(result.items.length === 0 ? '没有匹配结果' : '')
+        })
+      }, 250)
+      return () => { clearTimeout(timer); controller.abort() }
+    }, [query, kinds.join(','), S.sessionId])
+    const toggle = (kind: ConversationSearchKind): void => setKinds((old) => old.includes(kind) ? (old.length > 1 ? old.filter((item) => item !== kind) : old) : [...old, kind])
+    const names: Record<ConversationSearchKind, string> = { user: '用户', assistant: '助手', tool: '工具' }
+    return React.createElement('div', { className: 'vx-col' },
+      React.createElement('div', { className: 'vx-muted' }, '搜索当前会话的索引内容；结果只在本次请求中使用。'),
+      React.createElement('input', { className: 'vx-input', autoFocus: true, placeholder: '输入搜索词…', value: query, onChange: (e: React.ChangeEvent<HTMLInputElement>) => setQuery(e.target.value) }),
+      React.createElement('div', { className: 'vx-row' }, (['user', 'assistant', 'tool'] as const).map((kind) => React.createElement('label', { key: kind, className: 'vx-muted' }, React.createElement('input', { type: 'checkbox', checked: kinds.includes(kind), onChange: () => toggle(kind) }), ' ', names[kind]))),
+      status !== '' ? React.createElement('div', { className: 'vx-muted' }, status) : null,
+      React.createElement('div', { className: 'vx-list' }, items.map((item) => React.createElement('button', { key: `${item.seq}-${item.kind}`, className: 'vx-list-item', onClick: () => { void revealSearchResult(item) } },
+        React.createElement('div', { className: 'vx-row' }, React.createElement('span', { className: 'vx-badge' }, names[item.kind]), React.createElement('span', { className: 'vx-muted' }, new Date(item.time).toLocaleString('zh-CN'))),
+        React.createElement('div', { className: 'vx-prompt-body' }, React.createElement(Highlight, { text: item.snippet, query })),
+      ))),
+      hasMore ? React.createElement('div', { className: 'vx-muted' }, '结果超过 100 条，请缩小搜索范围。') : null,
+    )
+  }
+
   function ExportTab(): React.ReactElement {
     const s = useS()
     return React.createElement('div', { className: 'vx-col' },
@@ -2080,6 +2319,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
         React.createElement('button', { className: 'vx-btn big', disabled: s.exporting === true, onClick: () => runExport('pdf') }, React.createElement(Icon, { n: 'download', size: 14 }), ' PDF（含图片）'),
       ),
       s.exporting === true ? React.createElement('div', { className: 'vx-muted vx-pad-sm' }, '导出中…') : null,
+      React.createElement(BackupControls, null),
     )
   }
 
@@ -2121,6 +2361,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       React.createElement(Toggle, { label: '防自动跳转', checked: s.cfg.antiScroll === true, onChange: (v) => set('antiScroll', v), hint: '拦截发送后强制滚动到底部' }),
       React.createElement(Toggle, { label: '公式复制', checked: s.cfg.formula === true, onChange: (v) => set('formula', v), hint: '消息下方显示 LaTeX/MathML 复制按钮' }),
       React.createElement('div', { className: 'vx-row vx-pad-sm' },
+        React.createElement('button', { className: 'vx-btn', onClick: () => setS({ commandOpen: true }) }, React.createElement(Icon, { n: 'search', size: 13 }), ' 打开快捷面板（Ctrl/⌘ K）'),
         React.createElement('button', { className: 'vx-btn vx-btn-danger', onClick: () => setS({ batchModal: true }) },
           React.createElement(Icon, { n: 'trash', size: 13 }), ' 批量归档会话'),
       ),
@@ -2153,7 +2394,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     const submit = (): void => {
       const cb = ask.cb
       setS({ ask: null })
-      if (val.trim() !== '') cb(val.trim())
+      if (ask.allowEmpty === true || val.trim() !== '') cb(ask.allowEmpty === true ? val : val.trim())
     }
     return React.createElement('div', { className: 'vx-modal-mask', onClick: () => setS({ ask: null }) },
       React.createElement('div', { className: 'vx-glass vx-modal', style: { width: 'min(360px, 92vw)' }, onClick: (e: React.MouseEvent) => e.stopPropagation() },
@@ -2185,6 +2426,29 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
           React.createElement('button', { className: 'vx-btn vx-btn-danger', onClick: () => answer(true) }, '确定'),
           React.createElement('button', { className: 'vx-btn', onClick: () => answer(false) }, '取消'),
         ),
+      ),
+    )
+  }
+
+  function TemplateModal(): React.ReactElement | null {
+    const s = useS()
+    const prompt = s.templatePrompt
+    if (prompt === null) return null
+    const names = promptVariables(prompt.text)
+    const submit = (): void => {
+      if (names.some((name) => (S.templateValues[name] ?? '').trim() === '')) { toast('请填写所有变量', 'error'); return }
+      const text = fillPromptTemplate(prompt.text, S.templateValues)
+      const ok = S.insertDraft !== null ? S.insertDraft(text, false) : false
+      if (!ok) { toast('请在会话输入框中重试', 'error'); return }
+      S.prompts = S.prompts.map((item) => item.id === prompt.id ? { ...item, useCount: (item.useCount ?? 0) + 1, lastUsedAt: Date.now() } : item)
+      setS({ prompts: S.prompts, templatePrompt: null, templateValues: {} }); saveCfg(); toast('已插入提示词: ' + prompt.name, 'info')
+    }
+    return React.createElement('div', { className: 'vx-modal-mask', onClick: () => setS({ templatePrompt: null, templateValues: {} }) },
+      React.createElement('div', { className: 'vx-glass vx-modal', style: { width: 'min(440px, 92vw)' }, onClick: (e: React.MouseEvent) => e.stopPropagation() },
+        React.createElement('div', { className: 'vx-pattern' }),
+        React.createElement('div', { className: 'vx-pop-head' }, React.createElement('span', null, `填写变量 · ${prompt.name}`)),
+        names.map((name) => React.createElement('label', { key: name, className: 'vx-col' }, React.createElement('span', { className: 'vx-muted' }, name), React.createElement('input', { className: 'vx-input', value: s.templateValues[name] ?? '', onChange: (e: React.ChangeEvent<HTMLInputElement>) => setS({ templateValues: { ...S.templateValues, [name]: e.target.value } }) }))),
+        React.createElement('div', { className: 'vx-row vx-pad-sm' }, React.createElement('button', { className: 'vx-btn', onClick: submit }, '插入'), React.createElement('button', { className: 'vx-btn', onClick: () => setS({ templatePrompt: null, templateValues: {} }) }, '取消')),
       ),
     )
   }
@@ -2276,6 +2540,74 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     )
   }
 
+  function CommandPalette(props: { useSessions: OverlayProps['useSessions']; useWorkspaces: OverlayProps['useWorkspaces'] }): React.ReactElement | null {
+    const s = useS()
+    const sessionsState = useSessionsSafe(props)
+    const workspacesState = useWorkspacesSafe(props)
+    // The public SessionListState intentionally exposes only the monotone
+    // `phase` (errors stay on the service's internal state axis), so a null
+    // hook result is the only reliable unavailable signal here.
+    const sessionsUnavailable = sessionsState === null
+    const workspacesUnavailable = workspacesState === null || workspacesState.state === 'error'
+    const [query, setQuery] = React.useState('')
+    const [index, setIndex] = React.useState(0)
+    const [remote, setRemote] = React.useState<Array<{ sessionId: string; snippet: string }>>([])
+    const [remoteStatus, setRemoteStatus] = React.useState('')
+    React.useEffect(() => {
+      if (!s.commandOpen || query.trim().length < 2) { setRemote([]); setRemoteStatus(''); return }
+      const controller = new AbortController()
+      const timer = setTimeout(() => {
+        const sessions = C.get('sessions') as { search(query: string, signal: AbortSignal): Promise<{ ok: true; value: { items: Array<{ sessionId: string; snippet: string }> } } | { ok: false; error?: unknown }> } | undefined
+        if (sessions === undefined || typeof sessions.search !== 'function') { setRemoteStatus('跨会话搜索不可用'); return }
+        setRemoteStatus('跨会话搜索中…')
+        try {
+          void sessions.search(query.trim(), controller.signal).then((result) => {
+            if (controller.signal.aborted) return
+            if (result.ok) { setRemote(result.value.items); setRemoteStatus('') }
+            else {
+              const error = result.error
+              const message = typeof error === 'string'
+                ? error
+                : error !== null && typeof error === 'object'
+                  ? [String((error as { code?: unknown }).code ?? ''), String((error as { message?: unknown }).message ?? '')].filter((part) => part !== '').join(': ') || '跨会话搜索不可用'
+                  : '跨会话搜索不可用'
+              setRemote([]); setRemoteStatus(message)
+            }
+          }).catch(() => { if (!controller.signal.aborted) { setRemote([]); setRemoteStatus('跨会话搜索不可用') } })
+        } catch { if (!controller.signal.aborted) { setRemote([]); setRemoteStatus('跨会话搜索不可用') } }
+      }, 250)
+      return () => { clearTimeout(timer); controller.abort() }
+    }, [query, s.commandOpen])
+    if (!s.commandOpen) return null
+    interface Command { key: string; label: string; detail: string; run: () => void; disabled?: boolean }
+    const commands: Command[] = [
+      { key: 'balance', label: '打开额度与用量', detail: '功能', run: () => setS({ commandOpen: false, panelOpen: true, panelTab: 'balance' }) },
+      { key: 'export', label: '导出当前会话', detail: S.sessionId === null ? '当前没有打开的会话' : 'Markdown', disabled: S.sessionId === null, run: () => { setS({ commandOpen: false }); runExport('markdown') } },
+      { key: 'timeline', label: `${S.cfg.timeline ? '关闭' : '开启'}时间线`, detail: '功能开关', run: () => { setS({ commandOpen: false, cfg: { ...S.cfg, timeline: !S.cfg.timeline } }); saveCfg() } },
+      { key: 'search-current', label: '搜索当前会话', detail: S.sessionId === null ? '当前没有打开的会话' : '功能', disabled: S.sessionId === null, run: () => setS({ commandOpen: false, panelOpen: true, panelTab: 'search' }) },
+      { key: 'folders', label: '打开项目文件夹', detail: '功能', run: () => setS({ commandOpen: false, foldersOpen: true, panelOpen: false }) },
+      { key: 'prompts', label: '打开提示词库', detail: '功能', run: () => setS({ commandOpen: false, panelOpen: true, panelTab: 'prompt' }) },
+      { key: 'tools', label: '打开效率工具', detail: '功能', run: () => setS({ commandOpen: false, panelOpen: true, panelTab: 'tools' }) },
+      ...(sessionsUnavailable ? [{ key: 'sessions-unavailable', label: '打开会话', detail: sessionsState === null ? '会话服务不可用' : '会话列表加载失败', disabled: true, run: () => {} }] : []),
+      ...(workspacesUnavailable ? [{ key: 'workspaces-unavailable', label: '打开工作区', detail: workspacesState === null ? '工作区服务不可用' : '工作区列表加载失败', disabled: true, run: () => {} }] : []),
+      ...S.prompts.map((prompt) => ({ key: `prompt-${prompt.id}`, label: prompt.name, detail: S.insertDraft === null ? '当前没有可用输入框' : '提示词', disabled: S.insertDraft === null, run: () => { setS({ commandOpen: false }); insertPrompt(prompt) } })),
+      ...(sessionsUnavailable ? [] : (sessionsState?.ids ?? []).map((id) => ({ key: `session-${id}`, label: sessionsState?.byId[id]?.displayTitle || sessionsState?.byId[id]?.title || id, detail: '会话', run: () => { setS({ commandOpen: false }); openSessionItem(id) } }))),
+      ...(workspacesUnavailable ? [] : (workspacesState?.items ?? []).map((workspace) => ({ key: `workspace-${workspace.workspaceId}`, label: workspace.title || workspace.path || workspace.workspaceId, detail: '工作区', run: () => { setS({ commandOpen: false }); void openWorkspaceItem(workspace.workspaceId) } }))),
+      ...remote.map((item) => ({ key: `remote-${item.sessionId}`, label: item.snippet || item.sessionId, detail: '全文搜索结果', run: () => { setS({ commandOpen: false }); openSessionItem(item.sessionId) } })),
+    ]
+    const q = query.toLowerCase()
+    const visible = commands.filter((item) => q === '' || item.label.toLowerCase().includes(q) || item.detail.toLowerCase().includes(q)).slice(0, 50)
+    const chosen = Math.max(0, Math.min(index, visible.length - 1))
+    return React.createElement('div', { className: 'vx-modal-mask', onClick: () => setS({ commandOpen: false }) },
+      React.createElement('div', { className: 'vx-glass vx-modal', style: { width: 'min(620px, 94vw)' }, onClick: (e: React.MouseEvent) => e.stopPropagation() },
+        React.createElement('input', { className: 'vx-input', autoFocus: true, placeholder: '搜索会话、工作区、提示词或功能…', value: query, onChange: (e: React.ChangeEvent<HTMLInputElement>) => { setQuery(e.target.value); setIndex(0) }, onKeyDown: (e: React.KeyboardEvent) => { if (e.key === 'ArrowDown') { e.preventDefault(); setIndex(Math.min(visible.length - 1, chosen + 1)) } else if (e.key === 'ArrowUp') { e.preventDefault(); setIndex(Math.max(0, chosen - 1)) } else if (e.key === 'Enter') { e.preventDefault(); const command = visible[chosen]; if (command !== undefined && command.disabled !== true) command.run() } else if (e.key === 'Escape') setS({ commandOpen: false }) } }),
+        React.createElement('div', { className: 'vx-list' }, visible.map((command, itemIndex) => React.createElement('button', { key: command.key, className: 'vx-list-item' + (itemIndex === chosen ? ' on' : ''), disabled: command.disabled === true, onMouseEnter: () => setIndex(itemIndex), onClick: command.run }, React.createElement('span', null, command.label), React.createElement('span', { className: 'vx-muted' }, command.detail)))),
+        remoteStatus !== '' ? React.createElement('div', { className: 'vx-muted vx-pad-sm' }, remoteStatus) : null,
+        visible.length === 0 ? React.createElement('div', { className: 'vx-muted vx-pad-sm' }, '没有匹配项') : null,
+      ),
+    )
+  }
+
   function BatchModal(props: { useSessions: OverlayProps['useSessions'] }): React.ReactElement | null {
     const s = useS()
     const [sel, setSel] = React.useState<Record<string, boolean>>({})
@@ -2293,16 +2625,17 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       return true
     })
     const selCount = Object.keys(sel).length
-    const batchArchive = (targetIds: string[]): void => {
+    const batchArchive = async (targetIds: string[]): Promise<void> => {
       const workspaces = C.get('workspaces') as { archiveSession(id: string): Promise<void> } | undefined
       if (workspaces === undefined || typeof workspaces.archiveSession !== 'function') { toast('归档服务不可用', 'error'); return }
-      let done = 0
-      const run = (): void => {
-        if (done >= targetIds.length) { toast(`已归档 ${targetIds.length} 个会话`, 'info'); setS({ batchModal: false }); return }
-        const id = targetIds[done++]
-        void workspaces.archiveSession(id).then(run).catch(() => run())
+      const running = new Set(Object.keys(byId).filter((id) => byId[id]?.running === true))
+      const { succeeded, failed, results } = await archiveBatch(targetIds, running, (id) => workspaces.archiveSession(id))
+      setS({ batchModal: false })
+      if (failed === 0) toast(`已归档 ${succeeded} 个会话`, 'info')
+      else {
+        const details = results.filter((item) => !item.ok).slice(0, 3).map((item) => `${item.id}: ${item.error ?? '失败'}`).join('；')
+        toast(`归档完成：成功 ${succeeded}，失败 ${failed}${details === '' ? '' : `；${details}`}`, 'error')
       }
-      run()
     }
     return React.createElement('div', { className: 'vx-modal-mask', onClick: () => setS({ batchModal: false }) },
       React.createElement('div', { className: 'vx-glass vx-modal', style: { width: 'min(560px, 92vw)' }, onClick: (e: React.MouseEvent) => e.stopPropagation() },
@@ -2311,25 +2644,26 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
           React.createElement('span', null, '批量归档会话'),
           React.createElement('button', { className: 'vx-chip', title: '关闭', onClick: () => setS({ batchModal: false }) }, React.createElement(Icon, { n: 'x', size: 12 })),
         ),
-        React.createElement('div', { className: 'vx-muted vx-pad-sm' }, '将选中的会话归档（从会话列表移除，日志仍保留，可在存储中找回）'),
+        React.createElement('div', { className: 'vx-muted vx-pad-sm' }, '将选中的会话归档；运行中的会话不可选。DSH 当前未公开恢复接口，本插件不提供恢复入口。'),
         React.createElement('div', { className: 'vx-row vx-pad-sm' },
           React.createElement(Icon, { n: 'search', size: 13 }),
           React.createElement('input', { className: 'vx-input', placeholder: '搜索会话…', value: q, onChange: (e: React.ChangeEvent<HTMLInputElement>) => setQ(e.target.value) }),
-          React.createElement('button', { className: 'vx-btn', onClick: () => { const all: Record<string, boolean> = {}; for (const id of filtered) all[id] = true; setSel(all) } }, '全选'),
+          React.createElement('button', { className: 'vx-btn', onClick: () => { const all: Record<string, boolean> = {}; for (const id of filtered) if (byId[id]?.running !== true) all[id] = true; setSel(all) } }, '全选可归档'),
           React.createElement('button', { className: 'vx-btn', onClick: () => setSel({}) }, '清空'),
         ),
         React.createElement('div', { className: 'vx-list' },
           filtered.map((id) => {
             const sum = byId[id]
+            const running = sum?.running === true
             return React.createElement('label', { key: id, className: 'vx-check-row' },
-              React.createElement('input', { type: 'checkbox', checked: sel[id] === true, onChange: (e: React.ChangeEvent<HTMLInputElement>) => { const next = { ...sel }; if (e.target.checked) next[id] = true; else delete next[id]; setSel(next) } }),
+              React.createElement('input', { type: 'checkbox', disabled: running, checked: sel[id] === true, onChange: (e: React.ChangeEvent<HTMLInputElement>) => { const next = { ...sel }; if (e.target.checked) next[id] = true; else delete next[id]; setSel(next) } }),
               React.createElement('span', { className: 'vx-check-title' }, sum !== undefined ? (sum.displayTitle || sum.title || id) : id),
-              sum !== undefined && sum.running === true ? React.createElement('span', { className: 'vx-badge' }, '运行中') : null,
+              running ? React.createElement('span', { className: 'vx-badge' }, '运行中，不可归档') : null,
             )
           }),
         ),
         React.createElement('div', { className: 'vx-row vx-pad-sm' },
-          React.createElement('button', { className: 'vx-btn vx-btn-danger', disabled: selCount === 0, onClick: () => askConfirm(`确认归档选中的 ${selCount} 个会话？`, (ok) => { if (ok) batchArchive(Object.keys(sel)) }) },
+          React.createElement('button', { className: 'vx-btn vx-btn-danger', disabled: selCount === 0, onClick: () => askConfirm(`确认归档选中的 ${selCount} 个会话？`, (ok) => { if (ok) void batchArchive(Object.keys(sel)) }) },
             React.createElement(Icon, { n: 'trash', size: 12 }), ` 归档选中 (${selCount})`),
           React.createElement('button', { className: 'vx-btn', onClick: () => setS({ batchModal: false }) }, '取消'),
         ),
@@ -2343,6 +2677,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     if (s.panelTab === 'folder') return React.createElement(FoldersTab, { useSessions: props.useSessions, useWorkspaces: props.useWorkspaces })
     if (s.panelTab === 'prompt') return React.createElement(PromptsTab, null)
     if (s.panelTab === 'timeline') return React.createElement(TimelineTab, null)
+    if (s.panelTab === 'search') return React.createElement(SearchTab, null)
     if (s.panelTab === 'export') return React.createElement(ExportTab, null)
     if (s.panelTab === 'mermaid') return React.createElement(MermaidTab, null)
     if (s.panelTab === 'tools') return React.createElement(ToolsTab, null)
@@ -2353,7 +2688,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
   function PersonalizePanel(props: { useSessions: OverlayProps['useSessions']; useWorkspaces: OverlayProps['useWorkspaces'] }): React.ReactElement {
     const s = useS()
     const ref = React.useRef<HTMLDivElement | null>(null)
-    const TABS: Array<[string, string, string]> = [['look', 'sliders', '外观'], ['folder', 'folder', '项目'], ['prompt', 'zap', '提示词'], ['timeline', 'clock', '时间线'], ['export', 'download', '导出'], ['mermaid', 'gitBranch', 'Mermaid'], ['tools', 'wrench', '效率'], ['balance', 'wallet', '额度'], ['about', 'info', '关于']]
+    const TABS: Array<[string, string, string]> = [['look', 'sliders', '外观'], ['folder', 'folder', '项目'], ['prompt', 'zap', '提示词'], ['timeline', 'clock', '时间线'], ['search', 'search', '搜索'], ['export', 'download', '导出'], ['mermaid', 'gitBranch', 'Mermaid'], ['tools', 'wrench', '效率'], ['balance', 'wallet', '额度'], ['about', 'info', '关于']]
     const onHeadDown = (e: React.MouseEvent): void => {
       const target = e.target as HTMLElement
       if (target.tagName === 'BUTTON' || target.tagName === 'A' || target.tagName === 'INPUT') return
@@ -2456,6 +2791,18 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       return false
     }
     React.useEffect(() => { void loadCfg() }, [])
+    React.useEffect(() => {
+      const d = typeof document !== 'undefined' ? document : null
+      if (d === null) return
+      const onKey = (event: KeyboardEvent): void => {
+        const target = event.target as HTMLElement | null
+        if (!isCommandPaletteShortcut(event, target)) return
+        event.preventDefault()
+        setS({ commandOpen: !S.commandOpen })
+      }
+      d.addEventListener('keydown', onKey)
+      return () => d.removeEventListener('keydown', onKey)
+    }, [])
     React.useEffect(() => { if (s.booted) applyAppearance() }, [s.booted, s.cfg.bg, s.cfg.glass, s.cfg.glassMode, s.cfg.globalGlass])
     React.useEffect(() => { syncAntiScroll(s.cfg.antiScroll === true) }, [s.cfg.antiScroll])
     React.useEffect(() => {
@@ -2563,9 +2910,11 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     if (s.promptOpen !== null) children.push(React.createElement(PromptPopover, { key: 'prompt' }))
     if (s.mermaidModal !== null) children.push(React.createElement(MermaidModal, { key: 'mermaid' }))
     if (s.batchModal === true) children.push(React.createElement(BatchModal, { key: 'batch', useSessions: props.useSessions }))
+    if (s.commandOpen === true) children.push(React.createElement(CommandPalette, { key: 'command', useSessions: props.useSessions, useWorkspaces: props.useWorkspaces }))
     if (s.quoteSel !== null && s.cfg.quote === true) children.push(React.createElement(QuoteButton, { key: 'quote' }))
     if (s.ask !== null) children.push(React.createElement(AskModal, { key: 'ask' }))
     if (s.confirmAsk !== null) children.push(React.createElement(ConfirmModal, { key: 'confirm' }))
+    if (s.templatePrompt !== null) children.push(React.createElement(TemplateModal, { key: 'template' }))
     children.push(React.createElement(Toasts, { key: 'toasts' }))
     return React.createElement('div', { className: `vx-root ${s.dark ? 'vx-dark' : 'vx-light'}` }, children)
   }

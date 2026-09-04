@@ -104,12 +104,14 @@ describe('pruneUsage', () => {
       [dayKey(now)]: {},
       [dayKey(now - 89 * dayMs)]: {},
       [dayKey(now - 90 * dayMs)]: {},
+      '2026-02-30': {},
       malformed: {},
     }
-    expect(pruneUsage(usage, now, 90)).toBe(2)
+    expect(pruneUsage(usage, now, 90)).toBe(3)
     expect(usage[dayKey(now)]).toEqual({})
     expect(usage[dayKey(now - 89 * dayMs)]).toEqual({})
     expect(usage[dayKey(now - 90 * dayMs)]).toBeUndefined()
+    expect(usage['2026-02-30']).toBeUndefined()
     expect(usage.malformed).toBeUndefined()
   })
 })

@@ -41,6 +41,10 @@ export interface CustomPluginConfig {
   formula?: boolean
   /** Show Mermaid render chips under matching messages. */
   mermaid?: boolean
+  /** Monthly estimated-cost budget in CNY; zero disables it. */
+  monthlyBudgetCny?: number
+  /** Percentage at which the monthly budget enters warning state. */
+  budgetWarningPercent?: number
 }
 
 /** Default configuration (also the composition-layer default). */
@@ -57,6 +61,8 @@ export const DEFAULT_CONFIG: CustomPluginConfig = {
   antiScroll: false,
   mermaid: true,
   formula: true,
+  monthlyBudgetCny: 0,
+  budgetWarningPercent: 80,
 }
 
 /** One folder node in the multi-level project tree. */
@@ -74,6 +80,34 @@ export interface PromptItem {
   id: string
   name: string
   text: string
+  tags?: string[]
+  favorite?: boolean
+  useCount?: number
+  lastUsedAt?: number
+}
+
+/** Portable, secret-free backup document. */
+export interface CustomPluginBackupV1 {
+  format: 'dsh-custom-plugin-backup'
+  version: 1
+  exportedAt: string
+  data: Pick<CustomPluginState, 'cfg' | 'folders' | 'prompts' | 'stars' | 'usage'>
+}
+
+export type BackupImportMode = 'merge' | 'replace'
+
+export interface BackupConflictStats {
+  folders: number
+  prompts: number
+  usageDays: number
+}
+
+export interface BackupImportPreview {
+  folders: number
+  prompts: number
+  starredSessions: number
+  usageDays: number
+  conflicts: BackupConflictStats
 }
 
 /** Starred timeline nodes, keyed by session id then by user-message seq. */
@@ -133,6 +167,29 @@ export interface TimelineItem {
   hasLatex: boolean
   hasMathml: boolean
   hasMermaid: boolean
+}
+
+export type ConversationSearchKind = 'user' | 'assistant' | 'tool'
+
+export interface ConversationSearchRequest {
+  sessionId: string
+  query: string
+  kinds?: ConversationSearchKind[]
+}
+
+export interface ConversationSearchItem {
+  /** Session used for the indexed hit; protects against stale cross-session clicks. */
+  sessionId: string
+  seq: number
+  anchorSeq: number
+  kind: ConversationSearchKind
+  time: number
+  snippet: string
+}
+
+export interface ConversationSearchResult {
+  items: ConversationSearchItem[]
+  hasMore: boolean
 }
 
 /** Balance payload returned by the DeepSeek balance endpoint. */
