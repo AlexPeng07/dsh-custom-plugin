@@ -1,7 +1,7 @@
 {
   "name": "@alexpeng/dsh-custom-plugin",
   "description": "Custom convenience suite for the dsh web GUI: appearance, timeline, folders, prompts, session export/search, Mermaid, quote reply, usage analytics, local budget, key-free backups, and a Ctrl/Cmd+K command palette; dual-face plugin mounted without dsh source changes.",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",
@@ -88,8 +88,5 @@
     "README.zh.md",
     "README.i18n.yaml"
   ],
-  "license": "Apache-2.0",
-  "optionalDependencies": {
-    "keytar": "7.9.0"
-  }
+  "license": "Apache-2.0"
 }

@@ -178,7 +178,7 @@ Appearance and feature toggles (the `cfg` field, all with defaults):
 ## Security model
 
 - The browser talks to the host only through loopback `/api/custom-plugin` routes; every route checks a loopback socket address, a loopback Host header, and browser same-origin markers (`sec-fetch-site` / `Origin`). `X-Forwarded-For` is never trusted.
-- The browser never receives the saved DeepSeek API key. New panel keys use the optional OS credential store through `keytar`; older plaintext state keys are migrated on startup when that store is available.
+- The browser never receives the saved DeepSeek API key. New panel keys use the OS credential store through `keytar` when it is present; older plaintext state keys are migrated on startup when that store is available. `keytar` ships as no dependency of this plugin (a native module would trip pnpm 11's strict build gate and silently keep the whole bundle from activating); users who want the OS keyring can add it to the profile themselves: `dsh plugin --profile web add keytar`.
 - If the OS credential store is unavailable, the plugin keeps a compatibility fallback in `$DSH_HOME/custom-plugin-state.json`; protect `$DSH_HOME` accordingly. DSH's own `$DSH_HOME/.credentials.yaml` remains a supported plaintext fallback.
 - Conversation exports and timeline data stay on the local host.
 
@@ -187,7 +187,7 @@ Appearance and feature toggles (the `cfg` field, all with defaults):
 - The Mermaid engine comes from the dependency installed with the plugin and works offline; only a missing dependency falls back to a CDN fetch (cached for the host process lifetime).
 - The usage ledger folds token counts from live `session/event` records, retains 90 Beijing calendar days, and a manual "scan" re-reads today's session logs with four concurrent reads when live events were missed.
 - The balance panel shows the peak/off-peak token and cost split plus a link to the official pricing page; legacy rows without peak counters are marked inexact and excluded from cost totals until rescanned.
-- OS credential storage depends on the optional `keytar` backend; when it cannot be loaded, the compatibility state-file fallback is used.
+- OS credential storage detects a `keytar` module present in the profile's `node_modules` when the host starts; when it cannot be loaded, the compatibility state-file fallback is used.
 - Cost estimates use DeepSeek's official peak/off-peak list prices and are indicative only.
 - Dark-mode background restriction is deliberate: only "no color" and "aurora" are selectable in dark mode.
 - DSH currently exposes no archive-restore API; the plugin does not bypass that boundary by editing the underlying registry.

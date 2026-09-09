@@ -4,6 +4,25 @@ All notable changes to this project are documented here. The format loosely
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions
 follow [Semantic Versioning](https://semver.org/).
 
+## 0.4.1 — 2026-09-09
+
+### Fixed
+
+- **Fresh installs show nothing after a "successful" install.** `keytar` (a
+  native optional dependency) tripped pnpm 11's strict build-script gate, so
+  `dsh plugin add` exited non-zero and the harness never reconciled the bundle
+  layer — the package sat inert in `dependencies` with no host half and no
+  browser half. `keytar` is no longer a dependency: the OS-keyring adapter
+  still detects a `keytar` module present in the profile's `node_modules`, and
+  users who want the OS keyring can add it themselves
+  (`dsh plugin --profile web add keytar`).
+- The browser half now waits for the `slots` service (a child fiber) before
+  mounting its surfaces instead of reading it synchronously: newer dsh builds
+  activate the slots provider after this plugin's entry, and the synchronous
+  read lost that race every time, logging "slots service unavailable" and
+  skipping all UI. The mount stays fail-soft — the GUI boots even when the
+  service never appears.
+
 ## 0.4.0 — 2026-09-03
 
 ### Added

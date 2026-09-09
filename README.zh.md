@@ -178,7 +178,7 @@ dsh plugin --profile web add link:F:/dsh-plugin-dev
 ## 安全模型
 
 - 浏览器仅通过回环地址上的 `/api/custom-plugin` 路由与宿主通信；每条路由同时校验回环 socket 地址、回环 Host 头与浏览器同源标记（`sec-fetch-site` / `Origin`），`X-Forwarded-For` 永不信任。
-- 浏览器永远不会收到已保存的 DeepSeek API Key。面板新输入的 Key 优先通过可选的 `keytar` 写入系统凭据存储；旧版状态文件中的明文 Key 会在系统存储可用时启动迁移。
+- 浏览器永远不会收到已保存的 DeepSeek API Key。面板新输入的 Key 在 `keytar` 存在时优先写入系统凭据存储；旧版状态文件中的明文 Key 会在系统存储可用时启动迁移。`keytar` 不再作为本插件的依赖发布（原生模块会触发 pnpm 11 的严格构建门禁，导致整个插件包安装后无法激活）；需要系统钥匙串的用户可自行加入 profile：`dsh plugin --profile web add keytar`。
 - 如果系统凭据存储不可用，插件会兼容回退到 `$DSH_HOME/custom-plugin-state.json`；请相应保护 `$DSH_HOME` 目录。DSH 自身的 `$DSH_HOME/.credentials.yaml` 明文凭据仍可复用。
 - 会话导出与时间线数据全部停留在本机。
 
@@ -187,7 +187,7 @@ dsh plugin --profile web add link:F:/dsh-plugin-dev
 - Mermaid 引擎来自随插件安装的本地依赖，离线可用；仅当依赖缺失时回退 CDN 拉取（宿主在进程生命周期内缓存）。
 - 用量账本折叠自实时 `session/event` 记录，只保留最近 90 个北京时间日；错过实时事件时可手动「扫描」，扫描最多并发读取 4 个会话日志。
 - 额度面板会显示峰/闲 token 与费用分布，并提供官方价目链接；没有峰时字段的历史行会标记为“不精确”，不计入费用总额，重新扫描后可更新。
-- 系统凭据存储依赖可选的 `keytar` 后端；无法加载时使用兼容的状态文件回退。
+- 系统凭据存储会在宿主启动时检测 profile `node_modules` 中的 `keytar` 模块；无法加载时使用兼容的状态文件回退。
 - 费用按 DeepSeek 官方峰谷单价估算，仅供参考。
 - 深色模式下背景限制是刻意设计：仅「无颜色」与「极光」可选。
 - DSH 当前没有公开的归档恢复接口；插件不会绕过官方边界修改底层注册表。
