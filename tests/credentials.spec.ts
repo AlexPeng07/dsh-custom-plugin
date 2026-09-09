@@ -52,7 +52,7 @@ describe('readDeepSeekCredential', () => {
       await writeFile(join(dir, CREDENTIALS_FILE), SAMPLE)
       expect(await readDeepSeekCredential(dir)).toBe('sk-test-fixture-key')
     } finally {
-      await rm(dir, { recursive: true, force: true })
+      await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
     }
   })
 
@@ -62,7 +62,7 @@ describe('readDeepSeekCredential', () => {
       await writeFile(join(dir, CREDENTIALS_FILE), 'version: 1\nrefs:\n  DEEPSEEK_TOKEN: sk-token-only\n')
       expect(await readDeepSeekCredential(dir)).toBe('sk-token-only')
     } finally {
-      await rm(dir, { recursive: true, force: true })
+      await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
     }
   })
 
@@ -71,7 +71,7 @@ describe('readDeepSeekCredential', () => {
     try {
       expect(await readDeepSeekCredential(dir)).toBe('')
     } finally {
-      await rm(dir, { recursive: true, force: true })
+      await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
     }
   })
 })

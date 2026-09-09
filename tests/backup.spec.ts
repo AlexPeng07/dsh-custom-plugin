@@ -76,7 +76,7 @@ describe('portable backup', () => {
       expect(result.ok).toBe(false)
       expect(state.cfg.bg).toBe('雾蓝')
       expect(await readFile(join(dir, 'state.json.backup.json'), 'utf8')).not.toContain('sk-secret')
-    } finally { await rm(dir, { recursive: true, force: true }) }
+    } finally { await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }) }
   })
 
   it('serializes an import with a live usage event instead of losing the event', async () => {
@@ -99,7 +99,7 @@ describe('portable backup', () => {
       expect(result.ok).toBe(true)
       expect(state.usage).not.toEqual({})
       expect(Object.values(state.usage)[0]['deepseek-v4-flash'].in).toBe(3)
-    } finally { await rm(dir, { recursive: true, force: true }) }
+    } finally { await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }) }
   })
 
   it('serializes concurrent imports and chains recovery snapshots', async () => {
@@ -135,6 +135,6 @@ describe('portable backup', () => {
       expect(state.cfg.bg).toBe('极光')
       const recovery = JSON.parse(await readFile(join(dir, 'state.json.backup.json'), 'utf8')) as { data: { cfg: { bg?: string } } }
       expect(recovery.data.cfg.bg).toBe('雾蓝')
-    } finally { await rm(dir, { recursive: true, force: true }) }
+    } finally { await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }) }
   })
 })

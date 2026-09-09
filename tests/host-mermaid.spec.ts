@@ -50,7 +50,7 @@ describe('mermaidFetch local-first', () => {
       expect(result).toEqual({ ok: true, bytes: 2048 })
       expect(host.mermaidLoadedSource()).toBe('local')
     } finally {
-      await rm(dir, { force: true, recursive: true })
+      await rm(dir, { force: true, recursive: true, maxRetries: 10, retryDelay: 50 })
     }
   })
 

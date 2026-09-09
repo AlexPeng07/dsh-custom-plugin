@@ -111,7 +111,7 @@ describe('loadStateFile', () => {
       expect(state.cfg.bg).toBe('雾蓝')
       expect(state.usage['2026-08-20']['deepseek-chat'].in).toBe(9)
     } finally {
-      await rm(dir, { recursive: true, force: true })
+      await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
     }
   })
 
@@ -124,7 +124,7 @@ describe('loadStateFile', () => {
       expect(state.cfg).toEqual(DEFAULT_CONFIG)
       expect(state.folders).toEqual([])
     } finally {
-      await rm(dir, { recursive: true, force: true })
+      await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
     }
   })
 })
@@ -142,7 +142,7 @@ describe('saveStateFile', () => {
       expect(() => JSON.parse(text)).not.toThrow()
       expect(existsSync(join(home, STATE_FILE + '.tmp'))).toBe(false)
     } finally {
-      await rm(home, { recursive: true, force: true })
+      await rm(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
     }
   })
 })
