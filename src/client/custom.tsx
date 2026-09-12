@@ -540,8 +540,14 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     'hsla(340, 45%, 90%, 0.8)', 'hsla(342, 50%, 91%, 0.8)', 'hsla(344, 55%, 92%, 0.8)', 'hsla(346, 60%, 93%, 0.8)',
     'hsla(348, 65%, 94%, 0.8)', 'hsla(350, 60%, 95%, 0.8)', 'hsla(352, 55%, 93%, 0.8)', 'hsla(348, 40%, 88%, 0.8)',
   ]
-  const SAKURA_SPRITES: Array<string | null> = []
+  /** 浅色背景变体：90% 亮度的淡粉在近白的调色板背景上会消失，
+   * 换成更深的玫瑰粉保持可辨识度。 */
+  const SAKURA_PALETTE_LIGHT = [
+    'hsla(340, 60%, 72%, 0.9)', 'hsla(342, 64%, 70%, 0.9)', 'hsla(344, 66%, 68%, 0.9)', 'hsla(346, 68%, 66%, 0.9)',
+    'hsla(348, 70%, 64%, 0.9)', 'hsla(350, 66%, 66%, 0.9)', 'hsla(352, 60%, 68%, 0.9)', 'hsla(348, 52%, 70%, 0.9)',
+  ]
   const SAKURA_IMAGES: HTMLImageElement[] = []
+  const SAKURA_IMAGES_LIGHT: HTMLImageElement[] = []
 
   function rand(a: number, b: number): number {
     return a + Math.random() * (b - a)
@@ -558,8 +564,8 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     g.closePath()
     g.restore()
   }
-  function buildSakuraSprites(): void {
-    if (SAKURA_SPRITES.length > 0) return
+  function buildSakuraSpriteSet(palette: string[], target: HTMLImageElement[]): void {
+    if (target.length > 0) return
     const d = typeof document !== 'undefined' ? document : null
     const cvs = d?.createElement('canvas')
     if (cvs === undefined || cvs === null) return
@@ -567,19 +573,21 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     cvs.height = 48
     const g = cvs.getContext('2d')
     if (g === null) return
-    for (let i = 0; i < SAKURA_PALETTE.length; i++) {
+    for (const color of palette) {
       g.clearRect(0, 0, 48, 48)
-      g.fillStyle = SAKURA_PALETTE[i]
+      g.fillStyle = color
       tracePetal(g, 24, 24, 10, 0)
       g.fill()
-      try { SAKURA_SPRITES.push(cvs.toDataURL()) } catch { SAKURA_SPRITES.push(null) }
+      try {
+        const image = new Image()
+        image.src = cvs.toDataURL()
+        target.push(image)
+      } catch { /* toDataURL 不可用；向量路径兜底 */ }
     }
-    for (const sprite of SAKURA_SPRITES) {
-      if (sprite === null) continue
-      const image = new Image()
-      image.src = sprite
-      SAKURA_IMAGES.push(image)
-    }
+  }
+  function buildSakuraSprites(): void {
+    buildSakuraSpriteSet(SAKURA_PALETTE, SAKURA_IMAGES)
+    buildSakuraSpriteSet(SAKURA_PALETTE_LIGHT, SAKURA_IMAGES_LIGHT)
   }
   function initFx(weather: string, w: number, h: number): void {
     FX.snow = []
@@ -637,7 +645,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       FX.splashes.push({ x: x + rand(-5, 5), y: y - rand(0, 3), vx: rand(-0.9, 0.9), vy: rand(-1.6, -0.4), life: 1, decay: rand(0.02, 0.05), w: rand(0.6, 1.6), h: rand(0.4, 1.1) })
     }
   }
-  function fxFrame(g: CanvasRenderingContext2D, cvs: HTMLCanvasElement, weather: string, time: number): void {
+  function fxFrame(g: CanvasRenderingContext2D, cvs: HTMLCanvasElement, weather: string, time: number, light: boolean): void {
     const w = cvs.clientWidth || 0
     const h = cvs.clientHeight || 0
     if (w === 0 || h === 0) return
@@ -655,8 +663,10 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
         if (f.y > h + f.radius) { f.y = -f.radius; f.x = Math.random() * w }
         if (f.x > w + f.radius) f.x = -f.radius
         else if (f.x < -f.radius) f.x = w + f.radius
-        const q = Math.round(f.opacity * 50) / 50
-        if (q !== currentOpacity) { currentOpacity = q; g.fillStyle = `rgba(255,255,255,${q})` }
+        // 浅色背景：纯白雪花换成冷调石板灰并抬高透明度下限——近白背景上
+        // 15% 透明度的白色基本不可见。
+        const q = Math.round((light ? Math.min(0.9, f.opacity + 0.15) : f.opacity) * 50) / 50
+        if (q !== currentOpacity) { currentOpacity = q; g.fillStyle = light ? `rgba(125,146,170,${q})` : `rgba(255,255,255,${q})` }
         g.beginPath(); g.arc(f.x, f.y, f.radius, 0, Math.PI * 2); g.fill()
       }
     } else if (weather === 'rain') {
@@ -673,8 +683,8 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
           d.x = Math.random() * (w + 100) - 50
         }
         if (d.x > w + 50) d.x = -50
-        const qo = Math.round(d.opacity * 30) / 30
-        if (qo !== currentOpacity) { currentOpacity = qo; g.strokeStyle = `rgba(180,200,220,${qo})` }
+        const qo = Math.round((light ? Math.min(0.5, d.opacity + 0.08) : d.opacity) * 30) / 30
+        if (qo !== currentOpacity) { currentOpacity = qo; g.strokeStyle = light ? `rgba(104,130,156,${qo})` : `rgba(180,200,220,${qo})` }
         const qw = Math.round(d.lineWidth * 4) / 4
         if (qw !== currentWidth) { currentWidth = qw; g.lineWidth = qw }
         g.beginPath(); g.moveTo(d.x, d.y); g.lineTo(d.x - d.length * WIND.dx, d.y - d.length * WIND.dy); g.stroke()
@@ -688,12 +698,14 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
         if (sp.life <= 0) { FX.splashes.splice(i, 1); continue }
         g.save()
         g.globalAlpha = Math.max(0, sp.life)
-        g.strokeStyle = 'rgba(180,200,220,0.8)'
+        g.strokeStyle = light ? 'rgba(104,130,156,0.8)' : 'rgba(180,200,220,0.8)'
         g.lineWidth = 0.8
         g.beginPath(); g.ellipse(sp.x, sp.y, sp.w, sp.h, 0, 0, Math.PI * 2); g.stroke()
         g.restore()
       }
     } else if (weather === 'sakura') {
+      const imgs = light ? SAKURA_IMAGES_LIGHT : SAKURA_IMAGES
+      const alpha = (f: FxParticle): number => (light ? Math.min(1, f.opacity + 0.2) : f.opacity)
       for (const f of FX.sakura) {
         f.y += f.speedY
         f.x += Math.sin(f.phase + time * f.swayFreq) * f.drift
@@ -702,21 +714,22 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
         else if (f.x < -f.size) f.x = w + f.size
         const rot = Math.sin(f.phase + time * f.swayFreq * 1.7) * 0.9 + time * f.spin
         const wob = 1 + 0.12 * Math.sin(f.phase * 2 + time * f.swayFreq * 2.3)
-        if (f.spriteIndex >= 0 && SAKURA_IMAGES[f.spriteIndex] !== undefined) {
+        const img = f.spriteIndex >= 0 ? imgs[f.spriteIndex] : undefined
+        if (img !== undefined) {
           g.save()
-          g.globalAlpha = f.opacity
+          g.globalAlpha = alpha(f)
           g.translate(f.x, f.y)
           g.rotate(rot)
           g.scale((f.size * f.wobble * wob) / 18, (f.size * f.wobble) / 18)
-          g.drawImage(SAKURA_IMAGES[f.spriteIndex], -18, -18, 36, 36)
+          g.drawImage(img, -18, -18, 36, 36)
           g.restore()
         } else {
           g.save()
-          g.globalAlpha = f.opacity
+          g.globalAlpha = alpha(f)
           g.translate(f.x, f.y)
           g.rotate(rot)
           g.scale((f.size * f.wobble * wob) / 10, (f.size * f.wobble) / 10)
-          g.fillStyle = SAKURA_PALETTE[0]
+          g.fillStyle = light ? SAKURA_PALETTE_LIGHT[0] : SAKURA_PALETTE[0]
           tracePetal(g, 0, 0, 1, 0)
           g.fill()
           g.restore()
@@ -727,6 +740,11 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
   function FxCanvas(): React.ReactElement {
     const s = useS()
     const ref = React.useRef<HTMLCanvasElement | null>(null)
+    /** 粒子配色跟随背景亮度：浅色主题（以及任何主题下的高饱和极光）
+     * 需要更深的粒子颜色才可辨识。ref 让 RAF 循环每帧读到最新值，
+     * 主题/背景切换时无需重建粒子场。 */
+    const lightRef = React.useRef(!(s.dark === true) || s.cfg.bg === 'aurora')
+    React.useEffect(() => { lightRef.current = !(s.dark === true) || s.cfg.bg === 'aurora' }, [s.dark, s.cfg.bg])
     React.useEffect(() => {
       const cvs = ref.current
       if (cvs === null) return
@@ -746,7 +764,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
           return // no particles scheduled: stay idle
         }
         raf = requestAnimationFrame(loop)
-        fxFrame(g, cvs, weather, Date.now() - t0)
+        fxFrame(g, cvs, weather, Date.now() - t0, lightRef.current)
       }
       loop()
       return () => { try { cancelAnimationFrame(raf) } catch { /* already cancelled */ } }
@@ -2312,11 +2330,11 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
   function ExportTab(): React.ReactElement {
     const s = useS()
     return React.createElement('div', { className: 'vx-col' },
-      React.createElement('div', { className: 'vx-muted' }, '将当前会话导出为文件：JSON 可导入其他工具，Markdown 便于阅读分享，PDF 内嵌图片（打印时另存为 PDF）。'),
+      React.createElement('div', { className: 'vx-muted' }, '将当前会话导出为文件：JSON 可导入其他工具，Markdown 便于阅读分享，HTML 内嵌图片（导出 .html 文件，浏览器打开后打印即可另存为 PDF）。'),
       React.createElement('div', { className: 'vx-row wrap' },
         React.createElement('button', { className: 'vx-btn big', disabled: s.exporting === true, onClick: () => runExport('json') }, React.createElement(Icon, { n: 'download', size: 14 }), ' JSON'),
         React.createElement('button', { className: 'vx-btn big', disabled: s.exporting === true, onClick: () => runExport('markdown') }, React.createElement(Icon, { n: 'download', size: 14 }), ' Markdown'),
-        React.createElement('button', { className: 'vx-btn big', disabled: s.exporting === true, onClick: () => runExport('pdf') }, React.createElement(Icon, { n: 'download', size: 14 }), ' PDF（含图片）'),
+        React.createElement('button', { className: 'vx-btn big', disabled: s.exporting === true, onClick: () => runExport('pdf') }, React.createElement(Icon, { n: 'download', size: 14 }), ' HTML（含图片）'),
       ),
       s.exporting === true ? React.createElement('div', { className: 'vx-muted vx-pad-sm' }, '导出中…') : null,
       React.createElement(BackupControls, null),

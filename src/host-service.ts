@@ -6,7 +6,7 @@
  */
 
 import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
-import type { SessionQueryEngine } from '@deepseek-ai/dsh-session-query'
+import type { SessionLogSnapshot, SessionQueryEngine } from '@deepseek-ai/dsh-session-query'
 import { createRequire } from 'node:module'
 import { readFileSync } from 'node:fs'
 import { buildExportRows, buildMarkdown, buildPdfHtml, extractTurns } from './extract.ts'
@@ -103,9 +103,38 @@ export class CustomPluginHost {
     this.readCredential = options.readCredential ?? readDeepSeekCredential
   }
 
-  /** Persist the state document (debounced by the loader entry). */
+  /** Persisted state document (debounced by the loader entry). */
   async persist(): Promise<void> {
     await this.persistNow()
+  }
+
+  /** Read one complete session log snapshot. `readSession` replay-validates
+   * through a snapshot-mode constructor that rejects any seeded (forked or
+   * resumed) session whose log outgrew its seed boundary — newer dsh builds
+   * then fail every read with "seeded session constructor seed must equal its
+   * inherited prefix". `observeSession` serves the same log through its
+   * live/restore paths without that constructor, so fall back to it before
+   * surfacing the error. */
+  private async readSessionLog(sessionId: string): Promise<SessionLogSnapshot> {
+    try {
+      return await this.sessionQuery.readSession(sessionId as never)
+    } catch (error) {
+      const engine = this.sessionQuery as unknown as {
+        observeSession?: (id: never, options?: { projectionMode?: 'none' }) => Promise<{
+          header?: unknown
+          events?: readonly unknown[]
+        }>
+      }
+      if (typeof engine.observeSession !== 'function') throw error
+      const lease = await engine.observeSession(sessionId as never, { projectionMode: 'none' })
+      const events = [...(lease.events ?? [])]
+      const disposeSymbol = (Symbol as { dispose?: symbol }).dispose
+      if (disposeSymbol !== undefined) {
+        const dispose = (lease as unknown as Record<symbol, unknown>)[disposeSymbol]
+        if (typeof dispose === 'function') (dispose as () => void).call(lease)
+      }
+      return { session: lease.header, events } as unknown as SessionLogSnapshot
+    }
   }
 
   /** Persist after all queued state mutations have reached a stable point. */
@@ -292,7 +321,7 @@ export class CustomPluginHost {
    * dots available when the GUI deep-loads history. */
   async timelineGet(sessionId: string): Promise<{ ok: true; sessionId: string; items: TimelineItem[] } | { ok: false; error: string }> {
     try {
-      const snapshot = await this.sessionQuery.readSession(sessionId as never)
+      const snapshot = await this.readSessionLog(sessionId)
       return { ok: true, sessionId, items: extractTurns(snapshot.events).slice(-400) }
     } catch (error) {
       return { ok: false, error: String((error as Error)?.message ?? error) }
@@ -303,7 +332,7 @@ export class CustomPluginHost {
   async exportRun(sessionId: string, format: string): Promise<{ ok: true; content: string; fileName: string; mime: string } | { ok: false; error: string }> {
     let snapshot
     try {
-      snapshot = await this.sessionQuery.readSession(sessionId as never)
+      snapshot = await this.readSessionLog(sessionId)
     } catch (error) {
       return { ok: false, error: `读取会话失败: ${String((error as Error)?.message ?? error)}` }
     }
@@ -400,7 +429,7 @@ export class CustomPluginHost {
         : []
       const [page, snapshot] = await Promise.all([
         this.sessionQuery.searchEvents({ sessionId: sessionId as never, query, limit: 100, ...(eventTypes.length > 0 ? { filters: [{ kind: 'type', values: eventTypes }] } : {}) } as never),
-        this.sessionQuery.readSession(sessionId as never),
+        this.readSessionLog(sessionId),
       ])
       const anchors = new Map<number, number>()
       let anchor: number | undefined
@@ -485,7 +514,7 @@ export class CustomPluginHost {
     let scanned = 0
     const entries = await mapConcurrent(records, USAGE_SCAN_CONCURRENCY, async (record): Promise<ScanEntry> => {
       try {
-        const snapshot = await this.sessionQuery.readSession(record.header.id as never)
+        const snapshot = await this.readSessionLog(record.header.id)
         const dayUsage = aggregateDayUsage(snapshot.events, today)
         return { readable: true, usage: dayUsage }
       } catch {

@@ -4,6 +4,31 @@ All notable changes to this project are documented here. The format loosely
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions
 follow [Semantic Versioning](https://semver.org/).
 
+## 0.4.2 — 2026-09-12
+
+### Fixed
+
+- **Exports fail on forked/resumed sessions with "读取会话失败: seeded
+  session constructor seed must equal its inherited prefix".** Newer dsh
+  builds replay-validate inside `sessionQuery.readSession()` through a
+  snapshot-mode constructor that rejects any seeded (forked or resumed) session
+  whose log outgrew its seed boundary, so timeline, export, in-session
+  search, and usage scans all failed on those sessions. Every read now goes
+  through a shared helper that falls back to `observeSession()` (the live and
+  restore paths dsh's own session page uses) when `readSession()` rejects, and
+  surfaces the original error only when no fallback exists.
+- **The "PDF（含图片）" export button produced an `.html` file.** The button and
+  its description now say what actually lands on disk: "HTML（含图片）", a
+  print-ready HTML document you turn into a PDF via the browser print dialog.
+- **Weather FX are invisible on light backgrounds.** Snow, rain, and sakura
+  colors were tuned for the dark theme only — pure-white flakes, 6%-alpha pale
+  rain, and 90%-lightness pink petals all vanish over the near-white palette
+  backgrounds. The FX canvas now picks a darker particle palette (cool slate
+  snow, steel-blue rain, deeper rose petals, each with a lifted alpha floor)
+  whenever the resolved theme is light or the saturated aurora background is
+  active, and swaps palettes live on theme/background changes without
+  rebuilding the particle field.
+
 ## 0.4.1 — 2026-09-09
 
 ### Fixed
