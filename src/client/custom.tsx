@@ -835,11 +835,18 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
   // attempt per rendered-row growth stops the every-2s re-read loop when the
   // host's own tail cap is what leaves the oldest loaded rows uncovered.
   let railRefetchRows = -1
-  let lastDiagAt = 0
+  const diagAtByKey = new Map<string, number>()
   function diagThrottled(message: string): void {
+    // Throttle per diagnostic kind. A single shared window let the frequently
+    // emitted rail line swallow one-shot lines (the timeline result in
+    // particular), so the diagnostics ring reported "turns 0" while a fetch had
+    // in fact succeeded.
+    const space = message.indexOf(' ')
+    const key = space > 0 ? message.slice(0, space) : message.slice(0, 24)
     const now = Date.now()
-    if (now - lastDiagAt < 5000) return
-    lastDiagAt = now
+    const at = diagAtByKey.get(key)
+    if (at !== undefined && now - at < 5000) return
+    diagAtByKey.set(key, now)
     reportDiag(message)
   }
   function scheduleTurnsRefetch(): void {
@@ -2384,15 +2391,16 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     const [items, setItems] = React.useState<ConversationSearchItem[]>([])
     const [status, setStatus] = React.useState('')
     const [hasMore, setHasMore] = React.useState(false)
+    const [scanned, setScanned] = React.useState(false)
     React.useEffect(() => {
-      if (query.trim() === '' || S.sessionId === null) { setItems([]); setStatus(''); setHasMore(false); return }
+      if (query.trim() === '' || S.sessionId === null) { setItems([]); setStatus(''); setHasMore(false); setScanned(false); return }
       const controller = new AbortController()
       const timer = setTimeout(() => {
         setStatus('搜索中…')
         void apiConversationSearch(S.sessionId as string, query.trim(), kinds, controller.signal).then((result) => {
           if (controller.signal.aborted) return
           if (!result.ok) { setItems([]); setStatus(result.error ?? '搜索不可用'); return }
-          setItems(result.items); setHasMore(result.hasMore); setStatus(result.items.length === 0 ? '没有匹配结果' : '')
+          setItems(result.items); setHasMore(result.hasMore); setScanned(result.source === 'scan'); setStatus(result.items.length === 0 ? '没有匹配结果' : '')
         })
       }, 250)
       return () => { clearTimeout(timer); controller.abort() }
@@ -2400,7 +2408,8 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     const toggle = (kind: ConversationSearchKind): void => setKinds((old) => old.includes(kind) ? (old.length > 1 ? old.filter((item) => item !== kind) : old) : [...old, kind])
     const names: Record<ConversationSearchKind, string> = { user: '用户', assistant: '助手', tool: '工具' }
     return React.createElement('div', { className: 'vx-col' },
-      React.createElement('div', { className: 'vx-muted' }, '搜索当前会话的索引内容；结果只在本次请求中使用。'),
+      React.createElement('div', { className: 'vx-muted' }, '搜索当前会话的消息与工具记录；结果只在本次请求中使用。'),
+      scanned ? React.createElement('div', { className: 'vx-muted' }, '本部署未开启 dsh 的事件全文索引，已改为直接扫描会话日志（结果按出现顺序，最多 100 条）。') : null,
       React.createElement('input', { className: 'vx-input', autoFocus: true, placeholder: '输入搜索词…', value: query, onChange: (e: React.ChangeEvent<HTMLInputElement>) => setQuery(e.target.value) }),
       React.createElement('div', { className: 'vx-row' }, (['user', 'assistant', 'tool'] as const).map((kind) => React.createElement('label', { key: kind, className: 'vx-muted' }, React.createElement('input', { type: 'checkbox', checked: kinds.includes(kind), onChange: () => toggle(kind) }), ' ', names[kind]))),
       status !== '' ? React.createElement('div', { className: 'vx-muted' }, status) : null,

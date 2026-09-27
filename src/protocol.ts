@@ -190,6 +190,8 @@ export interface ConversationSearchItem {
 export interface ConversationSearchResult {
   items: ConversationSearchItem[]
   hasMore: boolean
+  /** 'index' when dsh's event index answered, 'scan' when the session log was searched directly. */
+  source: 'index' | 'scan'
 }
 
 /** Balance payload returned by the DeepSeek balance endpoint. */

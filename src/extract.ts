@@ -82,6 +82,44 @@ export function flagsOf(text: string): { hasLatex: boolean; hasMathml: boolean; 
   }
 }
 
+/**
+ * Searchable text of one event, flattened the same way the export does it.
+ * The session-query index is opt-in on current dsh deployments, so the search
+ * route falls back to scanning this text over the log it already read.
+ */
+export function eventSearchText(event: SessionEvent): string {
+  switch (event.type) {
+    case 'user/message':
+    case 'assistant/message':
+    case 'system/message':
+    case 'developer/message':
+      return messageText((event.data as { message?: { content?: never } }).message?.content ?? (event.data as { content?: never }).content)
+    case 'tool/call':
+      return `${event.data.name ?? ''} ${event.data.arguments ?? ''}`
+    case 'tool/result':
+      return messageText(event.data.message?.content)
+    default:
+      return ''
+  }
+}
+
+/** Which conversation role a search hit belongs to, or null when it is not one. */
+export function searchKindOf(type: string): 'user' | 'assistant' | 'tool' | null {
+  if (type === 'user/message') return 'user'
+  if (type === 'assistant/message') return 'assistant'
+  if (type.startsWith('tool/')) return 'tool'
+  return null
+}
+
+/** Excerpt centered on the match, so a hit late in a long message is readable. */
+export function snippetAround(text: string, at: number, needleLength: number, max: number): string {
+  const start = Math.max(0, at - Math.floor(max / 3))
+  const end = Math.min(text.length, start + max)
+  const lead = start > 0 ? '…' : ''
+  const tail = end < text.length ? '…' : ''
+  return lead + text.slice(start, end).replace(/\s+/g, ' ').trim() + tail
+}
+
 /** Extract one timeline node per direct user message from a session log. */
 export function extractTurns(events: readonly SessionEvent[]): TimelineItem[] {
   const items: TimelineItem[] = []

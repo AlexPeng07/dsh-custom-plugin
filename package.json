@@ -1,8 +1,10 @@
 {
   "name": "@alexpeng/dsh-custom-plugin",
   "description": "Custom convenience suite for the dsh web GUI: appearance, timeline, folders, prompts, session export/search, Mermaid, quote reply, usage analytics, local budget, key-free backups, and a Ctrl/Cmd+K command palette; dual-face plugin mounted without dsh source changes.",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "type": "module",
+  "icon": "./icon.svg",
+  "icon": "./icon.svg",
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",
   "exports": {
@@ -14,6 +16,7 @@
       "types": "./lib/types/client/index.d.ts",
       "default": "./lib/client.js"
     },
+    "./locale/*.json": "./locale/*.json",
     "./package.json": "./package.json"
   },
   "dsh": {
@@ -87,6 +90,8 @@
   },
   "files": [
     "lib",
+    "locale/*.json",
+    "icon.svg",
     "cordis.patch.yml",
     "CHANGELOG.md",
     "README.md",

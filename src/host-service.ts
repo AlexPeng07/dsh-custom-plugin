@@ -9,7 +9,7 @@ import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
 import type { SessionLogSnapshot, SessionQueryEngine } from '@deepseek-ai/dsh-session-query'
 import { createRequire } from 'node:module'
 import { readFileSync } from 'node:fs'
-import { buildExportRows, buildMarkdown, buildPdfHtml, extractTurns } from './extract.ts'
+import { buildExportRows, buildMarkdown, buildPdfHtml, eventSearchText, extractTurns, searchKindOf, snippetAround } from './extract.ts'
 import { readDeepSeekCredential } from './credentials.ts'
 import { SystemCredentialStore, type CredentialStore } from './system-credentials.ts'
 import type { BackupImportMode, BalanceInfo, ConversationSearchItem, ConversationSearchKind, ConversationSearchResult, CredentialStorage, CustomPluginBackupV1, CustomPluginPublicState, CustomPluginState, TimelineItem, UsageRow } from './protocol.ts'
@@ -420,24 +420,36 @@ export class CustomPluginHost {
     return { key: '', source: 'none' }
   }
 
-  /** Search one session using DSH's indexed event search and bind hits to a user-turn anchor. */
+  /** Search one session and bind hits to a user-turn anchor.
+   *
+   * DSH's indexed event search is the preferred path, but its shipped web
+   * profile composes `session-query-sqlite` with `openAt: never`, so the index
+   * is absent by default and `searchEvents()` rejects. The full log is read for
+   * the anchor map anyway, so a rejected index degrades to a literal scan of
+   * that log instead of failing the whole feature. */
   async conversationSearch(sessionId: string, query: string, kinds: readonly ConversationSearchKind[]): Promise<{ ok: true; } & ConversationSearchResult | { ok: false; error: string }> {
     const wanted = new Set(kinds.length > 0 ? kinds : ['user', 'assistant', 'tool'])
+    const eventTypes = kinds.length > 0
+      ? kinds.flatMap((kind) => kind === 'user' ? ['user/message'] : kind === 'assistant' ? ['assistant/message'] : ['tool/call', 'tool/result'])
+      : []
+    const indexRead = this.sessionQuery.searchEvents({ sessionId: sessionId as never, query, limit: 100, ...(eventTypes.length > 0 ? { filters: [{ kind: 'type', values: eventTypes }] } : {}) } as never).then((page) => page, () => null)
+    let snapshot: SessionLogSnapshot
+    let page: Awaited<typeof indexRead>
     try {
-      const eventTypes = kinds.length > 0
-        ? kinds.flatMap((kind) => kind === 'user' ? ['user/message'] : kind === 'assistant' ? ['assistant/message'] : ['tool/call', 'tool/result'])
-        : []
-      const [page, snapshot] = await Promise.all([
-        this.sessionQuery.searchEvents({ sessionId: sessionId as never, query, limit: 100, ...(eventTypes.length > 0 ? { filters: [{ kind: 'type', values: eventTypes }] } : {}) } as never),
-        this.readSessionLog(sessionId),
-      ])
-      const anchors = new Map<number, number>()
-      let anchor: number | undefined
-      for (const event of snapshot.events) {
-        if (event.type === 'user/message') anchor = event.seq
-        if (anchor !== undefined) anchors.set(event.seq, anchor)
-      }
-      const items: ConversationSearchItem[] = []
+      const both = await Promise.all([this.readSessionLog(sessionId), indexRead])
+      snapshot = both[0]
+      page = both[1]
+    } catch (error) {
+      return { ok: false, error: String((error as Error)?.message ?? error) }
+    }
+    const anchors = new Map<number, number>()
+    let anchor: number | undefined
+    for (const event of snapshot.events) {
+      if (event.type === 'user/message') anchor = event.seq
+      if (anchor !== undefined) anchors.set(event.seq, anchor)
+    }
+    const items: ConversationSearchItem[] = []
+    if (page !== null) {
       for (const hit of page.items) {
         const kind: ConversationSearchKind | null = hit.type === 'user/message' ? 'user' : hit.type === 'assistant/message' ? 'assistant' : hit.type.startsWith('tool/') ? 'tool' : null
         if (kind === null || !wanted.has(kind)) continue
@@ -445,10 +457,22 @@ export class CustomPluginHost {
         if (anchorSeq === undefined) continue
         items.push({ sessionId, seq: hit.seq, anchorSeq, kind, time: hit.time, snippet: hit.snippet.slice(0, 500) })
       }
-      return { ok: true, items, hasMore: page.nextCursor !== undefined }
-    } catch (error) {
-      return { ok: false, error: String((error as Error)?.message ?? error) }
+      return { ok: true, items, hasMore: page.nextCursor !== undefined, source: 'index' }
     }
+    const needle = query.toLowerCase()
+    let truncated = false
+    for (const event of snapshot.events) {
+      const kind = searchKindOf(event.type)
+      if (kind === null || !wanted.has(kind)) continue
+      const anchorSeq = anchors.get(event.seq)
+      if (anchorSeq === undefined) continue
+      const text = eventSearchText(event)
+      const at = text.toLowerCase().indexOf(needle)
+      if (at < 0) continue
+      items.push({ sessionId, seq: event.seq, anchorSeq, kind, time: event.time, snippet: snippetAround(text, at, needle.length, 500) })
+      if (items.length >= 100) { truncated = true; break }
+    }
+    return { ok: true, items, hasMore: truncated, source: 'scan' }
   }
 
   private async resolveApiKey(): Promise<string> {

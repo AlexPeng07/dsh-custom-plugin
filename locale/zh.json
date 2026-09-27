@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Custom 便利套件",
+    "description": "为 DSH Web GUI 提供外观个性化、消息时间线、项目文件夹、提示词库、会话导出与搜索、Mermaid 渲染、引用回复，以及 DeepSeek 余额与 token 用量。"
+  }
+}
