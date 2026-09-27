@@ -92,6 +92,18 @@ interface SessionScopedProps {
   readonly sessionId?: string | null
 }
 
+/** The `ctx.remote.session` methods this plugin calls. */
+interface SessionRemoteLike {
+  fork(request: { sessionId: string; atSeq?: number }): Promise<{ ok: true; value: { sessionId: string } } | { ok: false; error?: unknown }>
+  search(request: { query: string }, signal?: AbortSignal): Promise<{ ok: true; value: { items: Array<{ sessionId: string; snippet: string }> } } | { ok: false; error?: unknown }>
+}
+
+/** The `ctx.uiWorkspace` navigation methods this plugin calls. */
+interface WorkspaceNavLike {
+  openSession(id: string): void
+  connectWorkspace(id: string): Promise<string>
+}
+
 function fmtClock(time: number): string {
   const d = new Date(time)
   const pad = (n: number): string => String(n).padStart(2, '0')
@@ -337,20 +349,29 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
    * Follow the Session the conversation is showing. The 0.1.7 session list
    * snapshot dropped its `current` field — view selection moved to the
    * Workspace browser — so the plugin reads the identity off the standard
-   * `sessionId` prop that every session-scoped slot entry receives. Several
-   * entries can carry it at once; only the first one to see a new value acts,
-   * and the entry that installed the value is the one that clears it when the
-   * conversation closes and no session-scoped slot renders any more.
+   * `sessionId` prop that every session-scoped slot entry receives.
+   *
+   * Several entries carry it at once (two header actions, the utilities entry,
+   * the quote dock, and one tail entry per turn), and a turn-level entry can
+   * unmount while the same Session stays open. Only the LAST mounted holder may
+   * clear the identity, otherwise the rail would go blank under the surviving
+   * entries, whose props never change and so never re-run their effect.
    */
+  let sessionScopeHolders = 0
   function useViewedSession(props: { sessionId?: string | null }): void {
     const id = typeof props.sessionId === 'string' && props.sessionId !== '' ? props.sessionId : null
     React.useEffect(() => {
-      if (S.sessionId === id) return () => {}
-      S.anchors.clear()
-      S.seqAnchor.clear()
-      setS({ sessionId: id, turns: null, railPositions: [], railSig: '', railHover: null })
-      if (id !== null) void fetchTurns(id)
-      return () => { if (S.sessionId === id) setS({ sessionId: null }) }
+      sessionScopeHolders++
+      if (S.sessionId !== id) {
+        S.anchors.clear()
+        S.seqAnchor.clear()
+        setS({ sessionId: id, turns: null, railPositions: [], railSig: '', railHover: null })
+        if (id !== null) void fetchTurns(id)
+      }
+      return () => {
+        sessionScopeHolders--
+        if (sessionScopeHolders === 0 && S.sessionId === id) setS({ sessionId: null })
+      }
     }, [id])
   }
 
@@ -1432,17 +1453,11 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
    * The `ctx.remote` namespaces this plugin calls, read fail-soft so a profile
    * without the Session Remote degrades to a toast instead of throwing.
    */
-  function sessionRemote(): {
-    fork(request: { sessionId: string; atSeq?: number }): Promise<{ ok: true; value: { sessionId: string } } | { ok: false; error?: unknown }>
-    search(request: { query: string }, signal?: AbortSignal): Promise<{ ok: true; value: { items: Array<{ sessionId: string; snippet: string }> } } | { ok: false; error?: unknown }>
-  } | undefined {
-    const remote = C.get('remote') as { session?: Record<string, unknown> } | undefined
-    const session = remote?.session
-    if (session === undefined || typeof session !== 'object') return undefined
-    const fork = (session as { fork?: unknown }).fork
-    const search = (session as { search?: unknown }).search
-    if (typeof fork !== 'function' || typeof search !== 'function') return undefined
-    return session as unknown as ReturnType<typeof sessionRemote>
+  function sessionRemote(): SessionRemoteLike | undefined {
+    const session = (C.get('remote') as { session?: Record<string, unknown> } | undefined)?.session
+    if (session === undefined) return undefined
+    if (typeof session.fork !== 'function' || typeof session.search !== 'function') return undefined
+    return session as unknown as SessionRemoteLike
   }
 
   /** Render a Remote failure envelope as one readable line. */
@@ -1461,10 +1476,10 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
    * Navigation moved to the Workspace browser's `uiWorkspace` service: the
    * Session Controller no longer opens or selects a Session for a caller.
    */
-  function workspaceNav(): { openSession(id: string): void; connectWorkspace(id: string): Promise<string> } | undefined {
-    const nav = C.get('uiWorkspace') as { openSession?: (id: string) => void; connectWorkspace?: (id: string) => Promise<string> } | undefined
+  function workspaceNav(): WorkspaceNavLike | undefined {
+    const nav = C.get('uiWorkspace') as { openSession?: unknown; connectWorkspace?: unknown } | undefined
     if (nav === undefined || typeof nav.openSession !== 'function' || typeof nav.connectWorkspace !== 'function') return undefined
-    return nav as unknown as ReturnType<typeof workspaceNav>
+    return nav as WorkspaceNavLike
   }
   async function openWorkspaceItem(id: string): Promise<void> {
     const nav = workspaceNav()

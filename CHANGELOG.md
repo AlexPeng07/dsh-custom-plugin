@@ -4,6 +4,60 @@ All notable changes to this project are documented here. The format loosely
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions
 follow [Semantic Versioning](https://semver.org/).
 
+## 0.5.0 — 2026-09-28
+
+### Changed
+
+- **Target dsh 0.1.7-rc.2.** All `@deepseek-ai/dsh-*` dependencies, the
+  `@deepseek-ai/dsh-tools` peer range, and `@deepseek-ai/cordis` moved to the
+  versions that release ships, and `engines.dsh` now states the supported range.
+  dsh checks a bundle's `@deepseek-ai/dsh-*` peer ranges against its own runtime
+  version at install and startup and skips a bundle that does not match, so the
+  declared range is the release this package was built and verified against.
+- The browser half declares `dsh.client.inject` as the five packages that own
+  the slots it registers into, replacing the retired
+  `@deepseek-ai/dsh-client-runtime` row.
+- Slot-provided data shapes (`SessionListState`, `WorkspaceListState`,
+  `TurnLocation`) are now declared locally instead of imported from harness
+  controller packages that rename across releases; only `SnapshotSelectorHook`
+  still comes from the slot SDK.
+- In-session search uses dsh's event index when the deployment opens one and
+  otherwise scans the session log it already read, reporting which path answered
+  in the panel. dsh's shipped `web` profile configures the index with
+  `openAt: never`, so the indexed route was unavailable on a default install.
+- Plugin Manager cards, bundle details, and the settings inventory now show a
+  real name and icon: `locale/en.json`, `locale/zh.json`, and `icon.svg`.
+
+### Fixed
+
+- **The timeline rail, export, and quote features lost the current session on
+  dsh 0.1.7.** The session list snapshot dropped its `current` field (view
+  selection moved to the Workspace browser), so the rail tracked nothing. The
+  viewed session now comes from the standard `sessionId` prop every
+  session-scoped slot entry receives.
+- **Opening a session, a workspace, a branch, or a cross-session search failed
+  silently.** `ctx.sessions` no longer exposes `open`, `fork`, or `search`;
+  navigation goes through `ctx.uiWorkspace`, and branching and full-text search
+  through `ctx.remote.session.fork()` / `.search()`, each with an honest
+  failure message when the service is absent.
+- **Exports lost tool results and the new model-visible messages.** The
+  `tool-result` content block was replaced by a tool-role message whose call id
+  now sits on the message (`toolCallId`, still falling back to `source.callId`
+  for older logs); `system/message` and `developer/message` are exported as
+  injected context; and `file`, `tool-addition`, `tool-removal`, and offloaded
+  `image` blocks are named instead of dropped.
+- `conversation.chat.turnTail` changed from a chain slot to a list slot, so its
+  `select` registration option no longer applies and was replaced by an id and
+  order.
+- Client diagnostics are throttled per message kind. The previous single shared
+  window let the frequently emitted rail line swallow the one-shot timeline
+  result line, which made a successful timeline fetch look like zero turns.
+- `pnpm smoke` now checks the manifest fields dsh reads before it activates a
+  bundle (client platform and `./client` export, patch path, icon size, locale
+  display metadata, and peer ranges agreeing with the build target), so an
+  unsupported or stale declaration fails the local gate instead of being skipped
+  silently in a user's profile.
+
 ## 0.4.2 — 2026-09-12
 
 ### Fixed

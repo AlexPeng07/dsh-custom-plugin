@@ -9,7 +9,11 @@
  *     without materializing (the lazy CJS model), with id == package name.
  *  2. lib/index.js — imports cleanly as ESM and exposes inject/apply.
  *  3. cordis.patch.yml — carries the expected insert row.
- *  4. the local mermaid engine dependency resolves from the built tree.
+ *  4. package.json — the fields dsh reads before activating the bundle:
+ *     dsh.client platform/exports, dsh.bundle.patch, the icon file, the
+ *     locale display metadata, and peer ranges that agree with the dsh release
+ *     this bundle was type-checked against.
+ *  5. the local mermaid engine dependency resolves from the built tree.
  *
  * Run after `pnpm build` when touching the client bundle, the loader entry,
  * or the packaging config: `pnpm smoke`. Requires msedge.exe (Windows) or a
@@ -59,6 +63,77 @@ if (/- id:\s*custom-plugin\b/.test(patch) && patch.includes(`name: '${ID}'`)) {
   ok('cordis.patch.yml: insert row references the package name')
 } else {
   bad('cordis.patch.yml: insert row missing or not referencing the package name')
+}
+
+// ── manifest contract: fields dsh reads before it ever activates the plugin ──
+// A wrong value here skips or hides the whole bundle with no runtime error, so
+// these are checked from the files rather than trusted.
+
+const manifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'))
+const clientDecl = manifest.dsh?.client
+if (clientDecl?.platform !== 'web') {
+  bad(`package.json: dsh.client.platform must be "web" (got ${JSON.stringify(clientDecl?.platform)}) — the web shell skips rows for any other platform`)
+} else {
+  ok(`package.json: dsh.client declares platform web with ${clientDecl.inject?.length ?? 0} inject row(s)`)
+}
+const clientExport = manifest.exports?.['./client']?.default ?? manifest.exports?.['./client']
+if (typeof clientExport !== 'string' || !existsSync(join(root, clientExport))) {
+  bad('package.json: dsh.client is declared but exports["./client"] is missing or unbuildable — client-modules throws on this row')
+} else {
+  ok(`package.json: exports["./client"] resolves (${clientExport})`)
+}
+const patchDecl = manifest.dsh?.bundle?.patch
+if (typeof patchDecl !== 'string' || !existsSync(join(root, patchDecl))) {
+  bad(`package.json: dsh.bundle.patch points at a missing file (${JSON.stringify(patchDecl)})`)
+} else {
+  ok(`package.json: dsh.bundle.patch resolves (${patchDecl})`)
+}
+if (typeof manifest.icon === 'string') {
+  const iconPath = join(root, manifest.icon)
+  const iconBytes = existsSync(iconPath) ? (await readFile(iconPath)).byteLength : -1
+  if (iconBytes < 0 || manifest.icon.startsWith('/') || /^[a-z]+:/.test(manifest.icon)) {
+    bad(`package.json: icon must be a readable path inside the package (got ${JSON.stringify(manifest.icon)})`)
+  } else if (iconBytes > 256 * 1024) {
+    bad(`package.json: icon is ${iconBytes} bytes — dsh accepts at most 256 KiB`)
+  } else {
+    ok(`package.json: icon present (${manifest.icon}, ${iconBytes} bytes)`)
+  }
+} else {
+  bad('package.json: no icon field — the plugin card shows the panel default artwork')
+}
+for (const localeFile of ['locale/en.json', 'locale/zh.json']) {
+  let meta
+  try {
+    meta = JSON.parse(await readFile(join(root, localeFile), 'utf8')).meta
+  } catch {
+    bad(`package.json: ${localeFile} is missing or unparsable — plugin display text falls back to the package name`)
+    continue
+  }
+  if (typeof meta?.title !== 'string' || typeof meta?.description !== 'string') {
+    bad(`package.json: ${localeFile} needs meta.title and meta.description`)
+  } else {
+    ok(`package.json: ${localeFile} carries meta.title (${meta.title})`)
+  }
+}
+
+// The runtime peer gate compares @deepseek-ai/dsh-* ranges against the running
+// dsh version; a stale range silently under- or over-states support, so the
+// declared floor must be the release this bundle was type-checked against.
+for (const [name, range] of Object.entries(manifest.peerDependencies ?? {})) {
+  if (!name.startsWith('@deepseek-ai/dsh-')) continue
+  let installed
+  try {
+    installed = JSON.parse(await readFile(join(root, 'node_modules', name, 'package.json'), 'utf8')).version
+  } catch {
+    bad(`peerDependencies: ${name} is declared but not installed, so its range cannot be checked`)
+    continue
+  }
+  const pinned = String(range).replace(/^[\^~]/, '')
+  if (pinned !== installed) {
+    bad(`peerDependencies: ${name} range ${JSON.stringify(range)} disagrees with the ${installed} build target`)
+  } else {
+    ok(`peerDependencies: ${name} ${range} matches the installed ${installed}`)
+  }
 }
 
 const require = createRequire(join(root, 'lib/index.js'))

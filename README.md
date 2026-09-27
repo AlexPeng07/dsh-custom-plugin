@@ -93,8 +93,8 @@ Plugin state can be exported as a versioned JSON backup containing appearance, f
 - **Anti auto-scroll**: force `scroll-behavior: auto` so sends never yank the view to the bottom (off by default);
 - **Formula copy**: LaTeX / MathML copy chips under matching messages (MathML pastes into Word);
 - **Batch archive**: select sessions and archive them in bulk; running sessions are unavailable and completion reports separate success/failure counts. DSH exposes no restore API yet, so the plugin provides no restore entry point.
-- **Session search**: search current-session user, assistant, and tool content through DSH's official index and jump to the containing turn; superseded requests are cancelled.
-- **Command palette**: press `Ctrl+K` / `Cmd+K` outside editors to search sessions, workspaces, prompts, and common actions; cross-session content search uses DSH's official API.
+- **Session search**: search current-session user, assistant, and tool content and jump to the containing turn; superseded requests are cancelled. DSH's event index is used when the deployment opens one, and otherwise the plugin scans the session log it already read (the panel says which path answered).
+- **Command palette**: press `Ctrl+K` / `Cmd+K` outside editors to search sessions, workspaces, prompts, and common actions; cross-session content search uses DSH's official API and reports its own unavailability.
 - **Reliable archive**: running sessions are unavailable by default and batch completion reports separate success and failure counts.
 
 ### Balance and usage
@@ -118,7 +118,7 @@ The `custom_plugin_status` tool reports appearance config, today's per-model usa
 
 ## Install
 
-Prerequisites: Node 22+, pnpm, and the `dsh` CLI (the official `@deepseek-ai/dsh` npm package; `npx @deepseek-ai/dsh` stands in for `dsh` when it is not installed globally).
+Prerequisites: Node 22+, pnpm, and the `dsh` CLI (the official `@deepseek-ai/dsh` npm package; `npx @deepseek-ai/dsh` stands in for `dsh` when it is not installed globally). This release targets **dsh 0.1.7-rc.2 or newer** — dsh checks a bundle's `@deepseek-ai/dsh-*` peer ranges against its own version at install and startup, and skips a bundle that does not match, so `package.json` declares exactly the range this package was built and verified against. On an older dsh, install the matching older plugin release instead of granting a compatibility exemption.
 
 ### From npm
 
@@ -191,13 +191,17 @@ Appearance and feature toggles (the `cfg` field, all with defaults):
 - Cost estimates use DeepSeek's official peak/off-peak list prices and are indicative only.
 - Dark-mode background restriction is deliberate: only "no color" and "aurora" are selectable in dark mode.
 - DSH currently exposes no archive-restore API; the plugin does not bypass that boundary by editing the underlying registry.
+- dsh's shipped `web` profile composes its session-query index with `openAt: never`, so full-text search is off unless the deployment enables it. In-session search therefore answers from a direct log scan (ordered, capped at 100 hits) and the palette's cross-session search shows dsh's own refusal.
 
 ## Development
 
 ```sh
-pnpm typecheck   # type check
-pnpm test        # vitest unit tests
-pnpm build       # build the node ESM library and the browser bundle into lib/
+pnpm typecheck      # type check
+pnpm test           # vitest unit tests
+pnpm build          # build the node ESM library and the browser bundle into lib/
+pnpm check:readme   # bilingual README hash consistency
+pnpm smoke          # post-build contract checks: loader handshake, manifest
+                    # fields dsh reads, patch row, local Mermaid engine
 ```
 
 ## License

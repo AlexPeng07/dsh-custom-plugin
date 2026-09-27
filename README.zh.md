@@ -93,8 +93,8 @@ DeepSeek Harness（DSH）Web GUI 的 Custom 便利套件：个性化外观、天
 - **防自动跳转**：强制 `scroll-behavior: auto`，发送消息不再把视图拽到底部（默认关闭）；
 - **公式复制**：含公式的消息下方显示 LaTeX / MathML 复制按钮（MathML 可直接粘贴进 Word）；
 - **批量归档**：勾选多个会话批量归档，运行中会话默认不可选，并分别报告成功与失败数量；DSH 尚未公开恢复接口，插件不提供恢复入口。
-- **会话搜索**：通过 DSH 官方索引搜索当前会话的用户、助手和工具内容，点击结果跳转到所属轮次。
-- **快捷面板**：在非编辑状态按 `Ctrl+K` / `Cmd+K`，统一搜索会话、工作区、提示词和常用功能。
+- **会话搜索**：搜索当前会话的用户、助手和工具内容，点击结果跳转到所属轮次；部署开启了 dsh 事件索引时走索引，否则直接扫描同一份会话日志，面板会说明本次用的是哪条路径。
+- **快捷面板**：在非编辑状态按 `Ctrl+K` / `Cmd+K`，统一搜索会话、工作区、提示词和常用功能；跨会话全文搜索使用 dsh 官方接口，不可用时如实提示原因。
 - **可靠归档**：运行中的会话默认不可选，批量操作分别报告成功与失败数量。
 
 ### 额度与用量
@@ -118,7 +118,7 @@ DeepSeek Harness（DSH）Web GUI 的 Custom 便利套件：个性化外观、天
 
 ## 安装
 
-前置：Node 22+、pnpm，以及 `dsh` CLI（官方 npm 包 `@deepseek-ai/dsh`；未全局安装时，可用 `npx @deepseek-ai/dsh` 代替 `dsh`）。
+前置：Node 22+、pnpm，以及 `dsh` CLI（官方 npm 包 `@deepseek-ai/dsh`；未全局安装时，可用 `npx @deepseek-ai/dsh` 代替 `dsh`）。本版本面向 **dsh 0.1.7-rc.2 及更新版本**：dsh 在安装与启动时会用自身版本校验 bundle 的 `@deepseek-ai/dsh-*` peer 范围，不匹配的 bundle 会被整包跳过，所以 `package.json` 只声明本包实际构建并验证过的范围。仍在旧版 dsh 的用户请安装对应的旧版插件，而不是授予兼容性豁免。
 
 ### 从 npm 安装
 
@@ -191,13 +191,17 @@ dsh plugin --profile web add link:F:/dsh-plugin-dev
 - 费用按 DeepSeek 官方峰谷单价估算，仅供参考。
 - 深色模式下背景限制是刻意设计：仅「无颜色」与「极光」可选。
 - DSH 当前没有公开的归档恢复接口；插件不会绕过官方边界修改底层注册表。
+- dsh 自带的 `web` profile 把 session-query 索引配成 `openAt: never`，即默认不启用全文搜索。此时会话内搜索改为直接扫描日志（按出现顺序，最多 100 条），快捷面板的跨会话搜索会显示 dsh 给出的不可用原因。
 
 ## 开发
 
 ```sh
-pnpm typecheck   # 类型检查
-pnpm test        # vitest 单元测试
-pnpm build       # 构建 node ESM 库与浏览器 bundle 到 lib/
+pnpm typecheck      # 类型检查
+pnpm test           # vitest 单元测试
+pnpm build          # 构建 node ESM 库与浏览器 bundle 到 lib/
+pnpm check:readme   # 双语 README 哈希一致性
+pnpm smoke          # 构建后契约自检：加载器握手、dsh 会读的清单字段、
+                    # patch 行、本地 Mermaid 引擎
 ```
 
 ## 许可证
