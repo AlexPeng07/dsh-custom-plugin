@@ -42,16 +42,26 @@ export function blockText(block: ContentBlock | undefined | null): string {
     case 'reasoning':
       return String(block.text ?? '')
     case 'image':
-      return '[图片]'
+      // An offloaded image reaches the model as placeholder text; the export
+      // says so instead of pretending bytes are present.
+      return block.offloaded === true ? '[图片（已折叠）]' : '[图片]'
+    case 'file':
+      return `[文件 ${block.attachment?.name ?? ''}]`
     case 'tool-call':
       return `[调用工具 ${block.name ?? ''}]`
-    case 'tool-result': {
-      let text = ''
-      for (const item of block.content ?? []) text += blockText(item)
-      return `[工具结果] ${text.slice(0, 240)}`
+    case 'tool-addition':
+      return `[启用工具 ${block.toolName ?? ''}]`
+    case 'tool-removal':
+      return `[移除工具 ${block.toolName ?? ''}]`
+    default: {
+      // Session logs written by another harness generation carry block types
+      // this build's types do not name (a 0.1.1 `tool-result` block, for
+      // example). Anything with a nested content array still flattens.
+      const raw = block as { content?: unknown; toolCallId?: unknown }
+      if (!Array.isArray(raw.content)) return ''
+      const inner = (raw.content as ContentBlock[]).map((item) => blockText(item)).join('')
+      return raw.toolCallId !== undefined ? `[工具结果] ${inner.slice(0, 240)}` : inner
     }
-    default:
-      return ''
   }
 }
 
@@ -186,6 +196,10 @@ export async function buildExportRows(
       } else {
         rows.push({ seq: event.seq, time: event.time, kind: 'context', text: text.slice(0, 2000), images: [] })
       }
+    } else if (event.type === 'system/message' || event.type === 'developer/message') {
+      // The rendered system prompt and incremental tool changes are part of the
+      // model-visible history; an export that dropped them misrepresents the run.
+      rows.push({ seq: event.seq, time: event.time, kind: 'context', text: messageText(event.data.message.content).slice(0, 2000), images: [] })
     } else if (event.type === 'assistant/message') {
       const message = event.data.message
       rows.push({ seq: event.seq, time: event.time, kind: 'assistant', text: messageText(message.content) })
@@ -193,7 +207,9 @@ export async function buildExportRows(
       if (event.data.callId !== undefined) callNames.set(String(event.data.callId), event.data.name ?? '')
       rows.push({ seq: event.seq, time: event.time, kind: 'tool-call', text: '', toolName: event.data.name ?? '', toolArgs: event.data.arguments ?? '' })
     } else if (event.type === 'tool/result') {
-      const callId = event.data.message?.source?.callId
+      // 0.1.7 moved call correlation onto the message itself; older logs carry
+      // it only on the source.
+      const callId = event.data.message?.toolCallId ?? event.data.message?.source?.callId
       rows.push({
         seq: event.seq,
         time: event.time,

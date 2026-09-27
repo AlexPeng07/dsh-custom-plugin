@@ -21,10 +21,14 @@
       "patch": "./cordis.patch.yml"
     },
     "client": {
+      "platform": "web",
       "inject": [
-        "@deepseek-ai/dsh-client-runtime"
-      ],
-      "platform": "web"
+        "@deepseek-ai/dsh-client-ui-chat",
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-sidebar"
+      ]
     }
   },
   "publishConfig": {
@@ -38,7 +42,8 @@
   "bugs": "https://github.com/AlexPeng07/dsh-custom-plugin/issues",
   "homepage": "https://github.com/AlexPeng07/dsh-custom-plugin#readme",
   "engines": {
-    "node": ">=22"
+    "node": ">=22",
+    "dsh": ">=0.1.7-rc.2 <0.2.0"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json && tsdown",
@@ -53,23 +58,23 @@
     "prepublishOnly": "pnpm typecheck && pnpm test"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "^4.0.1",
-    "@deepseek-ai/dsh-tools": "^0.1.1-rc.1"
+    "@deepseek-ai/cordis": "^4.0.4",
+    "@deepseek-ai/dsh-tools": "^0.1.7-rc.2"
   },
   "dependencies": {
     "mermaid": "^11.6.0"
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "^4.0.1",
-    "@deepseek-ai/dsh-attachment": "^0.1.1-rc.1",
-    "@deepseek-ai/dsh-client-runtime": "^0.1.1-rc.1",
-    "@deepseek-ai/dsh-client-ui-slots": "^0.1.1-rc.1",
-    "@deepseek-ai/dsh-client-ui-theme": "^0.1.1-rc.1",
-    "@deepseek-ai/dsh-host-webserver": "^0.1.1-rc.1",
-    "@deepseek-ai/dsh-llm": "^0.1.1-rc.1",
-    "@deepseek-ai/dsh-session": "^0.1.1-rc.1",
-    "@deepseek-ai/dsh-session-query": "^0.1.1-rc.1",
-    "@deepseek-ai/dsh-tools": "^0.1.1-rc.1",
+    "@deepseek-ai/cordis": "^4.0.4",
+    "@deepseek-ai/dsh-attachment": "^0.1.7-rc.2",
+    "@deepseek-ai/dsh-client-store": "^0.1.7-rc.2",
+    "@deepseek-ai/dsh-client-ui-slots": "^0.1.7-rc.2",
+    "@deepseek-ai/dsh-client-ui-theme": "^0.1.7-rc.2",
+    "@deepseek-ai/dsh-host-webserver": "^0.1.7-rc.2",
+    "@deepseek-ai/dsh-llm": "^0.1.7-rc.2",
+    "@deepseek-ai/dsh-session": "^0.1.7-rc.2",
+    "@deepseek-ai/dsh-session-query": "^0.1.7-rc.2",
+    "@deepseek-ai/dsh-tools": "^0.1.7-rc.2",
     "@types/node": "^22.20.0",
     "@types/react": "~18.3.1",
     "@types/react-dom": "^18.3.5",

@@ -12,7 +12,6 @@
 
 import * as React from 'react'
 import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
-import type { SessionListState, TurnLocation, WorkspaceListState } from '@deepseek-ai/dsh-client-runtime/client'
 import type { ThemeRuntime } from '@deepseek-ai/dsh-client-ui-theme/client'
 import type { Context } from '@deepseek-ai/cordis'
 import { DEFAULT_CONFIG, type ConversationSearchItem, type ConversationSearchKind, type CredentialStorage, type CustomPluginConfig, type FolderNode, type PromptItem, type TimelineItem, type UsageRow } from '../protocol.ts'
@@ -55,6 +54,44 @@ interface WorkspaceRowLike {
   path?: string
 }
 
+/**
+ * The slot-prop data shapes below are declared locally on purpose: the harness
+ * controller packages that own them rename and re-shape them across releases,
+ * and importing their types would couple this bundle to modules it never loads
+ * at runtime. Only the fields actually read are declared.
+ */
+/** One Session row of the `useSessions()` list snapshot. */
+interface SessionRowLike {
+  readonly id: string
+  readonly displayTitle?: string
+  readonly title?: string
+  readonly running?: boolean
+}
+
+/** The `useSessions()` snapshot. `phase` is monotone: `ready` never steps back. */
+interface SessionListLike {
+  readonly ids: readonly string[]
+  readonly byId: Readonly<Record<string, SessionRowLike>>
+  readonly phase: 'pending' | 'ready'
+}
+
+/** The `useWorkspaces()` snapshot. */
+interface WorkspaceListLike {
+  readonly items?: readonly WorkspaceRowLike[]
+  readonly state: 'idle' | 'loading' | 'error'
+}
+
+/** Turn placement the Chat turnTail slot hands to its entries. */
+interface TurnLocationLike {
+  readonly turn: number
+  readonly status?: 'open' | 'closed' | 'unknown'
+}
+
+/** Standard prop every `scope: 'session'` slot entry receives. */
+interface SessionScopedProps {
+  readonly sessionId?: string | null
+}
+
 function fmtClock(time: number): string {
   const d = new Date(time)
   const pad = (n: number): string => String(n).padStart(2, '0')
@@ -78,7 +115,7 @@ interface Store {
   usage: Record<string, Record<string, UsageRow>>
   sessionId: string | null
   turns: { sessionId: string; items: TimelineItem[] } | null
-  anchors: Map<number, { el: HTMLElement; turn: TurnLocation | null }>
+  anchors: Map<number, { el: HTMLElement; turn: TurnLocationLike | null }>
   seqAnchor: Map<number, HTMLElement>
   railPositions: Array<{ seq: number; y: number; st: boolean }>
   railSig: string
@@ -206,18 +243,17 @@ function removeDynCss(): void {
 
 /** Public component props (the product slot system injects these). */
 export interface OverlayProps {
-  useSessions: SnapshotSelectorHook<SessionListState>
-  useWorkspaces: SnapshotSelectorHook<WorkspaceListState>
+  useSessions: SnapshotSelectorHook<SessionListLike>
+  useWorkspaces: SnapshotSelectorHook<WorkspaceListLike>
 }
-export interface QuoteDockProps {
+export interface QuoteDockProps extends SessionScopedProps {
   input: InputStateLike
   inputActions: InputActionsLike
 }
-export interface TurnTailProps {
-  turn: TurnLocation
+export interface TurnTailProps extends SessionScopedProps {
+  turn: TurnLocationLike
   seq: number
   openFile: (path: string) => void
-  matched?: number | null
 }
 
 /** Install the whole Custom UI into the client context. Returns a disposer that unregisters every slot entry. */
@@ -291,11 +327,31 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     }, [])
     return S
   }
-  function useSessionsSafe(props: { useSessions: OverlayProps['useSessions'] }): SessionListState | null {
+  function useSessionsSafe(props: { useSessions: OverlayProps['useSessions'] }): SessionListLike | null {
     try { return props.useSessions(st => st) } catch { return null }
   }
-  function useWorkspacesSafe(props: { useWorkspaces: OverlayProps['useWorkspaces'] }): WorkspaceListState | null {
+  function useWorkspacesSafe(props: { useWorkspaces: OverlayProps['useWorkspaces'] }): WorkspaceListLike | null {
     try { return props.useWorkspaces(st => st) } catch { return null }
+  }
+  /**
+   * Follow the Session the conversation is showing. The 0.1.7 session list
+   * snapshot dropped its `current` field — view selection moved to the
+   * Workspace browser — so the plugin reads the identity off the standard
+   * `sessionId` prop that every session-scoped slot entry receives. Several
+   * entries can carry it at once; only the first one to see a new value acts,
+   * and the entry that installed the value is the one that clears it when the
+   * conversation closes and no session-scoped slot renders any more.
+   */
+  function useViewedSession(props: { sessionId?: string | null }): void {
+    const id = typeof props.sessionId === 'string' && props.sessionId !== '' ? props.sessionId : null
+    React.useEffect(() => {
+      if (S.sessionId === id) return () => {}
+      S.anchors.clear()
+      S.seqAnchor.clear()
+      setS({ sessionId: id, turns: null, railPositions: [], railSig: '', railHover: null })
+      if (id !== null) void fetchTurns(id)
+      return () => { if (S.sessionId === id) setS({ sessionId: null }) }
+    }, [id])
   }
 
   const ICONS: Record<string, Array<[string, Record<string, unknown>]>> = {
@@ -996,11 +1052,13 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     updateRailPositions()
   }
   async function forkAt(seq: number): Promise<void> {
-    const sessions = C.get('sessions') as { fork(opts: { sessionId: string; atSeq: number }): Promise<string>; open(id: string): void } | undefined
-    if (sessions === undefined) return
+    const remote = sessionRemote()
+    if (remote === undefined) { toast('分支不可用：会话 Remote 服务缺失', 'error'); return }
     try {
-      const childId = await sessions.fork({ sessionId: S.sessionId as string, atSeq: seq })
-      toast('分支会话已创建', 'info', { label: '打开分支', run: () => { try { sessions.open(childId) } catch { /* open failed */ } } })
+      const result = await remote.fork({ sessionId: S.sessionId as string, atSeq: seq })
+      if (!result.ok) { toast('创建分支失败: ' + remoteErrorMessage(result.error, '未知错误'), 'error'); return }
+      const childId = result.value.sessionId
+      toast('分支会话已创建', 'info', { label: '打开分支', run: () => openSessionItem(childId) })
     } catch (error) {
       toast('创建分支失败: ' + String((error as Error)?.message ?? error), 'error')
     }
@@ -1363,22 +1421,59 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     for (const child of node.children ?? []) n += folderCount(child)
     return n
   }
+  /**
+   * The `ctx.remote` namespaces this plugin calls, read fail-soft so a profile
+   * without the Session Remote degrades to a toast instead of throwing.
+   */
+  function sessionRemote(): {
+    fork(request: { sessionId: string; atSeq?: number }): Promise<{ ok: true; value: { sessionId: string } } | { ok: false; error?: unknown }>
+    search(request: { query: string }, signal?: AbortSignal): Promise<{ ok: true; value: { items: Array<{ sessionId: string; snippet: string }> } } | { ok: false; error?: unknown }>
+  } | undefined {
+    const remote = C.get('remote') as { session?: Record<string, unknown> } | undefined
+    const session = remote?.session
+    if (session === undefined || typeof session !== 'object') return undefined
+    const fork = (session as { fork?: unknown }).fork
+    const search = (session as { search?: unknown }).search
+    if (typeof fork !== 'function' || typeof search !== 'function') return undefined
+    return session as unknown as ReturnType<typeof sessionRemote>
+  }
+
+  /** Render a Remote failure envelope as one readable line. */
+  function remoteErrorMessage(error: unknown, fallback: string): string {
+    if (typeof error === 'string') return error
+    if (error !== null && typeof error === 'object') {
+      const code = String((error as { code?: unknown }).code ?? '')
+      const message = String((error as { message?: unknown }).message ?? '')
+      const joined = [code, message].filter((part) => part !== '').join(': ')
+      if (joined !== '') return joined
+    }
+    return fallback
+  }
+
+  /**
+   * Navigation moved to the Workspace browser's `uiWorkspace` service: the
+   * Session Controller no longer opens or selects a Session for a caller.
+   */
+  function workspaceNav(): { openSession(id: string): void; connectWorkspace(id: string): Promise<string> } | undefined {
+    const nav = C.get('uiWorkspace') as { openSession?: (id: string) => void; connectWorkspace?: (id: string) => Promise<string> } | undefined
+    if (nav === undefined || typeof nav.openSession !== 'function' || typeof nav.connectWorkspace !== 'function') return undefined
+    return nav as unknown as ReturnType<typeof workspaceNav>
+  }
   async function openWorkspaceItem(id: string): Promise<void> {
-    const workspaces = C.get('workspaces') as { connectWorkspace(id: string): Promise<string> } | undefined
-    const sessions = C.get('sessions') as { open(id: string): void } | undefined
-    if (workspaces === undefined || sessions === undefined) { toast('工作区服务不可用', 'error'); return }
+    const nav = workspaceNav()
+    if (nav === undefined) { toast('工作区导航服务不可用', 'error'); return }
     try {
-      const sid = await workspaces.connectWorkspace(id)
-      sessions.open(sid)
+      const sid = await nav.connectWorkspace(id)
+      nav.openSession(sid)
       toast('已打开项目', 'info')
     } catch (error) {
       toast('打开项目失败: ' + String((error as Error)?.message ?? error), 'error')
     }
   }
   function openSessionItem(id: string): void {
-    const sessions = C.get('sessions') as { open(id: string): void } | undefined
-    if (sessions === undefined) { toast('会话服务不可用', 'error'); return }
-    try { sessions.open(id) } catch (error) { toast('打开会话失败: ' + String((error as Error)?.message ?? error), 'error') }
+    const nav = workspaceNav()
+    if (nav === undefined) { toast('会话导航服务不可用', 'error'); return }
+    try { nav.openSession(id) } catch (error) { toast('打开会话失败: ' + String((error as Error)?.message ?? error), 'error') }
   }
 
   // ================= components =================
@@ -1398,7 +1493,8 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     }, React.createElement(Icon, { n: 'folder', size: 15 }), React.createElement('span', { className: 'vx-foot-label' }, '项目'))
   }
 
-  function HeaderPanelButton(): React.ReactElement {
+  function HeaderPanelButton(props: SessionScopedProps): React.ReactElement {
+    useViewedSession(props)
     return React.createElement('button', {
       className: 'vx-header-btn',
       title: '个性化中心',
@@ -1406,7 +1502,8 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     }, React.createElement(Icon, { n: 'sliders', size: 13 }), React.createElement('span', null, '个性化'))
   }
 
-  function PromptQuickButton(): React.ReactElement {
+  function PromptQuickButton(props: SessionScopedProps): React.ReactElement {
+    useViewedSession(props)
     return React.createElement('button', {
       className: 'vx-header-btn',
       title: '快速调用提示词',
@@ -1449,7 +1546,8 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     )
   }
 
-  function HeaderBalance(): React.ReactElement {
+  function HeaderBalance(props: SessionScopedProps): React.ReactElement {
+    useViewedSession(props)
     const s = useS()
     const b = s.balance
     const [hover, setHover] = React.useState(false)
@@ -1626,6 +1724,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
   }
 
   function QuoteDock(props: QuoteDockProps): React.ReactElement | null {
+    useViewedSession(props)
     const s = useS()
     const inputRef = React.useRef(props.input)
     inputRef.current = props.input
@@ -1711,7 +1810,8 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
   }
 
   function TurnTailEntry(props: TurnTailProps): React.ReactElement {
-    const seq = props.matched !== undefined && props.matched !== null ? props.matched : (typeof props.seq === 'number' ? props.seq : null)
+    useViewedSession(props)
+    const seq = typeof props.seq === 'number' ? props.seq : null
     const turn = props.turn
     const s = useS()
     let registered: HTMLElement | null = null
@@ -1795,29 +1895,14 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
   function TimelineRail(props: OverlayProps): React.ReactElement | null {
     const s = useS()
     const sessions = useSessionsSafe(props)
-    const current = sessions !== null ? (sessions.current ?? null) : null
-    const summary = current !== null ? sessions!.byId[current] : null
+    const summary = sessions !== null && s.sessionId !== null ? sessions.byId[s.sessionId] : null
     const trackRef = React.useRef<HTMLDivElement | null>(null)
-    React.useEffect(() => {
-      if (current !== null && current !== S.sessionId) {
-        // Clear DOM anchors from the previous session before a search result or
-        // rail action can reuse the same sequence number in the new session.
-        S.anchors.clear()
-        S.seqAnchor.clear()
-        setS({ sessionId: current, turns: null, railPositions: [], railSig: '', railHover: null })
-        void fetchTurns(String(current))
-      } else if (current === null && S.sessionId !== null) {
-        S.anchors.clear()
-        S.seqAnchor.clear()
-        setS({ sessionId: null, turns: null, railPositions: [], railSig: '', railHover: null })
-      }
-    }, [current])
     React.useEffect(() => {
       if (s.cfg.timeline !== true || S.sessionId === null) return
       const running = summary?.running === true
       const handle = setInterval(() => { if (running) void fetchTurns(S.sessionId as string) }, 3000)
       return () => clearInterval(handle)
-    }, [s.cfg.timeline, current, summary?.running])
+    }, [s.cfg.timeline, s.sessionId, summary?.running])
     React.useEffect(() => {
       if (s.cfg.timeline !== true || S.sessionId === null) return
       const el = trackRef.current
@@ -2562,7 +2647,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     const s = useS()
     const sessionsState = useSessionsSafe(props)
     const workspacesState = useWorkspacesSafe(props)
-    // The public SessionListState intentionally exposes only the monotone
+    // The session list snapshot intentionally exposes only the monotone
     // `phase` (errors stay on the service's internal state axis), so a null
     // hook result is the only reliable unavailable signal here.
     const sessionsUnavailable = sessionsState === null
@@ -2575,21 +2660,15 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       if (!s.commandOpen || query.trim().length < 2) { setRemote([]); setRemoteStatus(''); return }
       const controller = new AbortController()
       const timer = setTimeout(() => {
-        const sessions = C.get('sessions') as { search(query: string, signal: AbortSignal): Promise<{ ok: true; value: { items: Array<{ sessionId: string; snippet: string }> } } | { ok: false; error?: unknown }> } | undefined
-        if (sessions === undefined || typeof sessions.search !== 'function') { setRemoteStatus('跨会话搜索不可用'); return }
+        const sessionSearch = sessionRemote()
+        if (sessionSearch === undefined) { setRemoteStatus('跨会话搜索不可用'); return }
         setRemoteStatus('跨会话搜索中…')
         try {
-          void sessions.search(query.trim(), controller.signal).then((result) => {
+          void sessionSearch.search({ query: query.trim() }, controller.signal).then((result) => {
             if (controller.signal.aborted) return
             if (result.ok) { setRemote(result.value.items); setRemoteStatus('') }
             else {
-              const error = result.error
-              const message = typeof error === 'string'
-                ? error
-                : error !== null && typeof error === 'object'
-                  ? [String((error as { code?: unknown }).code ?? ''), String((error as { message?: unknown }).message ?? '')].filter((part) => part !== '').join(': ') || '跨会话搜索不可用'
-                  : '跨会话搜索不可用'
-              setRemote([]); setRemoteStatus(message)
+              setRemote([]); setRemoteStatus(remoteErrorMessage(result.error, '跨会话搜索不可用'))
             }
           }).catch(() => { if (!controller.signal.aborted) { setRemote([]); setRemoteStatus('跨会话搜索不可用') } })
         } catch { if (!controller.signal.aborted) { setRemote([]); setRemoteStatus('跨会话搜索不可用') } }
@@ -2940,7 +3019,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
   // ================= install =================
   setDynCss('')
   try { ensureLiquidGlass() } catch (error) { reportDiag('ensureLiquidGlass: ' + String((error as Error)?.message ?? error)) }
-  const slots = C.get('slots') as { inject(key: string, fn: () => unknown): void; register(options: Record<string, unknown>, component: unknown): () => void } | undefined
+  const slots = C.get('slots') as { inject(key: string, fn: () => (() => void) | void): (() => void) | void; register(options: Record<string, unknown>, component: unknown): () => void } | undefined
   if (slots === undefined) {
     console.error('[custom-plugin] slots service unavailable')
     reportDiag('slots service unavailable; surfaces skipped')
@@ -2966,7 +3045,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
   injectOne('sidebar.footer.action', 'custom-plugin-folders', { id: 'custom-plugin-folders', order: -100, label: '项目' }, FolderSidebarButton)
   injectOne('shell.overlay', 'custom-plugin-overlay', { id: 'custom-plugin-overlay', order: 10, label: 'Custom 便利套件' }, OverlayRoot)
   injectOne('conversation.input.dock', 'custom-plugin-quote', { id: 'custom-plugin-quote', order: 30, label: '引用回复' }, QuoteDock)
-  injectOne('conversation.chat.turnTail', 'custom-plugin-turn-tail', { select: (o: { seq?: unknown }) => (o !== null && typeof o.seq === 'number' ? o.seq : null) }, TurnTailEntry)
+  injectOne('conversation.chat.turnTail', 'custom-plugin-turn-tail', { id: 'custom-plugin-turn-tail', order: 10 }, TurnTailEntry)
   injectOne('settings.section', 'custom-plugin-appearance', { id: 'custom-plugin-appearance', order: 30, label: '个性化' }, SettingsPage)
   injectOne('conversation.session.header.actions', 'custom-plugin-panel-open', { id: 'custom-plugin-panel-open', order: 5, label: '个性化' }, HeaderPanelButton)
   injectOne('conversation.session.header.actions', 'custom-plugin-prompts', { id: 'custom-plugin-prompts', order: 6, label: '提示词' }, PromptQuickButton)
