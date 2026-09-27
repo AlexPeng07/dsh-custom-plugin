@@ -451,7 +451,7 @@ export class CustomPluginHost {
     const items: ConversationSearchItem[] = []
     if (page !== null) {
       for (const hit of page.items) {
-        const kind: ConversationSearchKind | null = hit.type === 'user/message' ? 'user' : hit.type === 'assistant/message' ? 'assistant' : hit.type.startsWith('tool/') ? 'tool' : null
+        const kind = searchKindOf(hit.type)
         if (kind === null || !wanted.has(kind)) continue
         const anchorSeq = anchors.get(hit.seq)
         if (anchorSeq === undefined) continue

@@ -116,6 +116,20 @@ DeepSeek Harness（DSH）Web GUI 的 Custom 便利套件：个性化外观、天
 
 `custom_plugin_status` 工具报告：外观配置、今日按模型用量、余额、时间线样本、Mermaid 引擎加载情况、状态文件路径与客户端诊断。插件不注入任何系统提示。
 
+## 版本对应
+
+| 插件版本 | 构建并实测过的 dsh | 状态 |
+| --- | --- | --- |
+| 0.5.x | dsh 0.1.7-rc.2 及更新 | 当前 |
+| 0.4.2 | dsh 0.1.1-rc.1 … 0.1.6 时代 | 已被取代，在 0.1.7+ 上不要指望可用 |
+
+0.1.7 改掉了本套件依赖的插件侧契约（会话导航归 `ctx.uiWorkspace`、会话列表不再提供
+当前查看的会话、消息模型移除 `tool-result` 内容块），两个版本互不替代。0.1.7 及更新
+的 dsh 会在安装与启动时按 bundle 的 `@deepseek-ai/dsh-*` peer 范围校验自身版本，不匹配
+就整包跳过。没有这道闸的更早宿主仍会加载插件，但表现为功能退化：实测 0.1.1-rc.2 上
+8 个槽位注册成 7 个，turnTail 条目被拒（该槽位在 0.1.7 由 chain 改为 list），打开会话、
+创建分支、跨会话搜索会提示对应服务缺失，而不是抛错。
+
 ## 安装
 
 前置：Node 22+、pnpm，以及 `dsh` CLI（官方 npm 包 `@deepseek-ai/dsh`；未全局安装时，可用 `npx @deepseek-ai/dsh` 代替 `dsh`）。本版本面向 **dsh 0.1.7-rc.2 及更新版本**：dsh 在安装与启动时会用自身版本校验 bundle 的 `@deepseek-ai/dsh-*` peer 范围，不匹配的 bundle 会被整包跳过，所以 `package.json` 只声明本包实际构建并验证过的范围。仍在旧版 dsh 的用户请安装对应的旧版插件，而不是授予兼容性豁免。
@@ -190,6 +204,7 @@ dsh plugin --profile web add link:F:/dsh-plugin-dev
 - 系统凭据存储会在宿主启动时检测 profile `node_modules` 中的 `keytar` 模块；无法加载时使用兼容的状态文件回退。
 - 费用按 DeepSeek 官方峰谷单价估算，仅供参考。
 - 深色模式下背景限制是刻意设计：仅「无颜色」与「极光」可选。
+- dsh 0.1.7 起支持自定义快捷键。快捷面板固定占用 `Ctrl/Cmd+K`（不带 Alt/Shift，且编辑器内不触发）；若你把某个 dsh 命令也改成 `Ctrl+K`，两者会同时响应，请把其中一个换开。
 - DSH 当前没有公开的归档恢复接口；插件不会绕过官方边界修改底层注册表。
 - dsh 自带的 `web` profile 把 session-query 索引配成 `openAt: never`，即默认不启用全文搜索。此时会话内搜索改为直接扫描日志（按出现顺序，最多 100 条），快捷面板的跨会话搜索会显示 dsh 给出的不可用原因。
 

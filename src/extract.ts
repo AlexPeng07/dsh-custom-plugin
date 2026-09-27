@@ -89,11 +89,13 @@ export function flagsOf(text: string): { hasLatex: boolean; hasMathml: boolean; 
  */
 export function eventSearchText(event: SessionEvent): string {
   switch (event.type) {
+    // A user message IS the message; the other role events wrap one.
     case 'user/message':
+      return messageText(event.data.content)
     case 'assistant/message':
     case 'system/message':
     case 'developer/message':
-      return messageText((event.data as { message?: { content?: never } }).message?.content ?? (event.data as { content?: never }).content)
+      return messageText(event.data.message.content)
     case 'tool/call':
       return `${event.data.name ?? ''} ${event.data.arguments ?? ''}`
     case 'tool/result':
@@ -111,10 +113,14 @@ export function searchKindOf(type: string): 'user' | 'assistant' | 'tool' | null
   return null
 }
 
-/** Excerpt centered on the match, so a hit late in a long message is readable. */
+/**
+ * Excerpt centered on the match. The window must always contain the whole
+ * match: the panel highlights the query inside the snippet, and a slice that
+ * cut the hit off would render a result list with nothing highlighted.
+ */
 export function snippetAround(text: string, at: number, needleLength: number, max: number): string {
   const start = Math.max(0, at - Math.floor(max / 3))
-  const end = Math.min(text.length, start + max)
+  const end = Math.min(text.length, Math.max(start + max, at + needleLength))
   const lead = start > 0 ? '…' : ''
   const tail = end < text.length ? '…' : ''
   return lead + text.slice(start, end).replace(/\s+/g, ' ').trim() + tail
@@ -253,7 +259,7 @@ export async function buildExportRows(
         time: event.time,
         kind: 'tool-result',
         toolName: (callId !== undefined ? callNames.get(String(callId)) : undefined) ?? '',
-        text: messageText(event.data.message.content).slice(0, 3000),
+        text: messageText(event.data.message?.content).slice(0, 3000),
       })
     }
   }

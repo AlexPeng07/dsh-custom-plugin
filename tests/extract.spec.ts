@@ -6,7 +6,7 @@
 import { describe, expect, it } from 'vitest'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent, SessionSeq } from '@deepseek-ai/dsh-session'
-import { buildExportRows, buildMarkdown, extractTurns, flagsOf, messageText } from '../src/extract.ts'
+import { buildExportRows, buildMarkdown, eventSearchText, extractTurns, flagsOf, messageText, searchKindOf, snippetAround } from '../src/extract.ts'
 
 /**
  * Session ids and sequence numbers are branded at compile time but plain
@@ -205,5 +205,42 @@ describe('buildExportRows', () => {
     expect(rows.every((row) => row.kind === 'context')).toBe(true)
     expect(rows[0].text).toContain('你是助手')
     expect(rows[1].text).toContain('启用工具 web_search')
+  })
+})
+
+describe('search scan fallback helpers', () => {
+  it('flattens each searchable event shape', () => {
+    expect(eventSearchText(asSessionEvent({ type: 'user/message', seq: seqOf(1), time: 1, data: { role: 'user', content: [{ type: 'text', text: '用户说的' }], source: { kind: 'user' } } }))).toBe('用户说的')
+    expect(eventSearchText(asSessionEvent({ type: 'assistant/message', seq: seqOf(2), time: 1, data: { turn: 1, step: 1, message: { role: 'assistant', content: [{ type: 'text', text: '助手说的' }] } } }))).toBe('助手说的')
+    expect(eventSearchText(toolCallEvent(3))).toContain('read {"path":"a.md"}')
+    expect(eventSearchText(asSessionEvent({ type: 'tool/result', seq: seqOf(4), time: 1, data: { turn: 1, step: 1, message: { role: 'tool', content: [{ type: 'text', text: '结果文本' }] } } }))).toBe('结果文本')
+    expect(eventSearchText(asSessionEvent({ type: 'turn/end', seq: seqOf(5), time: 1, data: { turn: 1, reason: 'complete' } }))).toBe('')
+  })
+
+  it('maps event types to the three searchable roles', () => {
+    expect(searchKindOf('user/message')).toBe('user')
+    expect(searchKindOf('assistant/message')).toBe('assistant')
+    expect(searchKindOf('tool/call')).toBe('tool')
+    expect(searchKindOf('tool/result')).toBe('tool')
+    expect(searchKindOf('system/message')).toBeNull()
+    expect(searchKindOf('developer/message')).toBeNull()
+  })
+
+  it('keeps the whole match inside the excerpt even near the end', () => {
+    const needle = 'needle-at-the-tail'
+    const text = 'x'.repeat(900) + needle + 'y'.repeat(200)
+    const snippet = snippetAround(text, text.indexOf(needle), needle.length, 500)
+    expect(snippet).toContain(needle)
+    expect(snippet.startsWith('…')).toBe(true)
+    // The window ran to the end of the message, so there is nothing after it
+    // to promise: no trailing ellipsis.
+    expect(snippet.endsWith('…')).toBe(false)
+    // A strictly interior window is marked on both sides.
+    const middle = 'a'.repeat(600) + 'core' + 'b'.repeat(600)
+    const inner = snippetAround(middle, middle.indexOf('core'), 4, 100)
+    expect(inner.startsWith('…') && inner.endsWith('…')).toBe(true)
+    expect(inner).toContain('core')
+    // A hit at the very start has no leading ellipsis.
+    expect(snippetAround('head text here', 0, 4, 500)).toBe('head text here')
   })
 })

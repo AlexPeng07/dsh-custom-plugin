@@ -116,6 +116,24 @@ The Settings → 个性化 section provides the full appearance and tool-toggle 
 
 The `custom_plugin_status` tool reports appearance config, today's per-model usage, balance, a timeline sample, Mermaid engine state, the state file path and client diagnostics. The plugin never injects system-prompt announcements.
 
+## Compatibility
+
+| plugin release | dsh it was built and verified against | status |
+| --- | --- | --- |
+| 0.5.x | dsh 0.1.7-rc.2 and later | current |
+| 0.4.2 | dsh 0.1.1-rc.1 … 0.1.6 era | superseded; do not expect it to work on 0.1.7+ |
+
+0.1.7 changed the plugin-facing contracts this suite depends on (session
+navigation moved to `ctx.uiWorkspace`, the session list stopped publishing the
+viewed session, and the message model dropped the `tool-result` content block),
+so neither release substitutes for the other. dsh 0.1.7+ validates a bundle's
+`@deepseek-ai/dsh-*` peer ranges against its own version at install and startup
+and skips a bundle that does not match. Runtimes predating that gate load the
+bundle anyway and degrade instead: on 0.1.1-rc.2, 7 of 8 slot registrations
+succeed, the turn-tail entry is rejected (that slot changed from a chain to a
+list slot in 0.1.7), and the open-session / branch / cross-session actions
+report their service as missing rather than throwing.
+
 ## Install
 
 Prerequisites: Node 22+, pnpm, and the `dsh` CLI (the official `@deepseek-ai/dsh` npm package; `npx @deepseek-ai/dsh` stands in for `dsh` when it is not installed globally). This release targets **dsh 0.1.7-rc.2 or newer** — dsh checks a bundle's `@deepseek-ai/dsh-*` peer ranges against its own version at install and startup, and skips a bundle that does not match, so `package.json` declares exactly the range this package was built and verified against. On an older dsh, install the matching older plugin release instead of granting a compatibility exemption.
@@ -191,6 +209,7 @@ Appearance and feature toggles (the `cfg` field, all with defaults):
 - Cost estimates use DeepSeek's official peak/off-peak list prices and are indicative only.
 - Dark-mode background restriction is deliberate: only "no color" and "aurora" are selectable in dark mode.
 - DSH currently exposes no archive-restore API; the plugin does not bypass that boundary by editing the underlying registry.
+- The command palette owns `Ctrl+K` / `Cmd+K` (no Alt/Shift, ignored inside editors). dsh's own default is `Ctrl+Alt+K`, so nothing collides out of the box — but dsh 0.1.7 lets you rebind host shortcuts, and if you assign a host command to plain `Ctrl+K`, both fire. Keep the palette key reserved, or pick another binding there.
 - dsh's shipped `web` profile composes its session-query index with `openAt: never`, so full-text search is off unless the deployment enables it. In-session search therefore answers from a direct log scan (ordered, capped at 100 hits) and the palette's cross-session search shows dsh's own refusal.
 
 ## Development

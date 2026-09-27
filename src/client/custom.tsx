@@ -104,6 +104,13 @@ interface WorkspaceNavLike {
   connectWorkspace(id: string): Promise<string>
 }
 
+/**
+ * dsh's shipped web profile configures the session index with `openAt: never`,
+ * so cross-session full-text search can legitimately be unavailable. Say what
+ * still works instead of leaving a bare error that reads as a broken palette.
+ */
+const CROSS_SEARCH_UNAVAILABLE = '跨会话全文搜索不可用；下方结果仍按标题匹配会话与工作区。'
+
 function fmtClock(time: number): string {
   const d = new Date(time)
   const pad = (n: number): string => String(n).padStart(2, '0')
@@ -2685,17 +2692,17 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       const controller = new AbortController()
       const timer = setTimeout(() => {
         const sessionSearch = sessionRemote()
-        if (sessionSearch === undefined) { setRemoteStatus('跨会话搜索不可用'); return }
+        if (sessionSearch === undefined) { setRemoteStatus(CROSS_SEARCH_UNAVAILABLE); return }
         setRemoteStatus('跨会话搜索中…')
         try {
           void sessionSearch.search({ query: query.trim() }, controller.signal).then((result) => {
             if (controller.signal.aborted) return
             if (result.ok) { setRemote(result.value.items); setRemoteStatus('') }
             else {
-              setRemote([]); setRemoteStatus(remoteErrorMessage(result.error, '跨会话搜索不可用'))
+              setRemote([]); setRemoteStatus(remoteErrorMessage(result.error, CROSS_SEARCH_UNAVAILABLE))
             }
-          }).catch(() => { if (!controller.signal.aborted) { setRemote([]); setRemoteStatus('跨会话搜索不可用') } })
-        } catch { if (!controller.signal.aborted) { setRemote([]); setRemoteStatus('跨会话搜索不可用') } }
+          }).catch(() => { if (!controller.signal.aborted) { setRemote([]); setRemoteStatus(CROSS_SEARCH_UNAVAILABLE) } })
+        } catch { if (!controller.signal.aborted) { setRemote([]); setRemoteStatus(CROSS_SEARCH_UNAVAILABLE) } }
       }, 250)
       return () => { clearTimeout(timer); controller.abort() }
     }, [query, s.commandOpen])

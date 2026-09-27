@@ -22,7 +22,7 @@
  */
 
 import { createServer } from 'node:http'
-import { existsSync } from 'node:fs'
+import { existsSync, readdirSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { dirname, join, delimiter } from 'node:path'
@@ -128,12 +128,32 @@ for (const [name, range] of Object.entries(manifest.peerDependencies ?? {})) {
     bad(`peerDependencies: ${name} is declared but not installed, so its range cannot be checked`)
     continue
   }
-  const pinned = String(range).replace(/^[\^~]/, '')
-  if (pinned !== installed) {
+  const pinned = /^[\^~]?(\d+\.\d+\.\d+[^\s]*)$/.exec(String(range))
+  if (pinned === null) {
+    bad(`peerDependencies: ${name} range ${JSON.stringify(range)} is not a plain "^x.y.z" pin, so this gate cannot read which dsh release it claims to support`)
+    continue
+  }
+  if (pinned[1] !== installed) {
     bad(`peerDependencies: ${name} range ${JSON.stringify(range)} disagrees with the ${installed} build target`)
   } else {
     ok(`peerDependencies: ${name} ${range} matches the installed ${installed}`)
   }
+}
+
+// What npm actually ships is decided by `files`; a pattern matching nothing
+// publishes a bundle missing that piece (the class of breakage that shows up
+// only on someone else's machine).
+for (const entry of manifest.files ?? []) {
+  const resolved = entry.includes('*')
+    ? (() => {
+        const [dir, suffix] = entry.includes('/') ? [entry.slice(0, entry.lastIndexOf('/')), entry.slice(entry.lastIndexOf('/') + 1)] : ['', entry]
+        const base = join(root, dir)
+        const re = new RegExp('^' + suffix.replace(/\./g, '\\.').replace(/\*/g, '.*') + '$')
+        try { return readdirSync(base).filter((item) => re.test(item)).length } catch { return -1 }
+      })()
+    : existsSync(join(root, entry)) ? 1 : 0
+  if (resolved <= 0) bad(`package.json files: "${entry}" matches nothing in the working tree`)
+  else ok(`package.json files: "${entry}" resolves (${resolved})`)
 }
 
 const require = createRequire(join(root, 'lib/index.js'))

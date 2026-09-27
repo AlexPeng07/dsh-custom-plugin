@@ -56,7 +56,21 @@ follow [Semantic Versioning](https://semver.org/).
   bundle (client platform and `./client` export, patch path, icon size, locale
   display metadata, and peer ranges agreeing with the build target), so an
   unsupported or stale declaration fails the local gate instead of being skipped
-  silently in a user's profile.
+  silently in a user's profile. The peer check refuses to read a range form it
+  cannot interpret, and every `files` entry must resolve to something in the tree
+  — an entry matching nothing used to publish a bundle missing that piece. Both
+  new rules were confirmed red by breaking them on purpose.
+- A search excerpt is now guaranteed to contain the whole match; the previous
+  window could cut a hit off near the end of a long message, which is the one
+  case the highlight in the result list needs.
+- Exports no longer fail outright on a `tool/result` event whose `message` is
+  absent, and the scan fallback reads each event shape through its own typed
+  case instead of a cast that hid real field drift.
+- When cross-session full-text search is unavailable, the palette says what still
+  works (title matching over sessions and workspaces) instead of showing a bare
+  error.
+- The READMEs add a plugin-to-dsh compatibility table, since the peer gate makes
+  a mismatched pair fail invisibly rather than loudly.
 
 ## 0.4.2 — 2026-09-12
 
