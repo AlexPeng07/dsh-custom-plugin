@@ -25,7 +25,7 @@ import { createServer } from 'node:http'
 import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
-import { dirname, join } from 'node:path'
+import { dirname, join, delimiter } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
@@ -146,18 +146,38 @@ try {
 
 // ── headless browser: the registration handshake ────────────────────────────
 
+// `--static-only` stops after the artifact and manifest contract checks, so CI
+// can run the checks that need no browser (a missing Chrome on a runner must not
+// read as a packaging failure, and the handshake still runs via `pnpm smoke`).
+const staticOnly = process.argv.includes('--static-only')
+
 function findBrowser() {
-  const candidates = [
+  const configured = [
     process.env.SMOKE_BROWSER,
     process.env.ProgramFiles && join(process.env.ProgramFiles, 'Microsoft/Edge/Application/msedge.exe'),
     process.env['ProgramFiles(x86)'] && join(process.env['ProgramFiles(x86)'], 'Microsoft/Edge/Application/msedge.exe'),
     process.env.LOCALAPPDATA && join(process.env.LOCALAPPDATA, 'Google/Chrome/Application/chrome.exe'),
+    '/usr/bin/google-chrome',
+    '/usr/bin/chromium',
+    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
   ].filter((item) => typeof item === 'string' && item !== '')
-  return candidates.find((item) => existsSync(item)) ?? null
+  const byPath = configured.find((item) => existsSync(item))
+  if (byPath !== undefined) return byPath
+  // Bare executable names only resolve through PATH.
+  const dirs = (process.env.PATH ?? '').split(delimiter).filter((dir) => dir !== '')
+  for (const name of ['google-chrome', 'chromium', 'chromium-browser', 'msedge']) {
+    for (const dir of dirs) {
+      const candidate = join(dir, name)
+      if (existsSync(candidate)) return candidate
+    }
+  }
+  return null
 }
 
-const browserPath = findBrowser()
-if (browserPath === null) {
+const browserPath = staticOnly ? null : findBrowser()
+if (staticOnly) {
+  ok('headless browser handshake skipped (--static-only)')
+} else if (browserPath === null) {
   bad('no msedge.exe/chrome.exe found — set SMOKE_BROWSER to a Chromium-family executable')
 } else {
   const { default: puppeteer } = await import('puppeteer-core')
