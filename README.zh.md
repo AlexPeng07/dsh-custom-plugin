@@ -219,6 +219,12 @@ pnpm smoke          # 构建后契约自检：加载器握手、dsh 会读的清
                     # patch 行、本地 Mermaid 引擎
 ```
 
+`scripts/live-dsh-check.sh` 是另一条**手动**探针，对着一个正在运行的隔离 dsh profile
+（`DSH_HOME=… DSH_PORT=… bash scripts/live-dsh-check.sh`），在真实会话数据上跑宿主侧全链路：
+时间线、三种导出、搜索扫描路径、用量扫描、备份、UTF-8 状态往返，以及 loopback + 同源围栏。
+这些 CI 覆盖不了（它没有可对话的宿主），所以每次 dsh 发版都建议跑一遍。脚本逐项报
+PASS/FAIL，任一失败即非零退出；槽位注册与渲染仍需按上文用浏览器过一遍。
+
 ## 许可证
 
 Apache-2.0。部分代码参考 [Nagi-ovo/voyager](https://github.com/Nagi-ovo/voyager) 与 [unovue/inspira-ui](https://github.com/unovue/inspira-ui)。

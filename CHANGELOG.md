@@ -60,15 +60,25 @@ follow [Semantic Versioning](https://semver.org/).
   cannot interpret, and every `files` entry must resolve to something in the tree
   — an entry matching nothing used to publish a bundle missing that piece. Both
   new rules were confirmed red by breaking them on purpose.
-- A search excerpt is now guaranteed to contain the whole match; the previous
-  window could cut a hit off near the end of a long message, which is the one
-  case the highlight in the result list needs.
+- A search excerpt now extends its window so a pasted query longer than two
+  thirds of the excerpt is still shown whole. Measured first: the previous
+  centering already covered ordinary queries, including a hit at the very end of
+  a long message, so only the long-query case was affected — the fix is narrow,
+  and the added test fails against the old formula.
 - Exports no longer fail outright on a `tool/result` event whose `message` is
   absent, and the scan fallback reads each event shape through its own typed
   case instead of a cast that hid real field drift.
 - When cross-session full-text search is unavailable, the palette says what still
   works (title matching over sessions and workspaces) instead of showing a bare
   error.
+- Added `scripts/live-dsh-check.sh`: a manual probe that runs against a *running*
+  isolated dsh profile and exercises the host half on real session data
+  (timeline, the three export formats, the search scan path, usage scan, backup,
+  a UTF-8 state round trip, and the loopback/same-origin fence), exiting
+  non-zero on any failure. CI has no harness to talk to, so this is the check to
+  run when a dsh release lands. Verified against 0.1.7-rc.2 (11 probes), and the
+  UTF-8 probe was shown to distinguish a correct write from the mangled-bytes
+  write it guards against.
 - The READMEs add a plugin-to-dsh compatibility table, since the peer gate makes
   a mismatched pair fail invisibly rather than loudly.
 

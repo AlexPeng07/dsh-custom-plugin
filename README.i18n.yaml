@@ -3,5 +3,5 @@
 # after editing either side, bring the other along and re-record the hashes:
 #   git hash-object --path README.md README.md
 #   git hash-object --path README.zh.md README.zh.md
-README.md: 0febda9434fc23f65615d7c8eaeabd2ef2e3c925
-README.zh.md: ef765b131d5bfadd821ad9cb46196e3b0a61da2a
+README.md: b97b7013875fedb0d7060ebe6c255d2110eb32af
+README.zh.md: c9dff5ba5464880589c2032cd3a767d54bf7c3b9

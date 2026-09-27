@@ -223,6 +223,15 @@ pnpm smoke          # post-build contract checks: loader handshake, manifest
                     # fields dsh reads, patch row, local Mermaid engine
 ```
 
+`scripts/live-dsh-check.sh` is a separate, manual probe against a **running**
+isolated dsh profile (`DSH_HOME=… DSH_PORT=… bash scripts/live-dsh-check.sh`):
+it exercises the host half end to end on real session data — timeline, the
+three export formats, the search scan path, usage scan, backup, the UTF-8 state
+round trip, and the loopback/same-origin fence. CI cannot cover these (it has no
+harness to talk to), so run it whenever a dsh release changes. It reports
+`PASS`/`FAIL` per probe and exits non-zero on any failure; slot registration and
+rendering still need the browser pass described above.
+
 ## License
 
 Apache-2.0. Portions of the code reference [Nagi-ovo/voyager](https://github.com/Nagi-ovo/voyager) and [unovue/inspira-ui](https://github.com/unovue/inspira-ui).

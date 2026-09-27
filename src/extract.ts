@@ -114,9 +114,11 @@ export function searchKindOf(type: string): 'user' | 'assistant' | 'tool' | null
 }
 
 /**
- * Excerpt centered on the match. The window must always contain the whole
- * match: the panel highlights the query inside the snippet, and a slice that
- * cut the hit off would render a result list with nothing highlighted.
+ * Excerpt centered on the match, with the window extended so the whole match
+ * fits. The centering already covers ordinary queries (the match starts 1/3 of
+ * the window in, so it fits while the query is shorter than the remaining 2/3);
+ * the extension only binds for a pasted query longer than that, which would
+ * otherwise be cut off and leave a highlighted-but-invisible result row.
  */
 export function snippetAround(text: string, at: number, needleLength: number, max: number): string {
   const start = Math.max(0, at - Math.floor(max / 3))

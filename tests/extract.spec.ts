@@ -243,4 +243,17 @@ describe('search scan fallback helpers', () => {
     // A hit at the very start has no leading ellipsis.
     expect(snippetAround('head text here', 0, 4, 500)).toBe('head text here')
   })
+
+  it('extends the window for a pasted query longer than two thirds of it', () => {
+    // Centering reserves 1/3 of the window before the match, so a match that
+    // starts late leaves less than the query's own length after it. This is the
+    // case the extension exists for: a 400-char query in a 500-char window.
+    const needle = 'Q'.repeat(400)
+    const text = 'z'.repeat(700) + needle
+    const snippet = snippetAround(text, 700, needle.length, 500)
+    expect(snippet).toContain(needle)
+    // Without the extension the window would have stopped at 1034 of 1100.
+    expect(snippet.includes(needle.slice(0, 300))).toBe(true)
+    expect(snippet.endsWith(needle)).toBe(true)
+  })
 })
