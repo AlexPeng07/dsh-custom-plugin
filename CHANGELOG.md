@@ -79,6 +79,18 @@ follow [Semantic Versioning](https://semver.org/).
   run when a dsh release lands. Verified against 0.1.7-rc.2 (11 probes), and the
   UTF-8 probe was shown to distinguish a correct write from the mangled-bytes
   write it guards against.
+- The live check itself was then tested against a dead endpoint and found two of
+  its own probes green-by-absence; both now require the write to be credited
+  before they can pass. Running it for real also exposed three defects in the
+  tool, all fixed: restoring the prompt library through `curl -d "$var"` mangled
+  non-ASCII to U+FFFD (Git Bash re-encodes non-ASCII argv for `curl.exe`), so
+  bodies are now written by node and sent with `--data-binary @file`; the script
+  was stored with CRLF endings; and its search probe silently `SKIP`ped whenever
+  the newest message started with a word shorter than six letters, which is the
+  only probe covering the scan path. It now also covers the Mermaid engine route,
+  the client→host diagnostic ring, both fences, and refuses to run against a real
+  `~/.dsh` without an explicit override (separator-normalized, since a Windows
+  path would have slipped past the first version of that guard).
 - The READMEs add a plugin-to-dsh compatibility table, since the peer gate makes
   a mismatched pair fail invisibly rather than loudly.
 

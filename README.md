@@ -225,12 +225,14 @@ pnpm smoke          # post-build contract checks: loader handshake, manifest
 
 `scripts/live-dsh-check.sh` is a separate, manual probe against a **running**
 isolated dsh profile (`DSH_HOME=… DSH_PORT=… bash scripts/live-dsh-check.sh`):
-it exercises the host half end to end on real session data — timeline, the
-three export formats, the search scan path, usage scan, backup, the UTF-8 state
-round trip, and the loopback/same-origin fence. CI cannot cover these (it has no
-harness to talk to), so run it whenever a dsh release changes. It reports
-`PASS`/`FAIL` per probe and exits non-zero on any failure; slot registration and
-rendering still need the browser pass described above.
+it exercises the host half on real session data — timeline, the three export
+formats, the search scan path, usage scan, backup, the Mermaid engine route, the
+client→host diagnostic ring, a UTF-8 state round trip that restores and then
+verifies your prompt library, and both trust fences. It refuses to run against a
+real `~/.dsh` unless you set `ALLOW_REAL_DSH_HOME=1`, reports `PASS`/`FAIL` per
+probe, and exits non-zero on any failure. CI has no harness to talk to, so run it
+whenever a dsh release lands; slot registration and rendering still need the
+browser pass described above.
 
 ## License
 
