@@ -565,6 +565,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
   }
 
   async function loadCfg(): Promise<void> {
+    let failure: string | null = null
     try {
       const result = await apiStateGet()
       if (result.ok === true && result.data !== undefined) {
@@ -581,13 +582,23 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
         if (typeof data.apiKeyConfigured === 'boolean') S.apiKeyConfigured = data.apiKeyConfigured
         if (data.credentialStorage === 'system' || data.credentialStorage === 'legacy-state' || data.credentialStorage === 'environment' || data.credentialStorage === 'dsh' || data.credentialStorage === 'none') S.credentialStorage = data.credentialStorage
         if (data.usage !== undefined && data.usage !== null && typeof data.usage === 'object') S.usage = data.usage
+      } else if (result.ok !== true) {
+        // A rejected state read used to be swallowed, which let a broken host
+        // path read as "settings silently reset". Surface it.
+        failure = result.error ?? '状态读取失败'
       }
-    } catch { /* first load may race the host */ }
+    } catch (error) {
+      failure = String((error as Error)?.message ?? error)
+    }
+    if (failure !== null) {
+      apiDiagReport('loadCfg: ' + failure)
+      if (S.booted) toast('配置读取失败：' + failure, 'error')
+    }
     S.booted = true
     setS({})
     if (!S.greeted) {
       S.greeted = true
-      void new Promise<void>((resolve) => setTimeout(resolve, 1200)).then(() => toast('Custom 便利套件已就绪', 'info')).catch(() => {})
+      void new Promise<void>((resolve) => setTimeout(resolve, 1200)).then(() => toast(failure !== null ? 'Custom 便利套件加载失败：' + failure : 'Custom 便利套件已就绪', failure !== null ? 'error' : 'info')).catch(() => {})
     }
   }
 
@@ -599,7 +610,11 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     const edit = { cfg, folders: S.folders, prompts: S.prompts, stars: S.stars, ...(keyDirty ? { apiKey: S.apiKey } : {}) }
     void apiStateSave(edit).then((result) => {
       if (result.ok !== true) {
-        if (keyDirty) toast(result.error ?? 'Key 保存失败', 'error')
+        // Saving used to stay quiet unless an API key was involved, so a
+        // rejected write looked like a toggle that "worked". Make it loud.
+        const message = result.error ?? '设置保存失败'
+        apiDiagReport('saveCfg: ' + message)
+        toast(message, 'error')
         return
       }
       if (keyDirty && S.apiKeyDirty && S.apiKey === (edit.apiKey ?? '')) {
@@ -609,7 +624,11 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
           credentialStorage: result.credentialStorage ?? S.credentialStorage,
         })
       }
-    }).catch(() => { if (keyDirty) toast('Key 保存失败', 'error') })
+    }).catch((error) => {
+      const message = String((error as Error)?.message ?? error)
+      apiDiagReport('saveCfg: ' + message)
+      toast('设置保存失败：' + message, 'error')
+    })
   }
 
   // ================= weather FX =================

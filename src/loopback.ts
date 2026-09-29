@@ -1,10 +1,15 @@
 /**
- * Loopback trust fence for the host routes: socket address, Host header,
- * and browser same-origin markers.
+ * Loopback trust fence for the host routes: socket address, Host header, and
+ * browser same-origin markers.
  *
  * Semantics: RFC 5735 IPv4 127/8, ::1, IPv4-mapped ::ffff:127/8, localhost
- * hostnames, plus the browser same-origin markers (sec-fetch-site and
- * Origin) for the request-level fence.
+ * hostnames. The request-level fence mirrors the platform's own API fence: a
+ * loopback peer naming a loopback Host is trusted unless a marker says
+ * otherwise — `sec-fetch-site: cross-site` rejects, and a present Origin must
+ * match the Host authority. Absent markers are trusted: that is the header
+ * shape dsh Desktop's shell produces when it forwards renderer requests to
+ * its Host (it deletes `origin`, `sec-fetch-site` and `cookie` first), and
+ * the shape the platform fence accepts for the same reason.
  * @module @alexpeng/dsh-custom-plugin/loopback
  */
 
@@ -34,9 +39,11 @@ export function isLoopbackHostname(hostname: string): boolean {
 }
 
 /**
- * Request-level trust fence: a loopback socket address AND a loopback Host
- * header, plus browser same-origin markers. The socket address is
- * authoritative; X-Forwarded-For is never trusted.
+ * Request-level trust fence, mirroring the platform fence's semantics: a
+ * loopback socket address AND a loopback Host header, non-`cross-site` fetch
+ * marker, and an Origin that is absent (trusted — the dsh Desktop forward
+ * shape) or matches the Host authority. The socket address is authoritative;
+ * X-Forwarded-For is never trusted.
  */
 export function isLoopbackRequest(request: IncomingMessage): boolean {
   if (!isLoopbackAddress(request.socket.remoteAddress)) return false

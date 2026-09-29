@@ -6,11 +6,20 @@ import { makeCustomPluginRoutes } from '../src/routes.ts'
 import { CUSTOM_PLUGIN_API_PREFIX } from '../src/protocol.ts'
 import { BACKUP_BODY_LIMIT } from '../src/backup.ts'
 
-function request(body: unknown, method = 'POST', path = '/search'): IncomingMessage {
+/** The web shape: a same-origin page fetch. */
+const WEB_HEADERS: Record<string, string | undefined> = { host: '127.0.0.1:3000', 'sec-fetch-site': 'same-origin' }
+
+function request(body: unknown, method = 'POST', path = '/search', headers: Record<string, string | undefined> = WEB_HEADERS): IncomingMessage {
+  // undefined values delete the header — that is how a test builds the dsh
+  // Desktop forward shape (no origin, no sec-fetch-site at all).
+  const clean: Record<string, string> = {}
+  for (const [key, value] of Object.entries(headers)) {
+    if (typeof value === 'string') clean[key] = value
+  }
   return Object.assign(Readable.from([Buffer.from(JSON.stringify(body))]), {
     method,
     url: `${CUSTOM_PLUGIN_API_PREFIX}${path}`,
-    headers: { host: '127.0.0.1:3000', 'sec-fetch-site': 'same-origin' },
+    headers: clean,
     socket: { remoteAddress: '127.0.0.1' },
   }) as unknown as IncomingMessage
 }
@@ -86,5 +95,49 @@ describe('custom plugin routes', () => {
     expect(malformed.status).toBe(400)
     expect((malformed.body as { error: string }).error).toContain('dryRun')
     expect(called).toBe(0)
+  })
+})
+
+describe('custom plugin route trust fence (guard)', () => {
+  // The guard answers before any handler logic runs, so the host stub only
+  // needs the state view for the accepted cases.
+  const host = { stateView: async () => ({}) } as unknown as CustomPluginHost
+  const stateRoute = makeCustomPluginRoutes(host).find((item) => item.path === `${CUSTOM_PLUGIN_API_PREFIX}/state`)!
+
+  async function status(headers: Record<string, string | undefined>, method = 'GET'): Promise<number> {
+    const out = response()
+    await stateRoute.handler(request({}, method, '/state', headers), out.res)
+    return out.status
+  }
+
+  it('accepts the dsh Desktop HTTP forward shape: loopback Host, no origin, no sec-fetch-site', async () => {
+    // The desktop shell deletes host/origin/sec-fetch-site/cookie before
+    // re-issuing the request against its Host; a fence that required an
+    // affirmative browser marker 403'd every route inside Desktop.
+    expect(await status({ host: '127.0.0.1:19387' })).toBe(200)
+  })
+
+  it('accepts the dsh Desktop WS-upgrade shape (origin rewritten to the Host authority)', async () => {
+    expect(await status({ host: '127.0.0.1:19387', origin: 'http://127.0.0.1:19387', 'sec-fetch-site': 'same-origin' })).toBe(200)
+  })
+
+  it('accepts the web shape (same-origin marker)', async () => {
+    expect(await status(WEB_HEADERS)).toBe(200)
+  })
+
+  it('rejects a foreign Origin', async () => {
+    expect(await status({ ...WEB_HEADERS, origin: 'http://evil.example' })).toBe(403)
+  })
+
+  it('rejects sec-fetch-site: cross-site', async () => {
+    expect(await status({ ...WEB_HEADERS, 'sec-fetch-site': 'cross-site' })).toBe(403)
+  })
+
+  it('rejects an unparseable Origin', async () => {
+    expect(await status({ ...WEB_HEADERS, origin: 'not-a-url' })).toBe(403)
+  })
+
+  it('rejects a non-loopback Host header', async () => {
+    expect(await status({ host: 'example.com:3000', 'sec-fetch-site': 'same-origin' })).toBe(403)
   })
 })

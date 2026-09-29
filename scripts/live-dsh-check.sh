@@ -15,9 +15,9 @@
 #      developer's global install),
 #   2. DSH_HOME pointed at a scratch home, `dsh plugin --profile web add <tgz>`,
 #   3. `dsh --profile web --no-open --port <PORT>` running,
-#   4. a cookie jar from the boot URL's ?token=... — required, not optional: the
-#      API fence accepts a bare Origin header, but the shell page that carries
-#      the boot graph sits behind dsh's own token auth.
+#   4. a cookie jar from the boot URL's ?token=... for the boot-graph probe:
+#      the shell page sits behind dsh's own token auth (the plugin's routes
+#      trust the loopback and need no cookie).
 #
 # Covers the host half plus the client half's registration contract (is our row
 # in the boot graph, do its inject targets exist, are the bytes reachable).
@@ -210,9 +210,12 @@ if [ "${mm%% *}" = "200" ] && [ "${mm##* }" -gt 100000 ]; then
 else
   fail "mermaid script route: $mm"
 fi
-fence_mm=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "$BASE/custom-plugin/mermaid.js")
-[ "$fence_mm" = "403" ] && pass "mermaid script route is behind the same fence" \
-                        || fail "mermaid script route fence returned $fence_mm"
+# A foreign Origin must not read the engine bundle even though an unmarked
+# loopback load (the dsh Desktop forward shape) can.
+fence_mm=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 \
+             -H 'Origin: http://fence-probe.invalid' "$BASE/custom-plugin/mermaid.js")
+[ "$fence_mm" = "403" ] && pass "mermaid script route rejects a foreign Origin" \
+                        || fail "mermaid script route foreign-Origin fence returned $fence_mm"
 
 # Client→host diagnostics must reach the ring the status tool reads.
 marker="livecheck-$$"
@@ -271,9 +274,22 @@ else
 fi
 rm -rf "$probeDir"
 
-fence=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$BASE/api/custom-plugin/state")
-[ "$fence" = "403" ] && pass "loopback + same-origin fence rejects an unmarked request" \
-                     || fail "fence returned $fence instead of 403"
+# The trust fence mirrors the platform's semantics: a loopback request with no
+# browser markers (exactly the shape dsh Desktop's shell forwards — it deletes
+# origin/sec-fetch-site before re-issuing) must pass; a foreign Origin or a
+# cross-site marker must not. The unmarked pass is load-bearing for Desktop:
+# if it ever regresses to 403, every plugin feature inside Desktop dies again.
+unmarked=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$BASE/api/custom-plugin/state")
+[ "$unmarked" = "200" ] && pass "unmarked loopback request passes (dsh Desktop forward shape)" \
+                       || fail "unmarked loopback request returned $unmarked instead of 200"
+foreign=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 \
+            -H 'Origin: http://fence-probe.invalid' "$BASE/api/custom-plugin/state")
+[ "$foreign" = "403" ] && pass "foreign Origin is rejected" \
+                      || fail "foreign Origin returned $foreign instead of 403"
+crosssite=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 \
+              -H "Origin: $BASE" -H 'Sec-Fetch-Site: cross-site' "$BASE/api/custom-plugin/state")
+[ "$crosssite" = "403" ] && pass "cross-site marker is rejected" \
+                        || fail "cross-site marker returned $crosssite instead of 403"
 
 echo "== probes done; rendering, slot placement and composer insertion still need a browser pass"
 if [ "$fails" -gt 0 ]; then echo "FAILED: $fails (skipped: $skips)"; exit 1; fi

@@ -159,13 +159,16 @@ profile prints.
 
 Measured against 0.2.0-rc.2: the boot graph carries our row and all five inject
 targets, the Mermaid engine loads locally, and the host probes score the same
-there as on 0.1.7-rc.2. The desktop request path does not disturb this plugin's
-access fence either — the shell forwards renderer requests to its own Host after
-deleting `host`, `origin`, `sec-fetch-site` and `cookie`, then attaches its own
-credential, which is the shape the loopback fence accepts (that fence now has
-unit tests, which it never had before). What has *not* been done is opening this
-plugin inside a Desktop window; that pass belongs to whoever installs it, and it
-needs your login.
+there as on 0.1.7-rc.2. The access fence shares the platform fence's trust
+semantics: a loopback socket naming a loopback Host, a non-`cross-site` marker,
+and an Origin that is absent or matches the Host authority. The shell forwards
+renderer requests to its own Host after deleting `host`, `origin`,
+`sec-fetch-site` and `cookie`, then attaches its own credential — that unmarked
+shape is accepted outright (through 0.6.0 the fence additionally required a
+same-origin marker and rejected exactly this shape with `forbidden`; fixed in
+0.7.0 with fence-level unit tests). Foreign-origin and cross-site requests are
+still 403. What has *not* been done is opening this plugin inside a Desktop
+window; that pass belongs to whoever installs it, and it needs your login.
 
 Managing the desktop profile takes the `dsh` command that ships with Desktop, not
 the npm one — the public CLI refuses the reserved `desktop` profile:
@@ -265,7 +268,9 @@ isolated dsh profile (`DSH_HOME=… DSH_PORT=… bash scripts/live-dsh-check.sh`
 it exercises the host half on real session data — timeline, the three export
 formats, the search scan path, usage scan, backup, the Mermaid engine route, the
 client→host diagnostic ring, a UTF-8 state round trip that restores and then
-verifies your prompt library, and both trust fences. It refuses to run against a
+verifies your prompt library, and the three trust-fence shapes (an unmarked
+loopback request passes, a foreign Origin and a cross-site marker are
+rejected). It refuses to run against a
 real `~/.dsh` unless you set `ALLOW_REAL_DSH_HOME=1`, reports `PASS`/`FAIL` per
 probe, counts and names anything it `SKIP`s, and exits non-zero on any failure.
 CI has no harness to talk to, so run it whenever a dsh release lands; slot

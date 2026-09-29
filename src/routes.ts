@@ -1,10 +1,10 @@
 /**
  * HTTP routes for dsh-custom-plugin.
  *
- * Every route sits behind the loopback + same-origin fence (shared
- * `loopback.ts`); the browser talks to these handlers with plain fetch. The
- * mermaid engine script is served at its own non-API path because the browser
- * loads it as a `<script src>`.
+ * Every route sits behind the loopback trust fence (shared `loopback.ts`,
+ * semantics aligned with the platform's own request fence); the browser talks
+ * to these handlers with plain fetch. The mermaid engine script is served at
+ * its own non-API path because the browser loads it as a `<script src>`.
  * @module @alexpeng/dsh-custom-plugin/routes
  */
 
@@ -27,13 +27,18 @@ function json(res: ServerResponse, status: number, body: unknown): void {
   res.end(JSON.stringify(body))
 }
 
-function browserSameOriginMarker(req: IncomingMessage): boolean {
-  const site = req.headers['sec-fetch-site']
-  return site === 'same-origin' || typeof req.headers.origin === 'string'
-}
-
+/**
+ * The request fence. Trust is decided by `isLoopbackRequest` alone: a loopback
+ * socket with a loopback Host, a non-`cross-site` fetch marker, and an Origin
+ * that is absent or matches the Host authority. Absent markers are *accepted*
+ * — that is the exact header shape dsh Desktop's shell produces when it
+ * forwards renderer requests to its own Host (it deletes `host`, `origin`,
+ * `sec-fetch-site` and `cookie` first), and the same shape the platform fence
+ * treats as trusted. A foreign origin, a cross-site marker, or a non-loopback
+ * peer is rejected.
+ */
 function guard(req: IncomingMessage, res: ServerResponse): boolean {
-  if (browserSameOriginMarker(req) && isLoopbackRequest(req)) return true
+  if (isLoopbackRequest(req)) return true
   json(res, 403, { ok: false, error: 'forbidden' })
   return false
 }
@@ -249,8 +254,9 @@ export function makeCustomPluginRoutes(host: CustomPluginHost, ready: Promise<vo
     kind: 'exact',
     path: MERMAID_SCRIPT_PATH,
     handler: (req, res): void => {
-      // Same fence as the API routes: a same-origin <script src> passes
-      // (sec-fetch-site: same-origin), a cross-site page does not.
+      // Same fence as the API routes: a same-origin or unmarked loopback load
+      // passes (web pages send sec-fetch-site: same-origin; dsh Desktop's
+      // shell forwards the load without markers), a cross-site page does not.
       if (!guard(req, res)) return
       const script = host.mermaidScript()
       if (script === '') {
