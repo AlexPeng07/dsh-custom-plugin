@@ -15,11 +15,13 @@
 #      developer's global install),
 #   2. DSH_HOME pointed at a scratch home, `dsh plugin --profile web add <tgz>`,
 #   3. `dsh --profile web --no-open --port <PORT>` running,
-#   4. a cookie jar from the boot URL's ?token=... (or leave COOKIE unset and
-#      rely on the Origin header, which the same-origin fence also accepts).
+#   4. a cookie jar from the boot URL's ?token=... — required, not optional: the
+#      API fence accepts a bare Origin header, but the shell page that carries
+#      the boot graph sits behind dsh's own token auth.
 #
-# Host-half surface only. Slot registration, panel rendering and composer
-# insertion still need a browser pass; the script prints what it checked.
+# Covers the host half plus the client half's registration contract (is our row
+# in the boot graph, do its inject targets exist, are the bytes reachable).
+# Rendering, slot placement and composer insertion still need a browser pass.
 # Exits non-zero on any FAIL.
 set -u
 
@@ -79,6 +81,50 @@ if [ "${mermaid:-0}" -gt 100000 ]; then
 else
   fail "mermaid engine bytes = ${mermaid:-none}"
 fi
+
+# ── the boot graph the running shell actually serves ─────────────────────────
+# `dsh.client.inject` names modules the shell must already have loaded. When one
+# of those ids stops existing, dsh skips the entire bundle and the plugin just
+# vanishes — which no repo-side gate can see, because only the running shell
+# knows its own module list. Round 1 of this compatibility pass broke exactly
+# that way, on `@deepseek-ai/dsh-client-runtime`.
+#
+# The shell page sits behind dsh's own token auth, and unlike the API fence it
+# does not accept a bare Origin header, so this probe needs COOKIE_JAR.
+cookie_args=()
+[ -n "$JAR" ] && cookie_args=(-b "$JAR")
+bootHtml=$(mktemp)
+boot_code=$(curl -s -o "$bootHtml" -w '%{http_code}' "${cookie_args[@]}" \
+             -H 'Sec-Fetch-Site: same-origin' -H 'Origin: '"$BASE" --max-time 30 "$BASE/")
+if [ "$boot_code" != "200" ]; then
+  fail "shell page returned $boot_code — set COOKIE_JAR to a jar from the boot URL"
+else
+  here=$(cd "$(dirname "$0")" && pwd)
+  graph=$(node "$here/check-boot-graph.mjs" "$here/../package.json" "$bootHtml")
+  if [ $? -ne 0 ]; then
+    fail "boot graph checker crashed on a 200 shell page"
+  else
+    while IFS= read -r line; do
+      case "$line" in
+        OK\ *)  pass "${line#OK }" ;;
+        BAD\ *) fail "${line#BAD }" ;;
+      esac
+    done <<< "$graph"
+    # Reachable bytes, not just a row: this combo URL is what the browser loads.
+    combo=$(printf '%s\n' "$graph" | sed -n 's/^URL //p' | head -1)
+    if [ -n "$combo" ]; then
+      served=$(curl -s -o /dev/null -w '%{http_code} %{size_download}' "${cookie_args[@]}" \
+                -H 'Sec-Fetch-Site: same-origin' -H 'Origin: '"$BASE" --max-time 60 \
+                "$BASE/${combo#/}")
+      if [ "${served%% *}" = "200" ] && [ "${served##* }" -gt 100000 ]; then
+        pass "client bundle served at ${served##* } bytes"
+      else
+        fail "client bundle combo URL: $served"
+      fi
+    fi
+  fi
+fi
+rm -f "$bootHtml"
 
 # ── session reads: timeline, export, search scan ─────────────────────────────
 sid=$(find "$STATE/../sessions" -mindepth 2 -maxdepth 2 -type d 2>/dev/null | head -1 | xargs -r basename)
@@ -143,8 +189,6 @@ printf '%s' "$(split "$res")" | grep -q 'dsh-custom-plugin-backup' && pass "back
 
 # The Mermaid engine is served on its own non-API path, so it needs its own
 # probe — size only: a 3.5 MB body must not land in a shell variable.
-cookie_args=()
-[ -n "$JAR" ] && cookie_args=(-b "$JAR")
 mm=$(curl -s -o /dev/null -w '%{http_code} %{size_download}' "${cookie_args[@]}" \
         -H 'Sec-Fetch-Site: same-origin' -H 'Origin: '"$BASE" --max-time 60 \
         "$BASE/custom-plugin/mermaid.js")
@@ -210,6 +254,6 @@ fence=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$BASE/api/custom-p
 [ "$fence" = "403" ] && pass "loopback + same-origin fence rejects an unmarked request" \
                      || fail "fence returned $fence instead of 403"
 
-echo "== host-half probes done; client registration/rendering needs a browser pass"
+echo "== probes done; rendering, slot placement and composer insertion still need a browser pass"
 if [ "$fails" -gt 0 ]; then echo "FAILED: $fails"; exit 1; fi
 echo "OK: all live host checks passed"
