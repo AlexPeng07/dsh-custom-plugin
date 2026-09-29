@@ -1,7 +1,7 @@
 {
   "name": "@alexpeng/dsh-custom-plugin",
   "description": "Custom convenience suite for the dsh web GUI: appearance, timeline, folders, prompts, session export/search, Mermaid, quote reply, usage analytics, local budget, key-free backups, and a Ctrl/Cmd+K command palette; dual-face plugin mounted without dsh source changes.",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "type": "module",
   "icon": "./icon.svg",
   "main": "lib/index.js",
@@ -45,7 +45,7 @@
   "homepage": "https://github.com/AlexPeng07/dsh-custom-plugin#readme",
   "engines": {
     "node": ">=22",
-    "dsh": ">=0.1.7-rc.2 <0.2.0"
+    "dsh": ">=0.1.7-rc.2 <0.2.0-0 || >=0.2.0-rc.2 <0.2.0-rc.3"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json && tsdown",
@@ -61,28 +61,29 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.4",
-    "@deepseek-ai/dsh-tools": "^0.1.7-rc.2"
+    "@deepseek-ai/dsh-tools": ">=0.1.7-rc.2 <0.2.0-0 || >=0.2.0-rc.2 <0.2.0-rc.3"
   },
   "dependencies": {
     "mermaid": "^11.6.0"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.4",
-    "@deepseek-ai/dsh-attachment": "^0.1.7-rc.2",
-    "@deepseek-ai/dsh-client-store": "^0.1.7-rc.2",
-    "@deepseek-ai/dsh-client-ui-slots": "^0.1.7-rc.2",
-    "@deepseek-ai/dsh-client-ui-theme": "^0.1.7-rc.2",
-    "@deepseek-ai/dsh-host-webserver": "^0.1.7-rc.2",
-    "@deepseek-ai/dsh-llm": "^0.1.7-rc.2",
-    "@deepseek-ai/dsh-session": "^0.1.7-rc.2",
-    "@deepseek-ai/dsh-session-query": "^0.1.7-rc.2",
-    "@deepseek-ai/dsh-tools": "^0.1.7-rc.2",
+    "@deepseek-ai/dsh-attachment": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-store": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-ui-slots": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-ui-theme": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-host-webserver": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-llm": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-session": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-session-query": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-tools": "0.2.0-rc.2",
     "@types/node": "^22.20.0",
     "@types/react": "~18.3.1",
     "@types/react-dom": "^18.3.5",
     "puppeteer-core": "^25.8.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "semver": "^7.8.5",
     "tsdown": "0.22.2",
     "typescript": "~5.7.2",
     "vitest": "^3.0.0"

@@ -4,7 +4,45 @@ All notable changes to this project are documented here. The format loosely
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions
 follow [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## 0.6.0 — not yet published
+
+### Changed
+
+- **Built against dsh 0.2.0-rc.2, and the declared range now names it.** Every
+  `@deepseek-ai/dsh-*` devDependency moved to 0.2.0-rc.2 and the source
+  type-checked against that release's own published types with no source
+  changes. The gate-relevant peer became
+  `@deepseek-ai/dsh-tools >=0.1.7-rc.2 <0.2.0-0 || >=0.2.0-rc.2 <0.2.0-rc.3`,
+  and `engines.dsh` was set to the same range. That spelling is load-bearing:
+  `^0.1.7-rc.2` desugars to `>=0.1.7-rc.2 <0.2.0-0`, and every `0.2.0-rc.N`
+  sorts above `0.2.0-0`, so no caret form can admit a verified prerelease — and
+  `^0.2.0-rc.2` would additionally admit 0.2.0 stable plus every later 0.2.x,
+  which is exactly the unverified support this range exists to withhold.
+  0.2.0-rc.1 is left out on purpose: the bundle is now built for rc.2.
+- `pnpm smoke`'s two range checks were rewritten, because both encoded the old
+  premise that a peer range is a single caret pin. They now assert what is
+  actually load-bearing: the installed build target must **satisfy** the peer
+  range (same comparator and `includePrerelease` semantics dsh's own gate uses),
+  a range that admits every version is rejected as stating no support at all,
+  and `engines.dsh` must admit the same versions as the peer range across ten
+  probed releases. `semver` became a devDependency to make the first check
+  possible. Verified by mutation: a stale range, a `*` range, and a diverging
+  `engines.dsh` each turn the gate red.
+- The desktop release line pins its shell and runtime together, so dsh Desktop
+  always ships one exact dsh version — this is why 0.2.0-rc.2 stopped being a
+  speculative target: any Desktop install *is* that runtime.
+
+### Added
+
+- `tests/loopback.spec.ts`: the request-level fence had never had a unit test —
+  only the live probe script exercised it. Twelve tests now pin the two header
+  shapes dsh Desktop's shell produces (`web-document.ts` deletes `host`,
+  `origin`, `cookie` and `sec-fetch-site` before forwarding; the WebSocket
+  upgrade rewrites `Origin` to the Host authority), plus the rejections a
+  forged Origin, a cross-site marker, and a non-loopback socket must still get.
+- README (both languages) gained an "On dsh Desktop" section: how the shell
+  routes requests, why the profile is managed by Desktop's own `dsh` command,
+  and which part still needs a window and a login.
 
 ### Fixed
 
@@ -18,32 +56,43 @@ follow [Semantic Versioning](https://semver.org/).
   EPERM/EBUSY shape this queue was built to stop, reachable across processes.
   Temp names are now qualified by the writing pid (both the state document and
   the pre-import recovery backup), and a failed turn deletes its own temp
-  instead of leaving a per-pid file behind.
+  instead of leaving a per-pid file behind. Building that cleanup surfaced a
+  second bug: `rm` was used in the new `catch` but never imported, so a failed
+  save reported `ReferenceError` instead of the real rename error and left the
+  temp file on disk.
 
-### Verified against dsh Desktop's runtime
+### Verified
 
-dsh Desktop ships an Electron shell around **exactly
-`@deepseek-ai/dsh@0.2.0-rc.2`** — the desktop release line pins the shell and
-the runtime to the same version. Measured here against that version installed
-from npm:
-
-- `dsh plugin --profile web add` refused 0.5.0 and rolled the profile back,
-  naming `peerDependencies {"@deepseek-ai/dsh-tools":"^0.1.7-rc.2"}` — the
-  published peer range excludes every 0.2.x prerelease, because
-  `^0.1.7-rc.2` means `>=0.1.7-rc.2 <0.2.0-0`.
-- After granting the exact-version exemption, 18 of 19 live host probes passed
-  with 0 failures; the one skip was the session-dependent probe, because a
-  credential-free scratch home holds no session. The boot graph carried 66
-  module rows, our row was served, and all five `dsh.client.inject` targets
-  existed.
-- The client bundle as served is 49 bytes larger than the file on disk. That is
-  dsh's composite asset route concatenating modules (`;\n` between rows) and
-  rewriting the `sourceMappingURL` comment to the concatenated URL — not a
-  transform of our bundle. A byte-identity check has to compare the installed
-  file, not the served response.
-- 126 unit tests pass (12 new for the loopback fence, 3 new for the temp
-  naming), typecheck is clean, and `pnpm smoke` is green. The release range was
-  **not** widened by this round; see README for why.
+- **dsh 0.2.0-rc.2, the version Desktop ships.** Confirmed from the installed
+  app's own bytes, not the repository: `resources/app.asar/dsh/desktop-runtime.json`
+  records `release.version 0.2.0-rc.2`, `node 24.18.1`, `pnpm 11.7.0`, and lists
+  `@deepseek-ai/dsh 0.2.0-rc.2` with `@deepseek-ai/cordis 4.0.4` (the version
+  this package's cordis peer already names) among its shared packages.
+- 0.5.0 on that runtime behaved as predicted: `dsh plugin --profile web add`
+  refused it, naming `peerDependencies {"@deepseek-ai/dsh-tools":"^0.1.7-rc.2"}`,
+  and rolled the profile back. With the exemption granted, 18 of 19 live host
+  probes passed, 0 failed.
+- **0.6.0 installs on 0.2.0-rc.2 with no exemption at all** (`plugin add` exit
+  0, profile kept), and the same 18-pass/1-skip/0-fail result holds there and on
+  0.1.7-rc.2 — boot graph 66 module rows on 0.2.0-rc.2 and 65 on 0.1.7-rc.2, our
+  row served, all
+  five `dsh.client.inject` targets present, Mermaid engine loaded locally, UTF-8
+  state round trip restored. The single skip is the session-dependent probe; a
+  credential-free scratch home holds no session.
+- The rebuild of `pnpm-lock.yaml` (required: the old lockfile cached a
+  `minimumReleaseAge` policy snapshot that no longer matched the allow-list, so
+  every install was rejected) also moved the dev tree's `mermaid` from 11.17.0
+  to 11.17.2. That is inside the declared `^11.6.0`, and the scratch profiles
+  used for the live probes resolved 11.17.2 themselves, so the measured Mermaid
+  engine is the version an installing user gets.
+- The installed `lib/client.js` is byte-identical to the repository build
+  (207762 bytes, sha256 prefix `f559cd7f1bd8a49a`). The *served* bundle is 49
+  bytes larger because dsh's composite `/plugins/??…` route joins modules with
+  `;\n` and rewrites the `sourceMappingURL` — so byte identity is asserted at
+  the installed file, never at the HTTP response.
+- 126 unit tests pass, typecheck is clean, `pnpm smoke` and `check:readme` are
+  green. Not verified: opening the plugin inside a real Desktop window (needs a
+  login), the desktop profile's own composition, and the per-turn chips.
 
 ## 0.5.0 — 2026-09-28
 

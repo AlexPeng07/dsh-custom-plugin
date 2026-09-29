@@ -28,6 +28,9 @@ import { readFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { dirname, join, delimiter } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+// The same library dsh's own peer gate uses, so this gate cannot disagree with
+// the runtime about what a range admits (prerelease semantics included).
+import semver from 'semver'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const ID = '@alexpeng/dsh-custom-plugin'
@@ -142,11 +145,17 @@ for (const localeFile of ['locale/en.json', 'locale/zh.json']) {
   }
 }
 
-// The runtime peer gate compares @deepseek-ai/dsh-* ranges against the running
-// dsh version; a stale range silently under- or over-states support, so the
-// declared floor must be the release this bundle was type-checked against.
-for (const [name, range] of Object.entries(manifest.peerDependencies ?? {})) {
-  if (!name.startsWith('@deepseek-ai/dsh-')) continue
+// The runtime peer gate reads only `@deepseek-ai/dsh` / `@deepseek-ai/dsh-*`
+// peers and tests them with semver.satisfies(runtime, range, { includePrerelease:
+// true }). What this gate has to catch is a manifest claiming something other
+// than the release the bundle was type-checked against, so the check is
+// satisfaction — not the spelling of the range.
+const gateOpts = { includePrerelease: true }
+const dshPeers = Object.entries(manifest.peerDependencies ?? {}).filter(([name]) => name.startsWith('@deepseek-ai/dsh'))
+if (dshPeers.length === 0) {
+  bad('peerDependencies: no @deepseek-ai/dsh* peer is declared, so no dsh release would be gated')
+}
+for (const [name, range] of dshPeers) {
   let installed
   try {
     installed = JSON.parse(await readFile(join(root, 'node_modules', name, 'package.json'), 'utf8')).version
@@ -154,36 +163,38 @@ for (const [name, range] of Object.entries(manifest.peerDependencies ?? {})) {
     bad(`peerDependencies: ${name} is declared but not installed, so its range cannot be checked`)
     continue
   }
-  const pinned = /^[\^~]?(\d+\.\d+\.\d+[^\s]*)$/.exec(String(range))
-  if (pinned === null) {
-    bad(`peerDependencies: ${name} range ${JSON.stringify(range)} is not a plain "^x.y.z" pin, so this gate cannot read which dsh release it claims to support`)
-    continue
-  }
-  if (pinned[1] !== installed) {
-    bad(`peerDependencies: ${name} range ${JSON.stringify(range)} disagrees with the ${installed} build target`)
+  if (!semver.validRange(String(range), gateOpts)) {
+    bad(`peerDependencies: ${name} range ${JSON.stringify(range)} is not a valid semver range — dsh reads that as incompatible and skips the bundle`)
+  } else if (!semver.satisfies(installed, String(range), gateOpts)) {
+    bad(`peerDependencies: the ${installed} build target this bundle was type-checked against does not satisfy the declared range ${JSON.stringify(range)} — dsh would refuse the very release this was built for`)
+  } else if (semver.satisfies('99.0.0', String(range), gateOpts)) {
+    bad(`peerDependencies: ${name} range ${JSON.stringify(range)} admits every version, so it states no supported release at all`)
   } else {
-    ok(`peerDependencies: ${name} ${range} matches the installed ${installed}`)
+    ok(`peerDependencies: the installed ${installed} build target satisfies ${range}`)
   }
 }
 
 // `engines.dsh` is not what the runtime gate reads — that only looks at the
 // @deepseek-ai/dsh-* peers — but it is what npm and the plugin manager show the
-// user, so its floor has to name the same release the peer range was pinned to.
+// user, so the two must admit the same versions or the docs promise what the
+// gate does not enforce.
 {
   const declared = String(manifest.engines?.dsh ?? '')
-  const floor = /^>=(\d+\.\d+\.\d+[^\s]*)/.exec(declared)
-  let target = null
-  try {
-    target = JSON.parse(await readFile(join(root, 'node_modules', '@deepseek-ai', 'dsh-tools', 'package.json'), 'utf8')).version
-  } catch { /* not installed; reported below */ }
-  if (floor === null) {
-    bad(`package.json: engines.dsh ${JSON.stringify(declared)} carries no ">=<version>" floor to check`)
-  } else if (target === null) {
-    bad('engines.dsh: @deepseek-ai/dsh-tools is not installed, so the declared floor cannot be checked')
-  } else if (floor[1] !== target) {
-    bad(`engines.dsh: floor ${floor[1]} disagrees with the ${target} build target`)
+  const peer = String(manifest.peerDependencies?.['@deepseek-ai/dsh-tools'] ?? '')
+  if (declared === '') {
+    bad('engines.dsh: absent, so users are shown no supported dsh range')
+  } else if (peer === '') {
+    bad('engines.dsh: cannot be cross-checked — no @deepseek-ai/dsh-tools peer is declared')
   } else {
-    ok(`engines.dsh: floor ${floor[1]} matches the installed ${target}`)
+    // Compare verdicts across the release history, not just at the floor: an
+    // `||` clause can drift in either direction while the floor still looks right.
+    const probe = ['0.1.6', '0.1.7-rc.1', '0.1.7-rc.2', '0.1.8', '0.1.9', '0.2.0-rc.1', '0.2.0-rc.2', '0.2.0-rc.3', '0.2.0', '0.3.0']
+    const diverging = probe.filter(v => semver.satisfies(v, declared, gateOpts) !== semver.satisfies(v, peer, gateOpts))
+    if (diverging.length > 0) {
+      bad(`engines.dsh ${JSON.stringify(declared)} and the dsh-tools peer ${JSON.stringify(peer)} disagree on ${diverging.join(', ')}`)
+    } else {
+      ok(`engines.dsh agrees with the dsh-tools peer range across ${probe.length} probed versions`)
+    }
   }
 }
 

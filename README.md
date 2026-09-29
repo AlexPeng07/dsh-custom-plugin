@@ -120,7 +120,8 @@ The `custom_plugin_status` tool reports appearance config, today's per-model usa
 
 | plugin release | dsh it was built and verified against | status |
 | --- | --- | --- |
-| 0.5.x | dsh 0.1.7-rc.2 (declared range `>=0.1.7-rc.2 <0.2.0`) | current |
+| 0.6.x | dsh 0.1.7-rc.2 and dsh 0.2.0-rc.2 (peer range names both; see Install) | this release |
+| 0.5.x | dsh 0.1.7-rc.2 (peer range `>=0.1.7-rc.2 <0.2.0-0`) | fine on 0.1.x; refused on any 0.2.x host, including dsh Desktop |
 | 0.4.2 | dsh 0.1.1-rc.1 … 0.1.6 era | superseded; do not expect it to work on 0.1.7+ |
 
 0.1.7 changed the plugin-facing contracts this suite depends on (session
@@ -136,7 +137,7 @@ report their service as missing rather than throwing.
 
 ## Install
 
-Prerequisites: Node 22+, pnpm, and the `dsh` CLI (the official `@deepseek-ai/dsh` npm package; `npx @deepseek-ai/dsh` stands in for `dsh` when it is not installed globally). This release targets **dsh 0.1.7-rc.2 through the rest of 0.1.x** — dsh checks a bundle's `@deepseek-ai/dsh-*` peer ranges against its own version at install and startup, and skips a bundle that does not match, so `package.json` declares a range whose floor is the release this package was actually built and verified against. It does not yet support 0.2.x: `^0.1.7-rc.2` excludes it, and `dsh plugin add` against 0.2.0-rc.1 rejects the install and rolls the profile back. What has been measured there, with dsh's exact-version exemption granted: the source typechecks against 0.2.0-rc.1's own published types, 111/111 unit tests pass, all 19 live host probes pass, and the browser surfaces behave the same as on 0.1.7 — eight slot registrations, the timeline rail, prompt insertion into the composer, `Ctrl+K` palette with title search, and quote-reply writing a blockquote. What stays unverified there is what stays unverified here: the per-turn chips (branch, Mermaid render, LaTeX) need a real model reply, so a credential-free scratch home cannot reach them. The range is not widened for a different reason — `^0.2.0-rc.1` would silently admit every 0.2.x release, including a future stable nobody has looked at, which is the same mistake this upgrade exists to stop. On an older dsh, install the matching older plugin release instead of granting a compatibility exemption.
+Prerequisites: Node 22+, pnpm, and the `dsh` CLI (the official `@deepseek-ai/dsh` npm package; `npx @deepseek-ai/dsh` stands in for `dsh` when it is not installed globally). This release targets **dsh 0.1.7-rc.2 through the rest of 0.1.x, plus 0.2.0-rc.2** — dsh checks a bundle's `@deepseek-ai/dsh-*` peer ranges against its own version at install and startup, and skips a bundle that does not match, so `package.json` names only the releases this package was actually built and verified against. 0.6.0 is type-checked and built against 0.2.0-rc.2, and the same artifact was run through the live host probes on both runtime lines: 18 of 19 probes pass on 0.2.0-rc.2 (boot graph of 66 module rows) and on 0.1.7-rc.2 (65 rows), the one skip being the probe that needs a real session. What stays unverified is what was always unverified: the per-turn chips (branch, Mermaid render, LaTeX) need a real model reply, so a credential-free scratch home cannot reach them, and slot rendering still needs a browser pass. The range deliberately excludes 0.2.0-rc.1 (a superseded prerelease), 0.2.0-rc.3 and later prereleases nobody has looked at, and 0.2.0 stable until someone does. Range spelling matters here: `^0.1.7-rc.2` desugars to `>=0.1.7-rc.2 <0.2.0-0`, and every `0.2.0-rc.N` sorts *above* `0.2.0-0`, so a verified prerelease has to be named in its own clause — `pnpm smoke` checks that the build target actually satisfies the declared range and that `engines.dsh` admits the same versions. On an older dsh, install the matching older plugin release (`0.5.0` targets 0.1.7-rc.2) rather than granting a compatibility exemption.
 
 ### From npm
 
@@ -150,33 +151,31 @@ The registry tarball ships prebuilt output — no source build on the installing
 ### On dsh Desktop
 
 dsh Desktop is an Electron shell around the same Web application, and it bundles
-**exactly dsh 0.2.0-rc.2**: the desktop line pins shell and runtime to one
-version, so a Desktop install is always a 0.2.x runtime. The published peer
-range here does not admit 0.2.x, so Desktop refuses this plugin with the same
-message a 0.2.x Web profile prints — and there is no older plugin release to
-reach for instead, because Desktop owns its own profile and nothing else
-targets it. Granting the exact-version exemption is therefore the only way to
-run this plugin there, which is why the measurements below exist.
+**exactly dsh 0.2.0-rc.2** — the desktop release line pins the shell and the
+runtime together, so a Desktop install is always a 0.2.x runtime. 0.6.0 names
+that version in its peer range and installs there with no compatibility
+exemption; 0.5.0 did not, and was refused with the same message a 0.2.x Web
+profile prints.
 
-Against 0.2.0-rc.2: 18 of 19 live host probes pass (the skip needs a session,
-and a credential-free scratch home has none), the boot graph carries the row and
-all five inject targets, and the Mermaid engine loads locally. The desktop
-request path also does not disturb this plugin's access fence — the shell
-forwards renderer requests to its own Host after deleting `host`, `origin`,
-`sec-fetch-site` and `cookie`, then attaches its own credential, which is a
-shape the loopback fence already accepts. What has *not* been done is opening
-this plugin inside a real Desktop window; the rendering pass still belongs to
-whoever installs it.
+Measured against 0.2.0-rc.2: the boot graph carries our row and all five inject
+targets, the Mermaid engine loads locally, and the host probes score the same
+there as on 0.1.7-rc.2. The desktop request path does not disturb this plugin's
+access fence either — the shell forwards renderer requests to its own Host after
+deleting `host`, `origin`, `sec-fetch-site` and `cookie`, then attaches its own
+credential, which is the shape the loopback fence accepts (that fence now has
+unit tests, which it never had before). What has *not* been done is opening this
+plugin inside a Desktop window; that pass belongs to whoever installs it, and it
+needs your login.
 
 Managing the desktop profile takes the `dsh` command that ships with Desktop, not
 the npm one — the public CLI refuses the reserved `desktop` profile:
 
 1. Start Desktop once so the profile exists, then quit it fully (closing the
    window only hides it; on Windows use the tray).
-2. `dsh plugin --profile desktop allow-version @alexpeng/dsh-custom-plugin@<version> --dsh-version 0.2.0-rc.2 --accept-risk`
-3. `dsh plugin --profile desktop add @alexpeng/dsh-custom-plugin`
-4. Reopen Desktop. The in-app Plugin Manager grants the same exemption and
-   installs, if you would rather not open a terminal.
+2. `dsh plugin --profile desktop add @alexpeng/dsh-custom-plugin`
+3. Reopen Desktop. The in-app Plugin Manager installs and updates against the
+   same profile using Desktop's own bundled pnpm, if you would rather not open a
+   terminal.
 
 Appearance, prompt library, project folders, stars and usage all live in
 `$DSH_HOME/custom-plugin-state.json`, which Desktop and Web share by design —

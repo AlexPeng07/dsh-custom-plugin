@@ -28,12 +28,18 @@ reply, and DeepSeek balance / daily token usage.
 
 - The runtime compatibility gate reads **only** `peerDependencies` named
   `@deepseek-ai/dsh` or `@deepseek-ai/dsh-*` and checks them against the running
-  dsh version (prereleases participate); `engines.dsh` is declarative and
-  nothing reads it. This package declares one such peer,
-  `@deepseek-ai/dsh-tools ^0.1.7-rc.2`, so bumping the `@deepseek-ai/dsh-*`
+  dsh version with `semver.satisfies(v, range, {includePrerelease: true})`;
+  `engines.dsh` is declarative and nothing reads it. This package declares one
+  such peer, `@deepseek-ai/dsh-tools`, so bumping the `@deepseek-ai/dsh-*`
   devDependencies without it (or the reverse) is a silent breakage for users —
-  `pnpm smoke` compares the two, and only that peer's range decides whether a
-  host activates the bundle.
+  `pnpm smoke` asserts the installed build target satisfies that range and that
+  `engines.dsh` admits the same versions, and only the peer's range decides
+  whether a host activates the bundle.
+- Range spelling matters: `^0.1.7-rc.2` desugars to `>=0.1.7-rc.2 <0.2.0-0`, and
+  **every `0.2.0-rc.N` sorts above `0.2.0-0`**, so no prerelease of 0.2.0 is
+  admitted by it — a measured version must be named explicitly. Conversely
+  `<0.2.0-0` cannot be used as an upper bound to "allow the 0.2 prereleases"
+  (that admits nothing); the verified prerelease needs its own clause.
 - dsh Desktop is an Electron shell around the same Web half. It pins the shell
   and `@deepseek-ai/dsh` to one version (0.2.0-rc.2 as of 2026-09-29), owns
   `$DSH_HOME/profiles/desktop`, defaults to port 19387 instead of 3080, and only
