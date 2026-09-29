@@ -16,7 +16,7 @@ import type { ThemeRuntime } from '@deepseek-ai/dsh-client-ui-theme/client'
 import type { Context } from '@deepseek-ai/cordis'
 import { DEFAULT_CONFIG, type ConversationSearchItem, type ConversationSearchKind, type CredentialStorage, type CustomPluginConfig, type FolderNode, type PromptItem, type TimelineItem, type UsageRow } from '../protocol.ts'
 import { createUsageRow, dayKey, mergeUsageRow } from '../usage.ts'
-import { DEEPSEEK_PRICING_CHECKED_ON, DEEPSEEK_PRICING_SOURCE_URL, usageCostBreakdown } from '../pricing.ts'
+import { DEEPSEEK_PRICING_CHECKED_ON, DEEPSEEK_PRICING_SOURCE_URL, estimateUsageCostCny, usageCostBreakdown } from '../pricing.ts'
 import {
   apiBalanceGet,
   apiBackupExport,
@@ -1464,12 +1464,19 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     }, [])
     const usageToday = s.usage[dayKey()] ?? {}
     const calls = Object.keys(usageToday).reduce((n, k) => n + (usageToday[k].calls ?? 0), 0)
+    const estimate = Object.entries(usageToday).reduce((sum, [model, row]) => sum + estimateUsageCostCny(row, model), 0)
     const bal = (b?.ok === true && b.balance !== null && b.balance !== undefined)
       ? b.balance as { currency?: string, total?: string }
       : null
+    const keyConfigured = b?.ok === false && (b as { keyConfigured?: boolean }).keyConfigured === true
+    // With a working key the real balance shows as before; without one the
+    // pill falls back to the local cost estimate (today's tokens priced from
+    // the official tariff — no key, no network). '额度?' keeps meaning "a key
+    // exists but the upstream call failed".
     const balance = bal !== null
       ? ((bal.currency ?? 'CNY') === 'CNY' ? '¥' + (bal.total ?? '') : `${bal.total ?? ''} ${bal.currency ?? ''}`)
-      : (b?.ok === false ? ((b as { keyConfigured?: boolean }).keyConfigured === true ? '额度?' : '未配置密钥') : '额度…')
+      : (keyConfigured ? '额度?' : b === null ? '额度…' : `≈¥${estimate.toFixed(2)}`)
+    const estimateTitle = `按本机 token 用量与官方价目表折算的估算值（${DEEPSEEK_PRICING_CHECKED_ON} 核对），非账号账单；配置 API Key 后显示真实余额`
     const open = hover || pinned
     return React.createElement('span', {
       className: 'vx-balance-wrap',
@@ -1478,11 +1485,11 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     },
       React.createElement('span', {
         className: 'vx-balance-text' + (pinned ? ' vx-balance-pinned' : ''),
-        title: pinned ? '再次点击取消固定' : '点击固定密钥面板',
+        title: pinned ? '再次点击取消固定' : '点击固定面板',
         onClick: () => setPinned(!pinned),
       },
         React.createElement(Icon, { n: 'wallet', size: 13 }),
-        React.createElement('span', null, balance),
+        React.createElement('span', { title: bal !== null || keyConfigured ? undefined : estimateTitle }, balance),
         calls > 0 ? React.createElement('span', { className: 'vx-balance-today' }, `今日 ${calls} 次`) : null,
       ),
       open
@@ -1591,37 +1598,59 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
   function BalancePanelContent(props: { onInteract?: () => void }): React.ReactElement {
     const s = useS()
     const b = s.balance
+    // The balance query needs a personal sk- key that account-login Desktop
+    // installs never have, so it is an opt-in section; everything else (usage,
+    // cost estimate, budget) works key-free. A configured key starts expanded.
+    const configured = s.apiKeyConfigured === true
+    const [balanceOpen, setBalanceOpen] = React.useState(configured)
+    const keyConfigured = b?.ok === false && (b as { keyConfigured?: boolean }).keyConfigured === true
     return React.createElement('div', { className: 'vx-col' },
-      React.createElement('div', { className: 'vx-row' },
-        React.createElement('input', {
-          className: 'vx-input',
-          type: 'password',
-          placeholder: s.apiKeyConfigured ? '已配置 Key；输入新 Key 覆盖' : 'DeepSeek API Key (sk-…)',
-          value: s.apiKey,
-          onFocus: () => { props.onInteract?.() },
-          onChange: (e: React.ChangeEvent<HTMLInputElement>) => { setS({ apiKey: e.target.value, apiKeyDirty: true }) },
-          onBlur: () => { if (S.apiKeyDirty) saveCfg() },
-        }),
-        React.createElement('button', { className: 'vx-btn', onClick: () => { if (S.apiKeyDirty) saveCfg() } }, '保存'),
-        React.createElement('button', { className: 'vx-btn', onClick: () => { void refreshBalance() } }, React.createElement(Icon, { n: 'refresh', size: 13 }), ' 刷新'),
-      ),
-      React.createElement('div', { className: 'vx-muted' }, `Key 不回传浏览器；当前来源：${s.credentialStorage === 'system' ? '系统凭据' : s.credentialStorage === 'legacy-state' ? '旧状态文件（待迁移）' : s.credentialStorage === 'environment' ? '环境变量' : s.credentialStorage === 'dsh' ? 'DSH 凭据' : '未配置'}。留空后保存可清除插件自定义 Key。`),
-      b !== null && b.ok === true && b.balance !== null && b.balance !== undefined
-        ? (() => {
-          const info = b.balance as { currency?: string, total?: string, granted?: string, toppedUp?: string }
-          const sym = (info.currency ?? 'CNY') === 'CNY' ? '¥' : `${info.currency ?? ''} `
-          return React.createElement('div', { className: 'vx-balance-lines' },
-            React.createElement('div', null, `可用额度: ${sym}${info.total ?? ''}`),
-            React.createElement('div', { className: 'vx-muted' }, `赠送 ${sym}${info.granted ?? ''} · 充值 ${sym}${info.toppedUp ?? ''}${(b as { available?: boolean }).available === false ? ' · 余额不足不可用' : ''}`),
-          )
-        })()
-        : null,
-      b !== null && b.ok === false ? React.createElement('div', { className: 'vx-error' }, String((b as { error?: unknown }).error ?? '未知错误')) : null,
+      React.createElement('div', { className: 'vx-muted' }, '以下用量与费用全部来自本机会话记录，不需要 API Key；费用为按官方价目表折算的估算值，可能与账号账单有差异。'),
       React.createElement('div', { className: 'vx-section-title' }, '用量趋势与预算'),
       React.createElement(UsageHistory, null),
       React.createElement('div', { className: 'vx-section-title' }, '今日模型明细'),
       React.createElement(UsageTable, null),
       React.createElement('button', { className: 'vx-btn', onClick: () => { void refreshUsageScan() } }, React.createElement(Icon, { n: 'list', size: 13 }), ' 扫描今日会话日志更新用量'),
+      React.createElement('div', { className: 'vx-row' },
+        React.createElement('button', { className: 'vx-chip', onClick: () => setBalanceOpen(!balanceOpen) },
+          React.createElement(Icon, { n: balanceOpen ? 'chevronDown' : 'chevronRight', size: 11 }),
+          balanceOpen ? ' 收起余额查询' : ' 余额查询（可选，需要 API Key）'),
+      ),
+      balanceOpen
+        ? React.createElement('div', { className: 'vx-col' },
+          React.createElement('div', { className: 'vx-row' },
+            React.createElement('input', {
+              className: 'vx-input',
+              type: 'password',
+              placeholder: configured ? '已配置 Key；输入新 Key 覆盖' : 'DeepSeek API Key (sk-…)',
+              value: s.apiKey,
+              onFocus: () => { props.onInteract?.() },
+              onChange: (e: React.ChangeEvent<HTMLInputElement>) => { setS({ apiKey: e.target.value, apiKeyDirty: true }) },
+              onBlur: () => { if (S.apiKeyDirty) saveCfg() },
+            }),
+            React.createElement('button', { className: 'vx-btn', onClick: () => { if (S.apiKeyDirty) saveCfg() } }, '保存'),
+            React.createElement('button', { className: 'vx-btn', onClick: () => { void refreshBalance() } }, React.createElement(Icon, { n: 'refresh', size: 13 }), ' 刷新'),
+          ),
+          React.createElement('div', { className: 'vx-muted' }, configured
+            ? `Key 不回传浏览器；当前来源：${s.credentialStorage === 'system' ? '系统凭据' : s.credentialStorage === 'legacy-state' ? '旧状态文件（待迁移）' : s.credentialStorage === 'environment' ? '环境变量' : s.credentialStorage === 'dsh' ? 'DSH 凭据' : '未配置'}。留空后保存可清除插件自定义 Key。`
+            : '填写 sk- 开头的 DeepSeek API Key 即可查询官方余额；Key 不回传浏览器，留空保存可清除已存 Key。'),
+          b !== null && b.ok === true && b.balance !== null && b.balance !== undefined
+            ? (() => {
+              const info = b.balance as { currency?: string, total?: string, granted?: string, toppedUp?: string }
+              const sym = (info.currency ?? 'CNY') === 'CNY' ? '¥' : `${info.currency ?? ''} `
+              return React.createElement('div', { className: 'vx-balance-lines' },
+                React.createElement('div', null, `可用额度: ${sym}${info.total ?? ''}`),
+                React.createElement('div', { className: 'vx-muted' }, `赠送 ${sym}${info.granted ?? ''} · 充值 ${sym}${info.toppedUp ?? ''}${(b as { available?: boolean }).available === false ? ' · 余额不足不可用' : ''}`),
+              )
+            })()
+            : null,
+          // A real upstream failure (401/403, network) is worth showing; an
+          // unconfigured key is the normal desktop state, not an error.
+          keyConfigured && b !== null && b.ok === false
+            ? React.createElement('div', { className: 'vx-error' }, String((b as { error?: unknown }).error ?? '未知错误'))
+            : null,
+        )
+        : null,
     )
   }
 

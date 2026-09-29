@@ -18,18 +18,19 @@ describe('DeepSeek pricing', () => {
     expect(DEEPSEEK_PRICING_SOURCE_URL).toContain('api-docs.deepseek.com')
   })
 
-  it('covers the vision model and legacy aliases', () => {
-    expect(priceOf('deepseek-v4-flash-vision-exp')).toEqual({ input: 3, cacheHit: 0.1, output: 9 })
+  it('covers the current and legacy model names', () => {
+    expect(priceOf('deepseek-flash')).toEqual({ input: 2, cacheHit: 0.04, output: 8 })
+    expect(priceOf('deepseek-v4-flash-vision-exp')).toEqual({ input: 2, cacheHit: 0.04, output: 8 })
     expect(priceOf('deepseek-chat')).toEqual(priceOf('deepseek-v4-flash'))
     expect(priceOf('unknown-model')).toEqual(priceOf('deepseek-v4-flash'))
   })
 
   it('applies the half-price off-peak multiplier to every counter', () => {
-    expect(estimateUsageCostCny(fullRow, 'deepseek-v4-flash')).toBeCloseTo(7.55, 8)
+    expect(estimateUsageCostCny(fullRow, 'deepseek-v4-flash')).toBeCloseTo(6.02, 8)
     const peak = usageCostBreakdown({ ...fullRow, peakIn: 1_000_000, peakCacheIn: 1_000_000, peakCacheW: 1_000_000, peakOut: 1_000_000 }, 'deepseek-v4-flash')
     expect(peak.peakTokens).toBe(4_000_000)
     expect(peak.offPeakTokens).toBe(0)
-    expect(peak.totalCostCny).toBeCloseTo(15.1, 8)
+    expect(peak.totalCostCny).toBeCloseTo(12.04, 8)
   })
 
   it('marks pre-split rows as inexact instead of presenting a false tariff split', () => {
@@ -37,7 +38,7 @@ describe('DeepSeek pricing', () => {
     delete (legacy as { peakSplitKnown?: boolean }).peakSplitKnown
     const breakdown = usageCostBreakdown(legacy, 'deepseek-v4-flash')
     expect(breakdown.exact).toBe(false)
-    expect(breakdown.totalCostCny).toBeCloseTo(7.55, 8)
+    expect(breakdown.totalCostCny).toBeCloseTo(6.02, 8)
   })
 
   it('does not trust an exact marker when peak counters are incomplete or impossible', () => {

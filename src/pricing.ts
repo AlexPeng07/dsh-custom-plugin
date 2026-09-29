@@ -11,7 +11,7 @@ import type { UsageRow } from './protocol.ts'
 /** Official source used for the built-in estimate and shown in the panel. */
 export const DEEPSEEK_PRICING_SOURCE_URL = 'https://api-docs.deepseek.com/zh-cn/quick_start/pricing/'
 /** Date on which the built-in rule was checked against the official page. */
-export const DEEPSEEK_PRICING_CHECKED_ON = '2026-08-26'
+export const DEEPSEEK_PRICING_CHECKED_ON = '2026-09-30'
 
 export interface DeepSeekUnitPrice {
   /** Uncached input / cache-miss input price. */
@@ -32,14 +32,17 @@ export interface UsageCostBreakdown {
   totalCostCny: number
 }
 
-const FLASH_PRICE: DeepSeekUnitPrice = { input: 3, cacheHit: 0.1, output: 9 }
+const FLASH_PRICE: DeepSeekUnitPrice = { input: 2, cacheHit: 0.04, output: 8 }
 
-/** Current official peak prices, in CNY per 1M tokens. */
+/** Current official peak prices, in CNY per 1M tokens. Off-peak is exactly
+ * half of peak per the official page (weekday 9-12 / 14-18 Beijing time). */
 const PEAK_PRICES: Readonly<Record<string, DeepSeekUnitPrice>> = {
+  'deepseek-flash': FLASH_PRICE,
   'deepseek-v4-flash': FLASH_PRICE,
   'deepseek-v4-flash-vision-exp': FLASH_PRICE,
   'deepseek-v4-pro': { input: 9, cacheHit: 0.3, output: 27 },
-  // Retired names remain readable for older session logs.
+  // Retired names remain readable for older session logs; they no longer
+  // appear on the official page and are approximated at Flash pricing.
   'deepseek-chat': FLASH_PRICE,
   'deepseek-reasoner': FLASH_PRICE,
 }

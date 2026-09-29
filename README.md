@@ -87,12 +87,13 @@ Plugin state can be exported as a versioned JSON backup containing appearance, f
 
 ### Balance and usage
 
-A balance badge sits in the session header (clickable to pin); the balance panel provides:
+A usage badge sits in the session header (clickable to pin): with an API key configured it shows the official balance; without one it shows the local cost estimate (e.g. `≈¥0.42`) and today's call count. The panel provides:
 
-- **Balance**: the official `https://api.deepseek.com/user/balance` endpoint, CNY preferred, granted and topped-up balances listed separately, with the account availability flag.
-- **Key resolution order**: the system credential store (when available) → the legacy plugin state-file key → environment variables `DEEPSEEK_API_KEY` / `DEEPSEEK_KEY` / `DEEPSEEK_TOKEN` (values must start with `sk-`) → the DSH credentials file `$DSH_HOME/.credentials.yaml` (reuses the DeepSeek key already configured in DSH — no duplicate setup).
+- **Usage and cost (default section, key-free)**: today's and historical usage, budget and the cost estimate all come from local session records — no key required.
+- **Balance query (collapsible opt-in, needs an API key)**: the official `https://api.deepseek.com/user/balance` endpoint, CNY preferred, granted and topped-up balances listed separately, with the account availability flag; with no key configured the section stays collapsed and shows no error.
+- **Key resolution order**: the system credential store (when available) → the legacy plugin state-file key → environment variables `DEEPSEEK_API_KEY` / `DEEPSEEK_KEY` / `DEEPSEEK_TOKEN` (values must start with `sk-`) → the DSH credentials file `$DSH_HOME/.credentials.yaml` (reuses the DeepSeek key already configured in DSH — no duplicate setup). Account-login Desktop installs have no sk- key; that is a normal state.
 - **Today's usage**: per-model input / output / cache token counters and call counts, folded live from `session/event` records.
-- **Cost estimate**: DeepSeek's current official peak/off-peak table — peak hours are Beijing Monday–Friday 09:00–12:00 / 14:00–18:00; all other hours, including weekends, are off-peak at half price: `deepseek-v4-flash` / `deepseek-v4-flash-vision-exp` ¥3 / ¥9, `deepseek-v4-pro` ¥9 / ¥27 (CNY per 1M tokens in / out, cache writes ¥0.1 / ¥0.3; the retired `deepseek-chat` / `deepseek-reasoner` price as v4-flash). Indicative only.
+- **Cost estimate**: DeepSeek's current official peak/off-peak table (checked 2026-09-30) — peak hours are Beijing Monday–Friday 09:00–12:00 / 14:00–18:00; all other hours, including weekends, are off-peak at half price: `deepseek-flash` (the retired names `deepseek-v4-flash` / `deepseek-v4-flash-vision-exp` still route at Flash pricing) peaks at ¥2 / ¥8, `deepseek-v4-pro` ¥9 / ¥27 (CNY per 1M tokens, peak in / out). Indicative only.
 - **Scan**: "scan today's session logs" replays every session and buckets usage events by their own timestamp (cross-midnight sessions keep contributing today's usage), reporting how many active sessions were scanned.
 - **History and budget**: inspect 7 / 30 / 90-day trends and per-model totals, export UTF-8 CSV, and set a local monthly CNY budget with an in-plugin warning threshold.
 
