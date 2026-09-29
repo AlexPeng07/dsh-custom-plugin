@@ -141,15 +141,20 @@ refuted by measurement and are recorded below so nobody re-litigates them.
 - Fixed: `slots.inject`'s callback registered the component outside the
   surrounding `try`, so a rejected registration would take a surface down
   silently while the diagnostic ring still read green; the deferred `register`
-  has its own guard now, and the summary line counts real injections instead of
-  asserting "8 / 7".
+  has its own guard now, and the summary line reports how many injection
+  requests it actually submitted rather than asserting "8 / 7" — dsh defers the
+  callback until a slot is declared, so no line printed at install time can
+  claim a surface materialized; the per-slot `ok` / `register` lines do that.
 - Fixed: the search request was passed as `as never`, which hid that `values`
   must be `keyof SessionEventMap` rather than `string`; typed, the compiler
   caught it immediately. A synchronous throw from `searchEvents` now degrades to
-  the scan path like a rejection does, and a log with exactly 100 hits no longer
-  claims there are more (both pinned by tests that fail against the old code).
+  the scan path like a rejection does, a log with exactly 100 hits no longer
+  claims there are more, and the scan's role filter is exercised by a fixture
+  that only it can exclude. Each of the three is pinned by a test that fails
+  against the code it replaces (verified by reverting one at a time).
 - Fixed: the sidebar footer button ignored the `wide` prop the host supplies, so
-  its label wrapped into a vertical stack inside the 56px rail.
+  its label wrapped into a vertical stack inside the 56px rail — measured both
+  ways on a live profile: 36px icon-only when collapsed, "项目" again at 280px.
 - Added `scripts/check-boot-graph.mjs`, run by the live check: the served
   `__DSH_BOOT__` graph must contain our row, every `dsh.client.inject` target,
   and reachable client bytes. This is the only gate that can see the failure

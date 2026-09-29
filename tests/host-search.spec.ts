@@ -88,6 +88,24 @@ describe('conversationSearch', () => {
     expect(over.hasMore).toBe(true)
   })
 
+  it('degrades the same way when the engine throws instead of rejecting', async () => {
+    // A provider that is absent can fail on the call itself rather than
+    // returning a rejected promise. `async () => { throw }` cannot tell those
+    // apart, so this fixture throws synchronously on purpose.
+    const events = [
+      { seq: 1, time: 1, type: 'user/message', data: { role: 'user', content: [{ type: 'text', text: 'hello 世界' }], source: { kind: 'user' } } },
+    ]
+    const sessionQuery = {
+      readSession: async () => ({ events }),
+      searchEvents() { throw new Error('session query engine not mounted') },
+    }
+    const result = await makeHost(sessionQuery).conversationSearch('s1', 'hello', ['user'])
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.source).toBe('scan')
+    expect(result.items.map((item) => item.seq)).toEqual([1])
+  })
+
   it('reports the log read failure instead of silently returning no hits', async () => {
     const sessionQuery = {
       readSession: async () => { throw new Error('persistence unavailable') },

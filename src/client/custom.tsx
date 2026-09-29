@@ -383,9 +383,12 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       }
       return () => {
         sessionScopeHolders--
-        // Clearing the identity has to clear what was loaded under it, or a
-        // later action could read stale turns with no session behind them.
+        // Clearing the identity has to clear everything loaded under it, maps
+        // included: a stale anchor element would let a rail click scroll to (or
+        // fork from) a node the next session never rendered.
         if (sessionScopeHolders === 0 && S.sessionId === id) {
+          S.anchors.clear()
+          S.seqAnchor.clear()
           setS({ sessionId: null, turns: null, railPositions: [], railSig: '', railHover: null })
         }
       }
@@ -3107,7 +3110,11 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
   injectOne('conversation.session.header.actions', 'custom-plugin-panel-open', { id: 'custom-plugin-panel-open', order: 5, label: '个性化' }, HeaderPanelButton)
   injectOne('conversation.session.header.actions', 'custom-plugin-prompts', { id: 'custom-plugin-prompts', order: 6, label: '提示词' }, PromptQuickButton)
   injectOne('conversation.session.header.utilities', 'custom-plugin-balance', { id: 'custom-plugin-balance', order: -5, label: '额度' }, HeaderBalance)
-  reportDiag(`client registered: ${injectedCount} injections / ${injectedKeys.size} slots`)
+  // Requests submitted, not surfaces proven: dsh defers the callback above until
+  // the slot is declared, so nothing here knows yet whether the host accepted
+  // any of them. Materialization reports itself, per slot, through the `ok` /
+  // `register` lines this one follows.
+  reportDiag(`client installed: ${injectedCount} injection requests / ${injectedKeys.size} slots`)
   return () => {
     for (const unregister of unregisterAll.splice(0)) {
       try { unregister() } catch { /* already unregistered */ }

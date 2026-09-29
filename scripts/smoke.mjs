@@ -76,12 +76,24 @@ const manifest = JSON.parse(manifestText)
 // last value, so the manifest can silently carry a stale field. Count the
 // top-level entries in the text and compare with what survived parsing.
 {
-  const rawKeys = (manifestText.match(/^  "[^"]+"\s*:/gm) ?? []).length
+  // Derive the indentation instead of hardcoding two spaces: a reindented
+  // manifest would otherwise read as "0 keys in the text" and stay red for the
+  // wrong reason.
+  const firstKeyLine = (manifestText.split(/\r?\n/).find((l) => /^\s*"[^"]+"\s*:/.test(l)) ?? '')
+  const indent = firstKeyLine.slice(0, firstKeyLine.length - firstKeyLine.trimStart().length)
   const parsedKeys = Object.keys(manifest).length
-  if (rawKeys !== parsedKeys) {
-    bad(`package.json: ${rawKeys} top-level keys in the text but ${parsedKeys} after parsing — a duplicated key is being silently overwritten`)
+  if (!/^ +$/.test(indent)) {
+    // "Cannot tell" is not a pass: say so instead of comparing nothing to itself.
+    bad(`package.json: cannot tell which keys are top-level (first key line is indented ${JSON.stringify(indent)}) — the duplicate-key check is blind here`)
   } else {
-    ok(`package.json: ${parsedKeys} top-level keys, no duplicates`)
+    const rawKeys = (manifestText.match(new RegExp(`^${indent}"[^"]+"\\s*:`, 'gm')) ?? []).length
+    if (rawKeys !== parsedKeys) {
+      bad(`package.json: ${rawKeys} top-level keys in the text but ${parsedKeys} after parsing — a duplicated key is being silently overwritten`)
+    } else if (rawKeys === 0) {
+      bad('package.json: the duplicate-key check found no top-level keys at all — it is not looking at anything')
+    } else {
+      ok(`package.json: ${parsedKeys} top-level keys, no duplicates`)
+    }
   }
 }
 const clientDecl = manifest.dsh?.client
