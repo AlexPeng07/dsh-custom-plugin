@@ -47,7 +47,10 @@ describe('conversationSearch', () => {
     // searchEvents() rejects and the feature must still answer from the log.
     const events = [
       { seq: 1, time: 1, type: 'user/message', data: { role: 'user', content: [{ type: 'text', text: 'hello 世界' }], source: { kind: 'user' } } },
-      { seq: 2, time: 2, type: 'assistant/message', data: { turn: 1, step: 1, message: { role: 'assistant', content: [{ type: 'text', text: 'no match here' }] } } },
+      // The assistant row carries the needle on purpose: the requested kinds
+      // exclude it, so this is what makes the role filter load-bearing — a scan
+      // that ignored `wanted` would report three hits here instead of two.
+      { seq: 2, time: 2, type: 'assistant/message', data: { turn: 1, step: 1, message: { role: 'assistant', content: [{ type: 'text', text: 'hello from the assistant' }] } } },
       { seq: 3, time: 3, type: 'tool/call', data: { turn: 1, step: 1, callId: 'c3', name: 'read', arguments: '{"path":"hello.txt"}' } },
     ]
     const sessionQuery = {
@@ -60,6 +63,29 @@ describe('conversationSearch', () => {
     expect(result.source).toBe('scan')
     expect(result.items.map((item) => [item.seq, item.kind])).toEqual([[1, 'user'], [3, 'tool']])
     expect(result.items[0].snippet).toContain('hello')
+  })
+
+  it('claims there are more results only when a hit actually follows the cap', async () => {
+    const build = (n: number) => Array.from({ length: n }, (_, i) => ({
+      seq: i + 1,
+      time: i + 1,
+      type: 'user/message',
+      data: { role: 'user', content: [{ type: 'text', text: `hello ${i}` }], source: { kind: 'user' } },
+    }))
+    const host = (n: number) => makeHost({
+      readSession: async () => ({ events: build(n) }),
+      searchEvents: async () => { throw new Error('session search is disabled: openAt "never"') },
+    })
+    const exact = await host(100).conversationSearch('s1', 'hello', ['user'])
+    expect(exact.ok).toBe(true)
+    if (!exact.ok) return
+    expect(exact.items.length).toBe(100)
+    expect(exact.hasMore).toBe(false)
+    const over = await host(101).conversationSearch('s1', 'hello', ['user'])
+    expect(over.ok).toBe(true)
+    if (!over.ok) return
+    expect(over.items.length).toBe(100)
+    expect(over.hasMore).toBe(true)
   })
 
   it('reports the log read failure instead of silently returning no hits', async () => {

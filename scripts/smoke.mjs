@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
- * Post-change smoke test (local self-check, not part of CI): verifies the
- * built artifacts against the contracts the harness actually depends on.
+ * Post-change smoke test: verifies the built artifacts against the contracts
+ * the harness actually depends on. CI runs the static half with
+ * `--static-only`; the headless-browser handshake below stays a local step.
  *
  *  1. lib/client.js — loaded in headless Edge against a stubbed
  *     window.__ModuleLoader__, asserting the registration handshake: the
@@ -69,7 +70,20 @@ if (/- id:\s*custom-plugin\b/.test(patch) && patch.includes(`name: '${ID}'`)) {
 // A wrong value here skips or hides the whole bundle with no runtime error, so
 // these are checked from the files rather than trusted.
 
-const manifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'))
+const manifestText = await readFile(join(root, 'package.json'), 'utf8')
+const manifest = JSON.parse(manifestText)
+// A duplicated key is valid-ish JSON that JSON.parse resolves by keeping the
+// last value, so the manifest can silently carry a stale field. Count the
+// top-level entries in the text and compare with what survived parsing.
+{
+  const rawKeys = (manifestText.match(/^  "[^"]+"\s*:/gm) ?? []).length
+  const parsedKeys = Object.keys(manifest).length
+  if (rawKeys !== parsedKeys) {
+    bad(`package.json: ${rawKeys} top-level keys in the text but ${parsedKeys} after parsing — a duplicated key is being silently overwritten`)
+  } else {
+    ok(`package.json: ${parsedKeys} top-level keys, no duplicates`)
+  }
+}
 const clientDecl = manifest.dsh?.client
 if (clientDecl?.platform !== 'web') {
   bad(`package.json: dsh.client.platform must be "web" (got ${JSON.stringify(clientDecl?.platform)}) — the web shell skips rows for any other platform`)
@@ -137,6 +151,27 @@ for (const [name, range] of Object.entries(manifest.peerDependencies ?? {})) {
     bad(`peerDependencies: ${name} range ${JSON.stringify(range)} disagrees with the ${installed} build target`)
   } else {
     ok(`peerDependencies: ${name} ${range} matches the installed ${installed}`)
+  }
+}
+
+// `engines.dsh` is not what the runtime gate reads — that only looks at the
+// @deepseek-ai/dsh-* peers — but it is what npm and the plugin manager show the
+// user, so its floor has to name the same release the peer range was pinned to.
+{
+  const declared = String(manifest.engines?.dsh ?? '')
+  const floor = /^>=(\d+\.\d+\.\d+[^\s]*)/.exec(declared)
+  let target = null
+  try {
+    target = JSON.parse(await readFile(join(root, 'node_modules', '@deepseek-ai', 'dsh-tools', 'package.json'), 'utf8')).version
+  } catch { /* not installed; reported below */ }
+  if (floor === null) {
+    bad(`package.json: engines.dsh ${JSON.stringify(declared)} carries no ">=<version>" floor to check`)
+  } else if (target === null) {
+    bad('engines.dsh: @deepseek-ai/dsh-tools is not installed, so the declared floor cannot be checked')
+  } else if (floor[1] !== target) {
+    bad(`engines.dsh: floor ${floor[1]} disagrees with the ${target} build target`)
+  } else {
+    ok(`engines.dsh: floor ${floor[1]} matches the installed ${target}`)
   }
 }
 

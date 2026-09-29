@@ -4,7 +4,6 @@
   "version": "0.5.0",
   "type": "module",
   "icon": "./icon.svg",
-  "icon": "./icon.svg",
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",
   "exports": {

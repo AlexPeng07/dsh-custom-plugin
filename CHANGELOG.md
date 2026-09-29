@@ -12,8 +12,10 @@ follow [Semantic Versioning](https://semver.org/).
   `@deepseek-ai/dsh-tools` peer range, and `@deepseek-ai/cordis` moved to the
   versions that release ships, and `engines.dsh` now states the supported range.
   dsh checks a bundle's `@deepseek-ai/dsh-*` peer ranges against its own runtime
-  version at install and startup and skips a bundle that does not match, so the
-  declared range is the release this package was built and verified against.
+  version at install and startup and skips a bundle that does not match. The
+  declared floor is the release this package was built and verified against;
+  `^0.1.7-rc.2` additionally admits later 0.1.x releases that have not been
+  re-verified, and `engines.dsh` is declarative — no part of dsh reads it.
 - The browser half declares `dsh.client.inject` as the five packages that own
   the slots it registers into, replacing the retired
   `@deepseek-ai/dsh-client-runtime` row.
@@ -30,16 +32,17 @@ follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
-- **The timeline rail, export, and quote features lost the current session on
-  dsh 0.1.7.** The session list snapshot dropped its `current` field (view
-  selection moved to the Workspace browser), so the rail tracked nothing. The
-  viewed session now comes from the standard `sessionId` prop every
-  session-scoped slot entry receives.
-- **Opening a session, a workspace, a branch, or a cross-session search failed
-  silently.** `ctx.sessions` no longer exposes `open`, `fork`, or `search`;
-  navigation goes through `ctx.uiWorkspace`, and branching and full-text search
-  through `ctx.remote.session.fork()` / `.search()`, each with an honest
-  failure message when the service is absent.
+- **The timeline rail, export, and quote features lost the current session.**
+  The session list snapshot has had no `current` field since dsh
+  0.1.6-alpha.2 (view selection moved to the Workspace browser), so the rail
+  tracked nothing. The viewed session now comes from the standard `sessionId`
+  prop every session-scoped slot entry receives.
+- **Opening a session or a workspace failed silently.** `ctx.sessions.open` is
+  gone; navigation goes through `ctx.uiWorkspace.openSession()` /
+  `connectWorkspace()`. Branching and full-text search go through
+  `ctx.remote.session.fork()` / `.search()` — `ctx.sessions` still declares
+  those two, but the remote namespace is the documented surface — each with an
+  honest failure message when the service is absent.
 - **Exports lost tool results and the new model-visible messages.** The
   `tool-result` content block was replaced by a tool-role message whose call id
   now sits on the message (`toolCallId`, still falling back to `source.callId`
@@ -59,7 +62,10 @@ follow [Semantic Versioning](https://semver.org/).
   silently in a user's profile. The peer check refuses to read a range form it
   cannot interpret, and every `files` entry must resolve to something in the tree
   — an entry matching nothing used to publish a bundle missing that piece. Both
-  new rules were confirmed red by breaking them on purpose.
+  new rules were confirmed red by breaking them on purpose. The
+  `dsh.client.inject` rows are counted, not resolved: only a running shell knows
+  which module ids it serves, so a retired name there is caught by the live
+  boot-graph probe below, not by this gate.
 - A search excerpt now extends its window so a pasted query longer than two
   thirds of the excerpt is still shown whole. Measured first: the previous
   centering already covered ordinary queries, including a hit at the very end of
@@ -74,25 +80,98 @@ follow [Semantic Versioning](https://semver.org/).
 - Added `scripts/live-dsh-check.sh`: a manual probe that runs against a *running*
   isolated dsh profile and exercises the host half on real session data
   (timeline, the three export formats, the search scan path, usage scan, backup,
-  a UTF-8 state round trip, and the loopback/same-origin fence), exiting
-  non-zero on any failure. CI has no harness to talk to, so this is the check to
-  run when a dsh release lands. Verified against 0.1.7-rc.2 (11 probes), and the
-  UTF-8 probe was shown to distinguish a correct write from the mangled-bytes
-  write it guards against.
+  a UTF-8 state round trip, the Mermaid engine route, the client→host diagnostic
+  ring, both fences, and the boot graph the shell serves), exiting non-zero on
+  any failure. CI has no harness to talk to, so this is the check to run when a
+  dsh release lands. Verified against 0.1.7-rc.2 with 19 probes green; the
+  session-dependent ones `SKIP` — and the closing line counts them instead of
+  claiming a clean sweep — when the scratch home holds no session, and the UTF-8
+  probe was shown to distinguish a correct write from the mangled-bytes write it
+  guards against.
 - The live check itself was then tested against a dead endpoint and found two of
-  its own probes green-by-absence; both now require the write to be credited
-  before they can pass. Running it for real also exposed three defects in the
-  tool, all fixed: restoring the prompt library through `curl -d "$var"` mangled
-  non-ASCII to U+FFFD (Git Bash re-encodes non-ASCII argv for `curl.exe`), so
-  bodies are now written by node and sent with `--data-binary @file`; the script
-  was stored with CRLF endings; and its search probe silently `SKIP`ped whenever
-  the newest message started with a word shorter than six letters, which is the
-  only probe covering the scan path. It now also covers the Mermaid engine route,
-  the client→host diagnostic ring, both fences, and refuses to run against a real
-  `~/.dsh` without an explicit override (separator-normalized, since a Windows
-  path would have slipped past the first version of that guard).
-- The READMEs add a plugin-to-dsh compatibility table, since the peer gate makes
-  a mismatched pair fail invisibly rather than loudly.
+  its own probes green-by-absence; the restore probe now refuses to pass when the
+  append it restores never landed. Running it against a real profile exposed five
+  more defects in the tool, all fixed: restoring the prompt library through
+  `curl -d "$var"` mangled non-ASCII to U+FFFD (Git Bash re-encodes non-ASCII
+  argv for `curl.exe`), so bodies are now written by node and sent with
+  `--data-binary @file`; the script checked out with CRLF endings (the stored
+  blobs were already LF — `core.autocrlf` was rewriting them on checkout, now
+  pinned by `.gitattributes`); its search probe read the query word with a greedy
+  `sed` that needed *some* six-letter run anywhere after the last `"text":"`, so
+  it silently `SKIP`ped the one probe covering the scan path; it looked for
+  sessions under `<state file>/../sessions`, which only finds anything because
+  Windows folds the path lexically and would see nothing on a POSIX shell; and
+  the real-home guard missed a `DSH_HOME` written with a trailing separator,
+  which is exactly the spelling that would have probed a developer's own harness
+  home.
+- The READMEs add a plugin-to-dsh compatibility table. A mismatched pair is not
+  silent — dsh logs `disabling profile plugin …` on stderr, rejects the install,
+  and models the state as `incompatible` in the plugin manager — but none of that
+  reaches the page a user is looking at, so the supported window belongs in the
+  README.
+
+### Verified by independent review
+
+Four reviewers were dispatched against `30e025b..HEAD` with separate charters
+(code correctness, claims-vs-evidence, contract-vs-installed-runtime, and a
+deep re-audit pinned to the previous commit). Their findings were each
+re-verified before being acted on; three of their "critical" items were
+refuted by measurement and are recorded below so nobody re-litigates them.
+
+- Fixed: `package.json` declared `"icon"` twice. `JSON.parse` keeps the last
+  value, so every gate stayed green on a manifest npm would warn about. `pnpm
+  smoke` now counts top-level keys in the file text and compares them with what
+  survived parsing, and separately checks that `engines.dsh`'s floor names the
+  installed dsh-tools release (nothing in dsh reads `engines.dsh`, so this is
+  the only place that keeps it honest).
+- Fixed: the session probes looked under `<state file>/../sessions`, which only
+  resolves because Windows folds the path lexically; they now use the home
+  directory directly. Skips are counted and named in the closing line, a missing
+  boot-graph URL line fails instead of vanishing, the Mermaid probe reads
+  `mermaidSource` rather than inferring "local" from a byte count, and a
+  rejected state write now carries the host's own error text.
+- Fixed: the restore probe was vacuously green — it never checked that the
+  append it restores had landed. It now refuses to pass when the write failed,
+  verified by mutating the write condition and watching exactly that line go
+  red.
+- Fixed: the client's last-holder clear left `turns` and the rail positions
+  behind with no session identity, and a holder whose `sessionId` prop flipped to
+  null could wipe the identity other holders were still rendering. A null holder
+  now claims nothing at all.
+- Fixed: `slots.inject`'s callback registered the component outside the
+  surrounding `try`, so a rejected registration would take a surface down
+  silently while the diagnostic ring still read green; the deferred `register`
+  has its own guard now, and the summary line counts real injections instead of
+  asserting "8 / 7".
+- Fixed: the search request was passed as `as never`, which hid that `values`
+  must be `keyof SessionEventMap` rather than `string`; typed, the compiler
+  caught it immediately. A synchronous throw from `searchEvents` now degrades to
+  the scan path like a rejection does, and a log with exactly 100 hits no longer
+  claims there are more (both pinned by tests that fail against the old code).
+- Fixed: the sidebar footer button ignored the `wide` prop the host supplies, so
+  its label wrapped into a vertical stack inside the 56px rail.
+- Added `scripts/check-boot-graph.mjs`, run by the live check: the served
+  `__DSH_BOOT__` graph must contain our row, every `dsh.client.inject` target,
+  and reachable client bytes. This is the only gate that can see the failure
+  shape that started this whole upgrade — a manifest naming a module the shell no
+  longer serves — and it was confirmed red by pointing the inject list at the
+  retired `@deepseek-ai/dsh-client-runtime`.
+- Measured against dsh 0.2.0-rc.1 (published the day after this release):
+  `dsh plugin add` rejects the bundle and rolls the profile back; with the
+  exact-version exemption granted, the source typechecks against 0.2's own
+  types, 110/110 unit tests pass, 19/19 live probes pass, and the browser
+  surfaces work. The peer range is deliberately **not** widened — see the
+  README's compatibility note for what remains unchecked.
+- Retracted after re-measurement, so the record does not carry them: "the
+  `slots.inject(key, fn)` service method does not exist in 0.1.7" (it is
+  declared at `dsh-client-ui-renderer`'s registry interface, and all eight
+  surfaces materialize in a live browser); "`data-chat-flow-kind` is gone, so the
+  rail has no anchors" (the reading was taken while the host's trajectory tab had
+  the chat flow unmounted); "`WorkspaceSnapshot.state` was renamed to `phase`"
+  (both axes ship side by side). Corrected in place: `ctx.sessions` still
+  declares `fork()` and `search()` (only `open` is gone), the `current` field and
+  the turnTail kind change both landed in 0.1.6-alpha.2 rather than 0.1.7, and
+  the bilingual README gate enforces hash freshness, not content parity.
 
 ## 0.4.2 — 2026-09-12
 

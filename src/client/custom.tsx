@@ -363,21 +363,31 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
    * unmount while the same Session stays open. Only the LAST mounted holder may
    * clear the identity, otherwise the rail would go blank under the surviving
    * entries, whose props never change and so never re-run their effect.
+   *
+   * A holder that reports no session id claims nothing at all: it must not
+   * count toward the holders, because one entry flipping to null while the
+   * others still carry the session would otherwise wipe the identity they are
+   * still rendering — and their effects never re-run to restore it.
    */
   let sessionScopeHolders = 0
   function useViewedSession(props: { sessionId?: string | null }): void {
     const id = typeof props.sessionId === 'string' && props.sessionId !== '' ? props.sessionId : null
     React.useEffect(() => {
+      if (id === null) return
       sessionScopeHolders++
       if (S.sessionId !== id) {
         S.anchors.clear()
         S.seqAnchor.clear()
         setS({ sessionId: id, turns: null, railPositions: [], railSig: '', railHover: null })
-        if (id !== null) void fetchTurns(id)
+        void fetchTurns(id)
       }
       return () => {
         sessionScopeHolders--
-        if (sessionScopeHolders === 0 && S.sessionId === id) setS({ sessionId: null })
+        // Clearing the identity has to clear what was loaded under it, or a
+        // later action could read stale turns with no session behind them.
+        if (sessionScopeHolders === 0 && S.sessionId === id) {
+          setS({ sessionId: null, turns: null, railPositions: [], railSig: '', railHover: null })
+        }
       }
     }, [id])
   }
@@ -865,12 +875,13 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
   let railRefetchRows = -1
   const diagAtByKey = new Map<string, number>()
   function diagThrottled(message: string): void {
-    // Throttle per diagnostic kind. A single shared window let the frequently
-    // emitted rail line swallow one-shot lines (the timeline result in
-    // particular), so the diagnostics ring reported "turns 0" while a fetch had
-    // in fact succeeded.
-    const space = message.indexOf(' ')
-    const key = space > 0 ? message.slice(0, space) : message.slice(0, 24)
+    // Throttle per diagnostic kind — but a kind is not a reading. Keying on the
+    // first word let a `rail 0 dots` line swallow the `rail 1 dots` that followed
+    // it five seconds later, which once read as "the rail is broken" when it was
+    // simply a transition nobody could see. Twenty-four characters carry the
+    // counts of every throttled line we emit, so identical repeats still dedup
+    // while a change of reading gets through.
+    const key = message.slice(0, 24)
     const now = Date.now()
     const at = diagAtByKey.get(key)
     if (at !== undefined && now - at < 5000) return
@@ -1514,12 +1525,16 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     )
   }
 
-  function FolderSidebarButton(): React.ReactElement {
+  /** `sidebar.footer.action` hands the column state down. In the 56px rail the
+   * two-character label wrapped into a vertical stack beside the icon, so the
+   * text renders only while the sidebar is wide; a host that passes no `wide`
+   * keeps the label. */
+  function FolderSidebarButton(props: { wide?: boolean }): React.ReactElement {
     return React.createElement('button', {
       className: 'vx-foot-btn',
       title: '项目文件夹',
       onClick: () => setS({ foldersOpen: !S.foldersOpen, panelOpen: false }),
-    }, React.createElement(Icon, { n: 'folder', size: 15 }), React.createElement('span', { className: 'vx-foot-label' }, '项目'))
+    }, React.createElement(Icon, { n: 'folder', size: 15 }), props.wide === false ? null : React.createElement('span', { className: 'vx-foot-label' }, '项目'))
   }
 
   function HeaderPanelButton(props: SessionScopedProps): React.ReactElement {
@@ -3057,20 +3072,31 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     return () => {}
   }
   const unregisterAll: Array<() => void> = []
-  const injectOne = (key: string, id: string, options: Record<string, unknown>, comp: unknown): boolean => {
+  const injectedKeys = new Set<string>()
+  let injectedCount = 0
+  const injectOne = (key: string, id: string, options: Record<string, unknown>, comp: unknown): void => {
     try {
       slots.inject(key, () => {
-        const unregister = slots.register({ name: key, ...options }, comp)
-        unregisterAll.push(unregister)
-        return unregister
+        try {
+          const unregister = slots.register({ name: key, ...options }, comp)
+          unregisterAll.push(unregister)
+          return unregister
+        } catch (error) {
+          // `register` runs later, when the host materializes the slot, so it is
+          // outside the try below: without this guard a rejected registration
+          // (wrong slot kind, bad options) would take the surface down silently
+          // while the ring still read green.
+          reportDiag('register ' + key + ' (' + id + '): ' + String((error as Error)?.message ?? error))
+          return () => {}
+        }
       })
       reportDiag('ok ' + key + ' (' + id + ')')
-      return true
+      injectedCount++
+      injectedKeys.add(key)
     } catch (error) {
       const message = 'inject ' + key + ' (' + id + '): ' + String((error as Error)?.message ?? error)
       console.error('[custom-plugin] ' + message)
       reportDiag(message)
-      return false
     }
   }
   injectOne('sidebar.footer.action', 'custom-plugin-folders', { id: 'custom-plugin-folders', order: -100, label: '项目' }, FolderSidebarButton)
@@ -3081,7 +3107,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
   injectOne('conversation.session.header.actions', 'custom-plugin-panel-open', { id: 'custom-plugin-panel-open', order: 5, label: '个性化' }, HeaderPanelButton)
   injectOne('conversation.session.header.actions', 'custom-plugin-prompts', { id: 'custom-plugin-prompts', order: 6, label: '提示词' }, PromptQuickButton)
   injectOne('conversation.session.header.utilities', 'custom-plugin-balance', { id: 'custom-plugin-balance', order: -5, label: '额度' }, HeaderBalance)
-  reportDiag('client registered: 8 injections / 7 slots')
+  reportDiag(`client registered: ${injectedCount} injections / ${injectedKeys.size} slots`)
   return () => {
     for (const unregister of unregisterAll.splice(0)) {
       try { unregister() } catch { /* already unregistered */ }

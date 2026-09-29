@@ -6,7 +6,8 @@
  */
 
 import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
-import type { SessionLogSnapshot, SessionQueryEngine } from '@deepseek-ai/dsh-session-query'
+import type { SessionEventSearchRequest, SessionLogSnapshot, SessionQueryEngine } from '@deepseek-ai/dsh-session-query'
+import type { SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
 import { createRequire } from 'node:module'
 import { readFileSync } from 'node:fs'
 import { buildExportRows, buildMarkdown, buildPdfHtml, eventSearchText, extractTurns, searchKindOf, snippetAround } from './extract.ts'
@@ -116,18 +117,16 @@ export class CustomPluginHost {
    * live/restore paths without that constructor, so fall back to it before
    * surfacing the error. */
   private async readSessionLog(sessionId: string): Promise<SessionLogSnapshot> {
+    const id = sessionId as SessionId
     try {
-      return await this.sessionQuery.readSession(sessionId as never)
+      return await this.sessionQuery.readSession(id)
     } catch (error) {
-      const engine = this.sessionQuery as unknown as {
-        observeSession?: (id: never, options?: { projectionMode?: 'none' }) => Promise<{
-          header?: unknown
-          events?: readonly unknown[]
-        }>
-      }
-      if (typeof engine.observeSession !== 'function') throw error
-      const lease = await engine.observeSession(sessionId as never, { projectionMode: 'none' })
-      const events = [...(lease.events ?? [])]
+      // The guard stays on purpose: a host without this observation API must
+      // still surface readSession's own error, not a TypeError about a method.
+      const { observeSession } = this.sessionQuery
+      if (typeof observeSession !== 'function') throw error
+      const lease = await observeSession.call(this.sessionQuery, id, { projectionMode: 'none' })
+      const events = [...lease.events]
       const disposeSymbol = (Symbol as { dispose?: symbol }).dispose
       if (disposeSymbol !== undefined) {
         const dispose = (lease as unknown as Record<symbol, unknown>)[disposeSymbol]
@@ -338,7 +337,7 @@ export class CustomPluginHost {
     }
     let title = ''
     try {
-      const titleSnapshot = await this.sessionQuery.readTitle(sessionId as never)
+      const titleSnapshot = await this.sessionQuery.readTitle(sessionId as SessionId)
       if (titleSnapshot !== undefined) title = String((titleSnapshot as { title?: unknown }).title ?? '')
     } catch {
       title = ''
@@ -429,10 +428,22 @@ export class CustomPluginHost {
    * that log instead of failing the whole feature. */
   async conversationSearch(sessionId: string, query: string, kinds: readonly ConversationSearchKind[]): Promise<{ ok: true; } & ConversationSearchResult | { ok: false; error: string }> {
     const wanted = new Set(kinds.length > 0 ? kinds : ['user', 'assistant', 'tool'])
-    const eventTypes = kinds.length > 0
-      ? kinds.flatMap((kind) => kind === 'user' ? ['user/message'] : kind === 'assistant' ? ['assistant/message'] : ['tool/call', 'tool/result'])
+    const eventTypes: Array<SessionEvent['type']> = kinds.length > 0
+      ? kinds.flatMap((kind): Array<SessionEvent['type']> =>
+        kind === 'user' ? ['user/message'] : kind === 'assistant' ? ['assistant/message'] : ['tool/call', 'tool/result'])
       : []
-    const indexRead = this.sessionQuery.searchEvents({ sessionId: sessionId as never, query, limit: 100, ...(eventTypes.length > 0 ? { filters: [{ kind: 'type', values: eventTypes }] } : {}) } as never).then((page) => page, () => null)
+    // Typed request, and a synchronous throw must degrade the same way a
+    // rejection does: an engine without the index can fail on the call itself
+    // rather than returning a rejected promise.
+    const request: SessionEventSearchRequest = {
+      sessionId: sessionId as SessionId,
+      query,
+      limit: 100,
+      ...(eventTypes.length > 0 ? { filters: [{ kind: 'type', values: eventTypes }] } : {}),
+    }
+    const indexRead = Promise.resolve()
+      .then(() => this.sessionQuery.searchEvents(request))
+      .then((page) => page, () => null)
     let snapshot: SessionLogSnapshot
     let page: Awaited<typeof indexRead>
     try {
@@ -469,8 +480,10 @@ export class CustomPluginHost {
       const text = eventSearchText(event)
       const at = text.toLowerCase().indexOf(needle)
       if (at < 0) continue
-      items.push({ sessionId, seq: event.seq, anchorSeq, kind, time: event.time, snippet: snippetAround(text, at, needle.length, 500) })
+      // Fill to the cap, and only claim there is more once a match shows up
+      // past it — a log with exactly 100 hits must not report hasMore.
       if (items.length >= 100) { truncated = true; break }
+      items.push({ sessionId, seq: event.seq, anchorSeq, kind, time: event.time, snippet: snippetAround(text, at, needle.length, 500) })
     }
     return { ok: true, items, hasMore: truncated, source: 'scan' }
   }

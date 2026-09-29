@@ -27,7 +27,11 @@ set -u
 
 BASE="http://127.0.0.1:${DSH_PORT:?DSH_PORT=<port>}"
 JAR="${COOKIE_JAR:-}"
-STATE="${DSH_HOME:?DSH_HOME=<scratch dsh home>}/custom-plugin-state.json"
+# Strip a trailing separator before composing paths: a doubled slash would both
+# defeat the real-home guard below and read as a different directory on POSIX.
+BASE_DIR="${DSH_HOME:?DSH_HOME=<scratch dsh home>}"
+BASE_DIR="${BASE_DIR%/}"
+STATE="$BASE_DIR/custom-plugin-state.json"
 
 # This probe WRITES: the UTF-8 round trip appends an entry to the prompt library
 # (it restores afterwards and verifies the restore) and the usage scan rewrites
@@ -35,7 +39,7 @@ STATE="${DSH_HOME:?DSH_HOME=<scratch dsh home>}/custom-plugin-state.json"
 # so. Normalize separators before matching: a Windows DSH_HOME arrives with
 # backslashes, and a pattern using `/` would never match it — a guard that
 # silently never fires is worse than no guard.
-norm=${STATE//\\//}
+norm=$(printf '%s' "${STATE//\\//}" | sed 's://*:/:g')
 case "$norm" in
   */.dsh/custom-plugin-state.json)
     if [ "${ALLOW_REAL_DSH_HOME:-0}" != "1" ]; then
@@ -47,8 +51,12 @@ esac
 echo "== dsh live compatibility check: http://127.0.0.1:${DSH_PORT}   state: $STATE"
 
 fails=0
+skips=0
 pass() { echo "  PASS  $1"; }
 fail() { echo "  FAIL  $1"; fails=$((fails + 1)); }
+# A skipped probe is not coverage. Counting them keeps "all checks passed" from
+# reading as "the session paths ran" on a home with no session.
+skip() { echo "  SKIP  $1"; skips=$((skips + 1)); }
 
 req() { # req <method> <path> [body | @file]
   local method="$1" path="$2" body="${3:-}"
@@ -76,10 +84,13 @@ fi
 
 res=$(req GET /api/custom-plugin/debug)
 mermaid=$(printf '%s' "$(split "$res")" | sed -n 's/.*"mermaidBytes":\([0-9]*\).*/\1/p')
-if [ "${mermaid:-0}" -gt 100000 ]; then
+# The byte count alone cannot tell a local load from a CDN fallback: the debug
+# payload says which, so read it instead of asserting "locally" from size.
+mermaid_src=$(printf '%s' "$(split "$res")" | sed -n 's/.*"mermaidSource":"\([a-z]*\)".*/\1/p')
+if [ "${mermaid:-0}" -gt 100000 ] && [ "$mermaid_src" = "local" ]; then
   pass "mermaid engine loaded locally ($mermaid bytes)"
 else
-  fail "mermaid engine bytes = ${mermaid:-none}"
+  fail "mermaid engine: ${mermaid:-none} bytes from source ${mermaid_src:-unknown}"
 fi
 
 # ── the boot graph the running shell actually serves ─────────────────────────
@@ -121,15 +132,17 @@ else
       else
         fail "client bundle combo URL: $served"
       fi
+    else
+      fail "boot graph checker printed no URL line — the client bundle was never fetched"
     fi
   fi
 fi
 rm -f "$bootHtml"
 
 # ── session reads: timeline, export, search scan ─────────────────────────────
-sid=$(find "$STATE/../sessions" -mindepth 2 -maxdepth 2 -type d 2>/dev/null | head -1 | xargs -r basename)
+sid=$(find "$BASE_DIR/sessions" -mindepth 2 -maxdepth 2 -type d 2>/dev/null | head -1 | xargs -r basename)
 if [ -z "$sid" ]; then
-  echo "  SKIP  no session under \$DSH_HOME/sessions (create one in the GUI first)"
+  skip "no session under \$DSH_HOME/sessions (create one in the GUI first)"
 else
   res=$(req GET "/api/custom-plugin/timeline?sessionId=$sid")
   if printf '%s' "$(split "$res")" | grep -q '"ok":true'; then
@@ -176,7 +189,7 @@ process.stdin.on("data", d => s += d).on("end", () => {
       fail "search failed: $(printf '%s' "$body" | head -c 160)"
     fi
   else
-    echo "  SKIP  no ASCII word in the newest user message to search for"
+    skip "no ASCII word in the newest user message to search for"
   fi
 fi
 
@@ -233,11 +246,19 @@ if [ "$(code "$wres")" = "200" ] && [ -f "$STATE" ] && grep -q "$want" "$STATE";
   wrote=1
   pass "state write keeps UTF-8 names byte-exact"
 else
-  fail "state write returned $(code "$wres"), or mangled non-ASCII to U+FFFD"
+  # The host's own error field is the only thing that explains a rejection, so
+  # carry it into the line: a bare status code once reported a 400 that could no
+  # longer be reproduced or attributed.
+  fail "state write: $(code "$wres") $(split "$wres" | head -c 160)"
 fi
 rres=$(req POST /api/custom-plugin/state "@$probeDir/restore.json")
-if [ "$(code "$rres")" != "200" ]; then
-  fail "restore rejected ($(code "$rres")) — the library may still hold the probe entry"
+if [ "$wrote" != "1" ]; then
+  # The restore still ran (it has to leave the library as it was found), but an
+  # identical library after a write that never landed proves nothing: that is the
+  # green-by-absence this probe exists to catch.
+  fail "restore probe is vacuous — the append never landed, so nothing was restored"
+elif [ "$(code "$rres")" != "200" ]; then
+  fail "restore rejected ($(code "$rres") $(split "$rres" | head -c 160)) — the library may still hold the probe entry"
 elif node -e '
 const fs = require("fs")
 const stored = JSON.parse(fs.readFileSync(process.argv[1], "utf8")).prompts ?? []
@@ -255,5 +276,9 @@ fence=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$BASE/api/custom-p
                      || fail "fence returned $fence instead of 403"
 
 echo "== probes done; rendering, slot placement and composer insertion still need a browser pass"
-if [ "$fails" -gt 0 ]; then echo "FAILED: $fails"; exit 1; fi
-echo "OK: all live host checks passed"
+if [ "$fails" -gt 0 ]; then echo "FAILED: $fails (skipped: $skips)"; exit 1; fi
+if [ "$skips" -gt 0 ]; then
+  echo "OK: nothing failed, but $skips probe(s) were SKIPPED — a skipped probe is not coverage"
+else
+  echo "OK: all live checks passed"
+fi

@@ -22,11 +22,14 @@ reply, and DeepSeek balance / daily token usage.
 
 ## Compatibility
 
-- Targets the dsh release named by `engines.dsh` and the `@deepseek-ai/dsh-*`
-  peer range in `package.json` (currently 0.1.7-rc.2). dsh validates that peer
-  range against its own runtime version at install and startup and skips the
-  whole bundle when it does not match, so bumping devDependencies without the
-  peer range (or the reverse) is a silent breakage for users.
+- The runtime compatibility gate reads **only** `peerDependencies` named
+  `@deepseek-ai/dsh` or `@deepseek-ai/dsh-*` and checks them against the running
+  dsh version (prereleases participate); `engines.dsh` is declarative and
+  nothing reads it. This package declares one such peer,
+  `@deepseek-ai/dsh-tools ^0.1.7-rc.2`, so bumping the `@deepseek-ai/dsh-*`
+  devDependencies without it (or the reverse) is a silent breakage for users —
+  `pnpm smoke` compares the two, and only that peer's range decides whether a
+  host activates the bundle.
 - The client bundle resolves its modules against the web shell's frozen seed
   table; `tsdown.config.ts` `PLATFORM_MODULES` mirrors it, and any extra runtime
   `require()` needs a `dsh.client.external` declaration.
@@ -38,7 +41,10 @@ reply, and DeepSeek balance / daily token usage.
   selection to `ctx.uiWorkspace`.
 
 - Run before committing:
+  `pnpm check:readme`
   `pnpm typecheck`
   `pnpm test`
   `pnpm build`
   `pnpm smoke`
+  CI runs all of these (`check:readme` first), so a stale README hash or a
+  failed build breaks the branch even if the local list was skipped.

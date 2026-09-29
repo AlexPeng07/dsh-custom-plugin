@@ -120,7 +120,7 @@ The `custom_plugin_status` tool reports appearance config, today's per-model usa
 
 | plugin release | dsh it was built and verified against | status |
 | --- | --- | --- |
-| 0.5.x | dsh 0.1.7-rc.2 and later | current |
+| 0.5.x | dsh 0.1.7-rc.2 (declared range `>=0.1.7-rc.2 <0.2.0`) | current |
 | 0.4.2 | dsh 0.1.1-rc.1 … 0.1.6 era | superseded; do not expect it to work on 0.1.7+ |
 
 0.1.7 changed the plugin-facing contracts this suite depends on (session
@@ -130,13 +130,13 @@ so neither release substitutes for the other. dsh 0.1.7+ validates a bundle's
 `@deepseek-ai/dsh-*` peer ranges against its own version at install and startup
 and skips a bundle that does not match. Runtimes predating that gate load the
 bundle anyway and degrade instead: on 0.1.1-rc.2, 7 of 8 slot registrations
-succeed, the turn-tail entry is rejected (that slot changed from a chain to a
-list slot in 0.1.7), and the open-session / branch / cross-session actions
+succeed, the turn-tail entry is rejected (that slot became a list slot back in
+0.1.6-alpha.2), and the open-session / branch / cross-session actions
 report their service as missing rather than throwing.
 
 ## Install
 
-Prerequisites: Node 22+, pnpm, and the `dsh` CLI (the official `@deepseek-ai/dsh` npm package; `npx @deepseek-ai/dsh` stands in for `dsh` when it is not installed globally). This release targets **dsh 0.1.7-rc.2 or newer** — dsh checks a bundle's `@deepseek-ai/dsh-*` peer ranges against its own version at install and startup, and skips a bundle that does not match, so `package.json` declares exactly the range this package was built and verified against. On an older dsh, install the matching older plugin release instead of granting a compatibility exemption.
+Prerequisites: Node 22+, pnpm, and the `dsh` CLI (the official `@deepseek-ai/dsh` npm package; `npx @deepseek-ai/dsh` stands in for `dsh` when it is not installed globally). This release targets **dsh 0.1.7-rc.2 through the rest of 0.1.x** — dsh checks a bundle's `@deepseek-ai/dsh-*` peer ranges against its own version at install and startup, and skips a bundle that does not match, so `package.json` declares a range whose floor is the release this package was actually built and verified against. It does not yet support 0.2.x: `^0.1.7-rc.2` excludes it, and `dsh plugin add` against 0.2.0-rc.1 rejects the install and rolls the profile back. What has been measured there, with dsh's exact-version exemption granted: the source typechecks against 0.2.0-rc.1's own published types, all 110 unit tests pass, all 19 live host probes pass, and the browser surfaces work (eight slot registrations, the timeline rail, prompt insertion into the composer). The range still stops at 0.1.x because 0.2.0-rc.1 is a pre-release and because what a probe cannot reach there — the agent tool schema, and the long-lived session paths — has not been reviewed. On an older dsh, install the matching older plugin release instead of granting a compatibility exemption.
 
 ### From npm
 
@@ -209,7 +209,7 @@ Appearance and feature toggles (the `cfg` field, all with defaults):
 - Cost estimates use DeepSeek's official peak/off-peak list prices and are indicative only.
 - Dark-mode background restriction is deliberate: only "no color" and "aurora" are selectable in dark mode.
 - DSH currently exposes no archive-restore API; the plugin does not bypass that boundary by editing the underlying registry.
-- The command palette owns `Ctrl+K` / `Cmd+K` (no Alt/Shift, ignored inside editors). dsh's own default is `Ctrl+Alt+K`, so nothing collides out of the box — but dsh 0.1.7 lets you rebind host shortcuts, and if you assign a host command to plain `Ctrl+K`, both fire. Keep the palette key reserved, or pick another binding there.
+- The command palette owns `Ctrl+K` / `Cmd+K` (no Alt/Shift, ignored inside editors). dsh's own default on the **web** profile is `Ctrl+Alt+K` (the desktop default is plain `Ctrl+K`), so nothing collides out of the box — but dsh 0.1.7 lets you rebind host shortcuts, and if you assign a host command to plain `Ctrl+K`, both fire. Keep the palette key reserved, or pick another binding there.
 - dsh's shipped `web` profile composes its session-query index with `openAt: never`, so full-text search is off unless the deployment enables it. In-session search therefore answers from a direct log scan (ordered, capped at 100 hits) and the palette's cross-session search shows dsh's own refusal.
 
 ## Development

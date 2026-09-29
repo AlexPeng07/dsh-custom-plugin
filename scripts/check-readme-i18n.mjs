@@ -1,10 +1,14 @@
 #!/usr/bin/env node
 /**
- * Bilingual README consistency gate: recompute each README's git blob hash
- * (the same `git hash-object --path <file> <file>` the record file documents)
- * and compare it against the hashes recorded in README.i18n.yaml. Editing one
- * language without bringing the other along, or forgetting to re-record the
- * hashes, fails loud here instead of drifting silently.
+ * Bilingual README freshness gate: recompute each README's git blob hash (the
+ * same `git hash-object --path <file> <file>` the record file documents) and
+ * compare it against the hashes recorded in README.i18n.yaml.
+ *
+ * What this enforces is that editing either README makes the build red until
+ * someone re-records the hash — a deliberate speed bump that forces the record
+ * to be looked at. It does NOT compare the two documents' content: a fact added
+ * to one language and left out of the other passes, because both hashes can be
+ * re-recorded from the drifted pair. Keeping the two in step is a review duty.
  * @module dsh-custom-plugin/scripts/check-readme-i18n
  */
 
