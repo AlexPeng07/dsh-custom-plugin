@@ -164,9 +164,13 @@ refuted by measurement and are recorded below so nobody re-litigates them.
 - Measured against dsh 0.2.0-rc.1 (published the day after this release):
   `dsh plugin add` rejects the bundle and rolls the profile back; with the
   exact-version exemption granted, the source typechecks against 0.2's own
-  types, 110/110 unit tests pass, 19/19 live probes pass, and the browser
-  surfaces work. The peer range is deliberately **not** widened — see the
-  README's compatibility note for what remains unchecked.
+  types, 111/111 unit tests pass, 19/19 live probes pass, and the browser
+  behaves as on 0.1.7 — eight slot registrations, the rail, prompt insertion,
+  the `Ctrl+K` palette with title search, and quote-reply. The peer range is
+  deliberately not widened: `^0.2.0-rc.1` would silently admit every 0.2.x
+  release, including a stable nobody has reviewed — the very failure this
+  upgrade exists to prevent. What stays unverified there (branch / Mermaid /
+  LaTeX chips) is unverified here too: those need a real model reply.
 - Retracted after re-measurement, so the record does not carry them: "the
   `slots.inject(key, fn)` service method does not exist in 0.1.7" (it is
   declared at `dsh-client-ui-renderer`'s registry interface, and all eight

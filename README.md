@@ -136,7 +136,7 @@ report their service as missing rather than throwing.
 
 ## Install
 
-Prerequisites: Node 22+, pnpm, and the `dsh` CLI (the official `@deepseek-ai/dsh` npm package; `npx @deepseek-ai/dsh` stands in for `dsh` when it is not installed globally). This release targets **dsh 0.1.7-rc.2 through the rest of 0.1.x** — dsh checks a bundle's `@deepseek-ai/dsh-*` peer ranges against its own version at install and startup, and skips a bundle that does not match, so `package.json` declares a range whose floor is the release this package was actually built and verified against. It does not yet support 0.2.x: `^0.1.7-rc.2` excludes it, and `dsh plugin add` against 0.2.0-rc.1 rejects the install and rolls the profile back. What has been measured there, with dsh's exact-version exemption granted: the source typechecks against 0.2.0-rc.1's own published types, all 110 unit tests pass, all 19 live host probes pass, and the browser surfaces work (eight slot registrations, the timeline rail, prompt insertion into the composer). The range still stops at 0.1.x because 0.2.0-rc.1 is a pre-release and because what a probe cannot reach there — the agent tool schema, and the long-lived session paths — has not been reviewed. On an older dsh, install the matching older plugin release instead of granting a compatibility exemption.
+Prerequisites: Node 22+, pnpm, and the `dsh` CLI (the official `@deepseek-ai/dsh` npm package; `npx @deepseek-ai/dsh` stands in for `dsh` when it is not installed globally). This release targets **dsh 0.1.7-rc.2 through the rest of 0.1.x** — dsh checks a bundle's `@deepseek-ai/dsh-*` peer ranges against its own version at install and startup, and skips a bundle that does not match, so `package.json` declares a range whose floor is the release this package was actually built and verified against. It does not yet support 0.2.x: `^0.1.7-rc.2` excludes it, and `dsh plugin add` against 0.2.0-rc.1 rejects the install and rolls the profile back. What has been measured there, with dsh's exact-version exemption granted: the source typechecks against 0.2.0-rc.1's own published types, 111/111 unit tests pass, all 19 live host probes pass, and the browser surfaces behave the same as on 0.1.7 — eight slot registrations, the timeline rail, prompt insertion into the composer, `Ctrl+K` palette with title search, and quote-reply writing a blockquote. What stays unverified there is what stays unverified here: the per-turn chips (branch, Mermaid render, LaTeX) need a real model reply, so a credential-free scratch home cannot reach them. The range is not widened for a different reason — `^0.2.0-rc.1` would silently admit every 0.2.x release, including a future stable nobody has looked at, which is the same mistake this upgrade exists to stop. On an older dsh, install the matching older plugin release instead of granting a compatibility exemption.
 
 ### From npm
 
@@ -230,9 +230,25 @@ formats, the search scan path, usage scan, backup, the Mermaid engine route, the
 client→host diagnostic ring, a UTF-8 state round trip that restores and then
 verifies your prompt library, and both trust fences. It refuses to run against a
 real `~/.dsh` unless you set `ALLOW_REAL_DSH_HOME=1`, reports `PASS`/`FAIL` per
-probe, and exits non-zero on any failure. CI has no harness to talk to, so run it
-whenever a dsh release lands; slot registration and rendering still need the
-browser pass described above.
+probe, counts and names anything it `SKIP`s, and exits non-zero on any failure.
+CI has no harness to talk to, so run it whenever a dsh release lands; slot
+registration and rendering still need the browser pass described above.
+
+Checking a new dsh release takes four commands, and never touches your own
+harness home:
+
+```bash
+mkdir -p /tmp/dshnext && cd /tmp/dshnext && npm init -y && npm i @deepseek-ai/dsh@<version>
+DSH_HOME=/tmp/dshnext-home node node_modules/@deepseek-ai/dsh/lib/bin.js plugin --profile web add <packed.tgz>
+DSH_HOME=/tmp/dshnext-home node node_modules/@deepseek-ai/dsh/lib/bin.js --profile web --no-open --port 13999 &
+DSH_HOME=/tmp/dshnext-home DSH_PORT=13999 COOKIE_JAR=/tmp/dshnext/jar.txt bash scripts/live-dsh-check.sh
+```
+
+If the release falls outside the declared peer range, the second command refuses
+and rolls the profile back; `dsh plugin --profile web allow-version <pkg>@<ver>
+--dsh-version <version> --accept-risk` grants the exact-version exemption, so the
+probe can tell you *what* actually breaks instead of what the gate already
+refused.
 
 ## License
 

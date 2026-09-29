@@ -132,7 +132,7 @@ DeepSeek Harness（DSH）Web GUI 的 Custom 便利套件：个性化外观、天
 
 ## 安装
 
-前置：Node 22+、pnpm，以及 `dsh` CLI（官方 npm 包 `@deepseek-ai/dsh`；未全局安装时，可用 `npx @deepseek-ai/dsh` 代替 `dsh`）。本版本面向 **dsh 0.1.7-rc.2 及其后的 0.1.x**：dsh 在安装与启动时会用自身版本校验 bundle 的 `@deepseek-ai/dsh-*` peer 范围，不匹配的 bundle 会被整包跳过，所以 `package.json` 声明的范围以下界为准——下界才是本包实际构建并实测过的那个版本。0.2.x 暂不在支持范围内：`^0.1.7-rc.2` 把它排除在外，`dsh plugin add` 在 0.2.0-rc.1 上会直接拒绝安装并回滚 profile。已实测到的部分（授予 dsh 的精确版本豁免后）：源码能通过 0.2.0-rc.1 自己发布的类型检查、110 个单测全过、19 条活体探针全过，浏览器侧的八个槽位注册、时间线轨与提示词写入输入框也都正常。范围仍停在 0.1.x：0.2.0-rc.1 是预发布版，且探针够不到的地方（agent 工具 schema、长会话路径）尚未逐项复核。仍在旧版 dsh 的用户请安装对应的旧版插件，而不是授予兼容性豁免。
+前置：Node 22+、pnpm，以及 `dsh` CLI（官方 npm 包 `@deepseek-ai/dsh`；未全局安装时，可用 `npx @deepseek-ai/dsh` 代替 `dsh`）。本版本面向 **dsh 0.1.7-rc.2 及其后的 0.1.x**：dsh 在安装与启动时会用自身版本校验 bundle 的 `@deepseek-ai/dsh-*` peer 范围，不匹配的 bundle 会被整包跳过，所以 `package.json` 声明的范围以下界为准——下界才是本包实际构建并实测过的那个版本。0.2.x 暂不在支持范围内：`^0.1.7-rc.2` 把它排除在外，`dsh plugin add` 在 0.2.0-rc.1 上会直接拒绝安装并回滚 profile。已实测到的部分（授予 dsh 的精确版本豁免后）：源码能通过 0.2.0-rc.1 自己发布的类型检查、111 个单测全过、19 条活体探针全过，浏览器侧与 0.1.7 表现一致——八个槽位注册、时间线轨、提示词写入输入框、`Ctrl+K` 面板带标题检索、引用回复把 blockquote 写进输入框。验不到的部分也和 0.1.7 一样：回合内的 chips（分叉、Mermaid 渲染、LaTeX）需要一次真实的模型回复，无凭据的临时家目录跑不出来。不收编范围还有另一个理由：`^0.2.0-rc.1` 会静默放行整个 0.2.x，包括一个谁都没看过的正式版——而这正是这次升级要止住的错误。仍在旧版 dsh 的用户请安装对应的旧版插件，而不是授予兼容性豁免。
 
 ### 从 npm 安装
 
@@ -223,8 +223,21 @@ pnpm smoke          # 构建后契约自检：加载器握手、dsh 会读的清
 （`DSH_HOME=… DSH_PORT=… bash scripts/live-dsh-check.sh`），在真实会话数据上跑宿主侧全链路：
 时间线、三种导出、搜索扫描路径、用量扫描、备份、Mermaid 引擎路由、客户端→宿主的诊断回环、
 一次会还原并校验提示词库的 UTF-8 往返，以及两处同源/loopback 围栏。默认拒绝在真实的
-`~/.dsh` 上运行（需显式 `ALLOW_REAL_DSH_HOME=1`），逐项报 PASS/FAIL，任一失败即非零退出。
+`~/.dsh` 上运行（需显式 `ALLOW_REAL_DSH_HOME=1`），逐项报 PASS/FAIL，被 `SKIP` 的项会计数并写进收尾行，任一失败即非零退出。
 CI 没有可对话的宿主，所以每次 dsh 发版都建议跑一遍；槽位注册与渲染仍需按上文用浏览器过一遍。
+
+自己验一个新 dsh 版本只要四条命令，且全程不碰你自己的 harness 家目录：
+
+```bash
+mkdir -p /tmp/dshnext && cd /tmp/dshnext && npm init -y && npm i @deepseek-ai/dsh@<版本>
+DSH_HOME=/tmp/dshnext-home node node_modules/@deepseek-ai/dsh/lib/bin.js plugin --profile web add <打包好的.tgz>
+DSH_HOME=/tmp/dshnext-home node node_modules/@deepseek-ai/dsh/lib/bin.js --profile web --no-open --port 13999 &
+DSH_HOME=/tmp/dshnext-home DSH_PORT=13999 COOKIE_JAR=/tmp/dshnext/jar.txt bash scripts/live-dsh-check.sh
+```
+
+若新版本落在声明的 peer 范围之外，第二条会被拒并回滚 profile；这时可以用
+`dsh plugin --profile web allow-version <包名>@<版本> --dsh-version <版本> --accept-risk`
+授予精确版本豁免——这样探针能告诉你**到底是什么坏了**，而不是只看到闸口拒绝。
 
 ## 许可证
 
