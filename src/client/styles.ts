@@ -140,111 +140,6 @@ export const STATIC_CSS = `/* dsh-custom-plugin static styles. Every rule is glo
       background-position: 0% 50%;
     }
   }
-  .vx-rail {
-    position: absolute;
-    width: 12px;
-    border-radius: 8px;
-    background: rgba(120, 130, 150, .18);
-    border: 1px solid rgba(120, 130, 150, .25);
-    pointer-events: auto;
-    touch-action: none;
-    box-sizing: border-box;
-  }
-  .vx-rail.right {
-    right: 4px;
-  }
-  .vx-rail.left {
-    left: 56px;
-  }
-  /* When the rail is active it substitutes the native scrollbar: the scrollport
-     carrying the vx-rail-scroller class (added by the client when it resolves
-     the chat scrollport) hides its own bar so only one scroll affordance
-     remains. scrollbar-gutter: stable on the shell keeps the layout width. */
-  .vx-rail-scroller {
-    scrollbar-width: none;
-  }
-  .vx-rail-scroller::-webkit-scrollbar {
-    display: none;
-  }
-  .vx-thumb {
-    position: absolute;
-    left: 1px;
-    right: 1px;
-    border-radius: 8px;
-    background: rgba(90, 105, 135, .5);
-    border: 1px solid rgba(255, 255, 255, .35);
-    box-sizing: border-box;
-  }
-  .vx-thumb:hover {
-    background: rgba(90, 105, 135, .7);
-  }
-  .vx-dot {
-    position: absolute;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    width: 10px;
-    height: 10px;
-    border-radius: 50%;
-    background: rgba(70, 85, 110, .92);
-    border: 2px solid rgba(255, 255, 255, .92);
-    box-shadow: 0 1px 3px rgba(0, 0, 0, .35);
-    pointer-events: auto;
-    cursor: pointer;
-    transition: transform .12s;
-    padding: 0;
-  }
-  .vx-dot:hover {
-    transform: translate(-50%, -50%) scale(1.35);
-  }
-  .vx-dot.star {
-    background: #c9a24b;
-    border-color: #f3e3bd;
-  }
-  @media (prefers-color-scheme: dark) {
-    .vx-dot {
-      background: rgba(205, 215, 230, .95);
-      border-color: rgba(28, 34, 46, .9);
-    }
-    .vx-thumb {
-      background: rgba(165, 180, 205, .45);
-    }
-  }
-  .vx-rail-pop {
-    position: absolute;
-    pointer-events: auto;
-    padding: 10px 12px;
-    width: 300px;
-    font-size: 12px;
-    line-height: 1.55;
-    z-index: 5;
-  }
-  /* Class = which side the rail sits on; the card must open toward the page
-     content. It is a child of the 12px-wide rail, so right:20px puts it left
-     of the rail and left:20px puts it right (20px = rail width + 8px gap). */
-  .vx-rail-pop.right {
-    right: 20px;
-  }
-  .vx-rail-pop.left {
-    left: 20px;
-  }
-  .vx-pop-time {
-    color: #6d7689;
-    font-size: 11px;
-    margin-bottom: 4px;
-  }
-  .vx-pop-text {
-    white-space: pre-wrap;
-    word-break: break-word;
-    max-height: 150px;
-    overflow: hidden;
-    margin-bottom: 8px;
-  }
-  .vx-pop-row {
-    display: flex;
-    gap: 5px;
-    flex-wrap: wrap;
-    align-items: center;
-  }
   .vx-balance-wrap {
     display: inline-flex;
     align-items: center;
@@ -911,13 +806,6 @@ export const STATIC_CSS = `/* dsh-custom-plugin static styles. Every rule is glo
   .vx-root.vx-dark .vx-pattern {
     background-image: radial-gradient(rgba(100, 100, 116, .5) 1px, transparent 1px);
   }
-  .vx-root.vx-dark .vx-dot {
-    background: rgba(205, 215, 230, .95);
-    border-color: rgba(28, 34, 46, .9);
-  }
-  .vx-root.vx-dark .vx-thumb {
-    background: rgba(165, 180, 205, .45);
-  }
   .vx-root.vx-dark .vx-balance-hover,
   .vx-root.vx-dark .vx-panel,
   .vx-root.vx-dark .vx-modal,
@@ -940,13 +828,6 @@ export const STATIC_CSS = `/* dsh-custom-plugin static styles. Every rule is glo
   }
   .vx-root.vx-light .vx-pattern {
     background-image: radial-gradient(rgba(150, 150, 160, .42) 1px, transparent 1px);
-  }
-  .vx-root.vx-light .vx-dot {
-    background: rgba(70, 85, 110, .92);
-    border-color: rgba(255, 255, 255, .92);
-  }
-  .vx-root.vx-light .vx-thumb {
-    background: rgba(90, 105, 135, .5);
   }
   .vx-root.vx-light .vx-balance-hover,
   .vx-root.vx-light .vx-panel,

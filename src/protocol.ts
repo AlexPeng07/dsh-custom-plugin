@@ -27,12 +27,6 @@ export interface CustomPluginConfig {
   glassMode?: 'frost' | 'liquid'
   /** Apply backdrop blur to global dialogs/menus/tooltips as well. */
   globalGlass?: boolean
-  /** Show the per-user-message timeline rail. */
-  timeline?: boolean
-  /** Place the timeline rail on the left instead of the right. */
-  timelineLeft?: boolean
-  /** Show only starred timeline nodes. */
-  starsOnly?: boolean
   /** Enable the selection-quote-reply feature. */
   quote?: boolean
   /** Force `scroll-behavior: auto` to stop automatic jump-to-bottom. */
@@ -54,9 +48,6 @@ export const DEFAULT_CONFIG: CustomPluginConfig = {
   glass: true,
   glassMode: 'frost',
   globalGlass: true,
-  timeline: true,
-  timelineLeft: false,
-  starsOnly: false,
   quote: true,
   antiScroll: false,
   mermaid: true,

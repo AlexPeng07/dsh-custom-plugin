@@ -9,7 +9,7 @@
 
 English | [中文](README.zh.md)
 
-Custom convenience suite for the DeepSeek Harness (DSH) Web GUI: personalization, weather FX, glass effects, a per-user-message timeline rail, project folders, enhanced prompts, conversation export/search, Mermaid rendering, quote reply, 7/30/90-day usage analytics, budget and key-free local backups, plus a Ctrl/Cmd+K command palette.
+Custom convenience suite for the DeepSeek Harness (DSH) Web GUI: personalization, weather FX, glass effects, project folders, enhanced prompts, conversation export/search, Mermaid rendering, quote reply, 7/30/90-day usage analytics, budget and key-free local backups, plus a Ctrl/Cmd+K command palette.
 
 The plugin is dual-face: the host half (`src/`) owns the state document, registers the `/api/custom-plugin` routes and the `custom_plugin_status` agent tool; the browser half (`src/client/`) injects its UI through eight injections into seven official slots and talks to the host over same-origin fetch. Mounted through the official profile mechanism — no DSH source changes.
 
@@ -26,19 +26,18 @@ The plugin is dual-face: the host half (`src/`) owns the state document, registe
 </tr>
 <tr>
 <td width="50%" valign="top"><b>Liquid glass (displacement refraction on Custom surfaces)</b><br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/liquid-glass.png" alt="Liquid glass" width="100%"></td>
-<td width="50%" valign="top"><b>Timeline rail with hover preview</b><br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/timeline.png" alt="Timeline rail" width="100%"></td>
-</tr>
-<tr>
 <td width="50%" valign="top"><b>Multi-level project folders</b><br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/project-folders.png" alt="Project folders" width="100%"></td>
+</tr>
+<tr>
 <td width="50%" valign="top"><b>Mermaid mindmap rendered in place</b><br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/mermaid-mindmap.png" alt="Mermaid mindmap" width="100%"></td>
-</tr>
-<tr>
 <td width="50%" valign="top" align="center"><b>Balance and today's per-model usage</b><br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/balance-usage.png" alt="Balance and usage panel" width="100%"></td>
-<td width="50%" valign="top" align="center"><b>Rain — three depth layers</b><br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/weather-rain.gif" alt="Rain FX" width="100%"></td>
 </tr>
 <tr>
-<td width="50%" valign="top" align="center"><b>Sakura petals</b><br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/weather-sakura.gif" alt="Sakura FX" width="100%"></td>
-<td width="50%" valign="top" align="center"><b>Snow</b><br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/weather-snow.gif" alt="Snow FX" width="100%"></td>
+<td width="50%" valign="top" align="center"><b>Rain (three depth layers)</b><br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/weather-rain.gif" alt="Rain effect" width="100%"></td>
+<td width="50%" valign="top" align="center"><b>Sakura</b><br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/weather-sakura.gif" alt="Sakura effect" width="100%"></td>
+</tr>
+<tr>
+<td width="50%" valign="top" align="center"><b>Snow</b><br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/weather-snow.gif" alt="Snow effect" width="100%"></td>
 </tr>
 </table>
 
@@ -51,17 +50,6 @@ Weather FX is shown in dark mode, where only "no color" and "aurora" backgrounds
 - **Background colors**: 20 muted low-saturation palettes (each with a matching tab color, `天青灰` by default) plus "no color" (follows the GUI default theme) and the high-saturation aurora gradient. In dark mode only "no color" and "aurora" stay selectable; the other colors are disabled and the plugin text turns white for readability.
 - **Weather FX**: canvas-rendered, pointer-transparent one-click overlays — falling snow, cinematic rain (three depth layers with splashes), and drifting sakura petals; turning it off clears the canvas.
 - **Glass**: frosted glass on every Custom surface, or liquid glass (Chromium displacement refraction, no chromatic dispersion, slight backdrop blur; Safari/Firefox fall back to frosted). A global-glass option applies backdrop blur to dialogs, menus, tooltips and listboxes.
-
-### Timeline navigation
-
-Every direct user message gets a node on a right-side (or left-side) rail:
-
-- hover for a preview popover (overflow-aware positioning) with LaTeX / MathML / Mermaid markers rendered inline;
-- click to jump to that message (the chat scrollport is driven directly, so rows inside nested scrollers still land centered);
-- drag the thumb or wheel over the rail to scroll (the rail replaces the native scrollbar);
-- nodes can be starred (and the rail can show only starred ones), forked into a new session at that message, or copied in full.
-
-Nodes are sourced from the rendered user-message rows (DOM positioning) and refresh automatically after history loads; the rail keeps up to 400 tail nodes.
 
 ### Project folders
 
@@ -223,9 +211,6 @@ Appearance and feature toggles (the `cfg` field, all with defaults):
 | `glass` | `true` | master glass toggle for Custom surfaces |
 | `glassMode` | `frost` | `frost` frosted / `liquid` displacement glass |
 | `globalGlass` | `true` | blur global overlays (dialogs/menus/tooltips) |
-| `timeline` | `true` | timeline rail toggle |
-| `timelineLeft` | `false` | rail on the left |
-| `starsOnly` | `false` | show only starred nodes |
 | `quote` | `true` | selection quote reply |
 | `antiScroll` | `false` | anti auto-scroll |
 | `mermaid` | `true` | automatic in-place Mermaid rendering (plus render chips) |

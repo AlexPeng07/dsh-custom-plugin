@@ -35,9 +35,16 @@ describe('normalizeCfg', () => {
   })
 
   it('accepts only known keys', () => {
-    const cfg = normalizeCfg({ timelineLeft: true, bogus: 'x' })
-    expect(cfg.timelineLeft).toBe(true)
+    const cfg = normalizeCfg({ quote: true, bogus: 'x' })
+    expect(cfg.quote).toBe(true)
     expect((cfg as Record<string, unknown>).bogus).toBeUndefined()
+  })
+
+  it('drops keys retired with the timeline rail instead of persisting them', () => {
+    const cfg = normalizeCfg({ timeline: false, timelineLeft: true, starsOnly: true })
+    expect((cfg as Record<string, unknown>).timeline).toBeUndefined()
+    expect((cfg as Record<string, unknown>).timelineLeft).toBeUndefined()
+    expect((cfg as Record<string, unknown>).starsOnly).toBeUndefined()
   })
 
   it('normalizes numeric budget fields', () => {

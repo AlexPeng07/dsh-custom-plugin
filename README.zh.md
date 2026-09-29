@@ -9,7 +9,7 @@
 
 [English](README.md) | 中文
 
-DeepSeek Harness（DSH）Web GUI 的 Custom 便利套件：个性化外观、天气特效、玻璃效果、按用户消息的时间线导航、项目文件夹、增强提示词库、会话导出与会话搜索、Mermaid 渲染、引用回复、7/30/90 天用量分析、预算与无密钥本地备份，以及 Ctrl/Cmd+K 快捷面板。
+DeepSeek Harness（DSH）Web GUI 的 Custom 便利套件：个性化外观、天气特效、玻璃效果、项目文件夹、增强提示词库、会话导出与会话搜索、Mermaid 渲染、引用回复、7/30/90 天用量分析、预算与无密钥本地备份，以及 Ctrl/Cmd+K 快捷面板。
 
 插件为双半区架构：宿主半区（`src/`）持有状态文档、注册 `/api/custom-plugin` 路由与 `custom_plugin_status` 智能体工具；浏览器半区（`src/client/`）通过 7 个官方 slot 的 8 处注入挂载 UI，以同源 fetch 与宿主通信。经官方 profile 机制挂载，不改 DSH 源码。
 
@@ -26,18 +26,17 @@ DeepSeek Harness（DSH）Web GUI 的 Custom 便利套件：个性化外观、天
 </tr>
 <tr>
 <td width="50%" valign="top"><b>液态玻璃（Custom 面板位移折射）</b><br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/liquid-glass.png" alt="液态玻璃" width="100%"></td>
-<td width="50%" valign="top"><b>时间线轨道与悬停预览</b><br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/timeline.png" alt="时间线轨道" width="100%"></td>
-</tr>
-<tr>
 <td width="50%" valign="top"><b>多级项目文件夹</b><br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/project-folders.png" alt="项目文件夹" width="100%"></td>
+</tr>
+<tr>
 <td width="50%" valign="top"><b>Mermaid 思维导图就地渲染</b><br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/mermaid-mindmap.png" alt="Mermaid 思维导图" width="100%"></td>
-</tr>
-<tr>
 <td width="50%" valign="top" align="center"><b>余额与今日分模型用量</b><br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/balance-usage.png" alt="余额与用量面板" width="100%"></td>
-<td width="50%" valign="top" align="center"><b>雨（三层景深）</b><br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/weather-rain.gif" alt="下雨特效" width="100%"></td>
 </tr>
 <tr>
+<td width="50%" valign="top" align="center"><b>雨（三层景深）</b><br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/weather-rain.gif" alt="下雨特效" width="100%"></td>
 <td width="50%" valign="top" align="center"><b>樱花</b><br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/weather-sakura.gif" alt="樱花特效" width="100%"></td>
+</tr>
+<tr>
 <td width="50%" valign="top" align="center"><b>飘雪</b><br><img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/weather-snow.gif" alt="飘雪特效" width="100%"></td>
 </tr>
 </table>
@@ -51,17 +50,6 @@ DeepSeek Harness（DSH）Web GUI 的 Custom 便利套件：个性化外观、天
 - **背景颜色**：20 组低饱和典雅色（每组合配 tab 栏色，默认「天青灰」），另有「无颜色」（跟随 GUI 默认主题）与高饱和「极光」渐变。深色模式下仅「无颜色」与「极光」可选，其余颜色禁用，插件文字自动转白保证可读性。
 - **天气特效**：画布渲染、不挡交互，一键切换——飘雪、电影感雨滴（三层景深 + 地面溅起）、樱花飘落；关闭时自动清空画布。
 - **玻璃效果**：所有 Custom 面板默认毛玻璃；可切换液态玻璃（Chromium 位移折射，无色散、轻微背景模糊；Safari/Firefox 自动回退毛玻璃）。「全局浮层玻璃」对弹窗、菜单、提示框、下拉框统一加模糊。
-
-### 时间线导航
-
-每条用户消息在右侧（或左侧）轨道生成一个节点：
-
-- 悬停弹出预览卡（自动防溢出定位），卡内直接显示 LaTeX / MathML / Mermaid 标记；
-- 点击跳转到对应消息（直接驱动聊天滚动容器，消息位于嵌套滚动区时也能居中）；
-- 拖动滑块或在轨道上滚轮滚动（轨道替代原生滚动条）；
-- 节点支持星标（可只显示星标）、在该消息处创建分支会话、一键复制全文。
-
-节点按渲染出的用户消息行定位（DOM 行 sourcing），加载历史后自动刷新；轨道尾部最多保留 400 个节点。
 
 ### 项目文件夹
 
@@ -211,9 +199,6 @@ dsh plugin --profile web add link:F:/dsh-plugin-dev
 | `glass` | `true` | Custom 面板玻璃总开关 |
 | `glassMode` | `frost` | `frost` 毛玻璃 / `liquid` 液态玻璃 |
 | `globalGlass` | `true` | 全局浮层（弹窗/菜单/提示）加模糊 |
-| `timeline` | `true` | 时间线轨道开关 |
-| `timelineLeft` | `false` | 轨道放左侧 |
-| `starsOnly` | `false` | 只显示星标节点 |
 | `quote` | `true` | 划词引用回复 |
 | `antiScroll` | `false` | 防自动跳底 |
 | `mermaid` | `true` | Mermaid 图表自动就地渲染（含消息下方渲染按钮） |

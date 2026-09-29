@@ -111,12 +111,6 @@ interface WorkspaceNavLike {
  */
 const CROSS_SEARCH_UNAVAILABLE = '跨会话全文搜索不可用；下方结果仍按标题匹配会话与工作区。'
 
-function fmtClock(time: number): string {
-  const d = new Date(time)
-  const pad = (n: number): string => String(n).padStart(2, '0')
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}`
-}
-
 function formatTokenCount(value: number): string {
   return Math.round(value).toLocaleString('zh-CN')
 }
@@ -135,17 +129,6 @@ interface Store {
   sessionId: string | null
   turns: { sessionId: string; items: TimelineItem[] } | null
   anchors: Map<number, { el: HTMLElement; turn: TurnLocationLike | null }>
-  seqAnchor: Map<number, HTMLElement>
-  railPositions: Array<{ seq: number; y: number; st: boolean }>
-  railSig: string
-  railHover: { seq: number; y: number } | null
-  railHoverTimer: ReturnType<typeof setTimeout> | null
-  railBox: { top: number; height: number }
-  railRight: number
-  railLeft: number
-  thumbTop: number
-  thumbH: number
-  scrollerEl: HTMLElement | null
   panelOpen: boolean
   panelTab: string
   panelPos: { x: number; y: number } | null
@@ -292,17 +275,6 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     sessionId: null,
     turns: null,
     anchors: new Map(),
-    seqAnchor: new Map(),
-    railPositions: [],
-    railSig: '',
-    railHover: null,
-    railHoverTimer: null,
-    railBox: { top: 64, height: 600 },
-    railRight: 4,
-    railLeft: 56,
-    thumbTop: 0,
-    thumbH: 26,
-    scrollerEl: null,
     panelOpen: false,
     panelTab: 'look',
     panelPos: null,
@@ -377,19 +349,17 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       sessionScopeHolders++
       if (S.sessionId !== id) {
         S.anchors.clear()
-        S.seqAnchor.clear()
-        setS({ sessionId: id, turns: null, railPositions: [], railSig: '', railHover: null })
+        setS({ sessionId: id, turns: null })
         void fetchTurns(id)
       }
       return () => {
         sessionScopeHolders--
         // Clearing the identity has to clear everything loaded under it, maps
-        // included: a stale anchor element would let a rail click scroll to (or
-        // fork from) a node the next session never rendered.
+        // included: a stale anchor element would let a search jump land on a
+        // node the next session never rendered.
         if (sessionScopeHolders === 0 && S.sessionId === id) {
           S.anchors.clear()
-          S.seqAnchor.clear()
-          setS({ sessionId: null, turns: null, railPositions: [], railSig: '', railHover: null })
+          setS({ sessionId: null, turns: null })
         }
       }
     }, [id])
@@ -574,6 +544,11 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
           const cfg = { ...S.cfg, ...data.cfg }
           delete (cfg as Record<string, unknown>).clouds
           delete (cfg as Record<string, unknown>).wind
+          // Keys removed from the config surface: an old state file may still
+          // carry them, and a merge would re-persist them forever.
+          delete (cfg as Record<string, unknown>).timeline
+          delete (cfg as Record<string, unknown>).timelineLeft
+          delete (cfg as Record<string, unknown>).starsOnly
           S.cfg = cfg
         }
         if (Array.isArray(data.folders)) S.folders = data.folders
@@ -888,33 +863,21 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     return React.createElement('canvas', { ref, className: 'vx-fx' })
   }
 
-  // ================= timeline =================
-  let lastRefetchAt = 0
+  // ================= timeline data (turn chips + search reveal) =================
   let turnsRequestSerial = 0
-  // Rows already counted when the last rows>items refetch went out; one
-  // attempt per rendered-row growth stops the every-2s re-read loop when the
-  // host's own tail cap is what leaves the oldest loaded rows uncovered.
-  let railRefetchRows = -1
   const diagAtByKey = new Map<string, number>()
   function diagThrottled(message: string): void {
     // Throttle per diagnostic kind — but a kind is not a reading. Keying on the
-    // first word let a `rail 0 dots` line swallow the `rail 1 dots` that followed
-    // it five seconds later, which once read as "the rail is broken" when it was
-    // simply a transition nobody could see. Twenty-four characters carry the
-    // counts of every throttled line we emit, so identical repeats still dedup
-    // while a change of reading gets through.
+    // first word let an unchanged reading swallow a changed one five seconds
+    // later, which once read as "broken" when it was a transition nobody could
+    // see. Twenty-four characters carry the counts of every throttled line we
+    // emit, so identical repeats dedup while a change of reading gets through.
     const key = message.slice(0, 24)
     const now = Date.now()
     const at = diagAtByKey.get(key)
     if (at !== undefined && now - at < 5000) return
     diagAtByKey.set(key, now)
     reportDiag(message)
-  }
-  function scheduleTurnsRefetch(): void {
-    const now = Date.now()
-    if (now - lastRefetchAt < 2000) return
-    lastRefetchAt = now
-    void fetchTurns(S.sessionId as string)
   }
   async function fetchTurns(sessionId: string): Promise<void> {
     const requestSerial = ++turnsRequestSerial
@@ -928,7 +891,6 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       if (result.ok === true) {
         S.turns = { sessionId, items: result.items ?? [] }
         setS({ turns: S.turns })
-        updateRailPositions()
         diagThrottled('timeline ' + (result.items?.length ?? 0) + ' items ' + sessionId.slice(0, 24))
       } else {
         diagThrottled('timeline failed: ' + String(result.error ?? 'unknown'))
@@ -973,125 +935,19 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     }
     return null
   }
-  /** All rendered user-message rows inside the scrollport, in document order
-   * (steering messages render through the same UserMessageNodeView). */
-  function queryUserRows(scroller: HTMLElement): HTMLElement[] {
-    try {
-      return Array.from(scroller.querySelectorAll<HTMLElement>('[data-chat-flow-kind="user"], [data-chat-flow-kind="steering"]'))
-    } catch {
-      return []
-    }
-  }
-  /** Keep the rail-scroller class on exactly the current scrollport so the
-   * native scrollbar hides only for the column the rail substitutes. */
-  function syncRailScrollerClass(scroller: HTMLElement | null): void {
-    const previous = S.scrollerEl
-    if (previous !== null && previous !== scroller) {
-      try { previous.classList.remove('vx-rail-scroller') } catch { /* detached */ }
-    }
-    if (scroller !== null && scroller !== previous) {
-      try { scroller.classList.add('vx-rail-scroller') } catch { /* detached */ }
-    }
-  }
-  function updateRailPositions(): void {
-    if (S.cfg.timeline !== true || S.sessionId === null) {
-      syncRailScrollerClass(null)
-      if (S.railPositions.length > 0 || S.thumbTop !== 0 || S.thumbH !== 26) {
-        setS({ railPositions: [], railSig: '', railBox: { top: 64, height: 600 }, railRight: 4, railLeft: 56, thumbTop: 0, thumbH: 26, scrollerEl: null })
-      }
-      return
-    }
-    const w = typeof window !== 'undefined' ? window : null
-    if (w === null) return
-    // Turns data missing or stale (session switched, history loaded before the
-    // first fetch): pull it back throttled instead of staying empty forever.
-    if (S.turns === null || S.turns.sessionId !== S.sessionId) {
-      railRefetchRows = -1
-      scheduleTurnsRefetch()
-    }
-    const items = S.turns !== null && Array.isArray(S.turns.items) ? S.turns.items : []
-    let scroller = S.scrollerEl
-    if (scroller === null || !scroller.isConnected) {
-      scroller = resolveScroller()
-    }
-    syncRailScrollerClass(scroller)
-    const vh = w.innerHeight || 800
-    let top = 64
-    let height = vh - 64 - 120
-    let scrollH = Math.max(1, height)
-    let scrollTop = 0
-    let viewH = height
-    let railRight = 4
-    let railLeft = 56
-    let scrollerRect: DOMRect | null = null
-    if (scroller !== null) {
-      try {
-        const r = scroller.getBoundingClientRect()
-        scrollerRect = r
-        top = Math.max(0, r.top)
-        height = Math.max(60, r.height)
-        viewH = Math.max(1, scroller.clientHeight || r.height)
-        scrollH = Math.max(viewH, scroller.scrollHeight || viewH)
-        scrollTop = Math.max(0, scroller.scrollTop || 0)
-        // Rail hugs the scrollport's inner edge (right or left per config),
-        // replacing the native scrollbar slot instead of stacking beside it.
-        railRight = Math.max(2, Math.round(w.innerWidth - r.right + 4))
-        railLeft = Math.max(2, Math.round(r.left + 4))
-      } catch { /* rect read failed */ }
-    }
-    const trackH = height
-    const pos: Array<{ seq: number; y: number; st: boolean }> = []
-    const seqAnchor = new Map<number, HTMLElement>()
-    // DOM sourcing: the dots come from the rendered user-message
-    // rows themselves (`[data-chat-flow-kind="user"]`, plus steering rows that
-    // render through the same view), not from turnTail slot anchors — the
-    // turnTail chain seat can be held by another plugin, which would leave the
-    // rail without any node. Rows are tail-aligned with the host's turns data
-    // (the newest rendered row is the last item): loading older history
-    // prepends rows and keeps the alignment correct without a refetch.
-    if (scroller !== null && scrollerRect !== null) {
-      const rows = queryUserRows(scroller)
-      const offset = items.length - rows.length
-      // More rendered rows than the turns data covers (older history loaded
-      // past what the host returned, or the fetch predates the load): pull the
-      // turns again so every dot keeps its preview text and actions.
-      if (rows.length > items.length && railRefetchRows < rows.length) {
-        railRefetchRows = rows.length
-        scheduleTurnsRefetch()
-      }
-      for (let i = 0; i < rows.length; i++) {
-        const item = offset + i >= 0 ? items[offset + i] : undefined
-        if (item === undefined) continue
-        try {
-          const r = rows[i].getBoundingClientRect()
-          const pct = Math.max(0, Math.min(1, (r.top + r.height / 2 - scrollerRect.top + scrollTop) / Math.max(1, scroller.scrollHeight || 1)))
-          const starred = S.stars[S.sessionId as string]?.[item.seq] === true
-          seqAnchor.set(item.seq, rows[i])
-          pos.push({ seq: item.seq, y: Math.round(pct * trackH), st: starred })
-        } catch { /* row rect read failed */ }
-      }
-    }
-    const thumbH = Math.max(26, Math.round(trackH * (viewH / scrollH)))
-    const thumbTop = (scrollTop / Math.max(1, scrollH - viewH)) * (trackH - thumbH)
-    const sig = JSON.stringify(pos) + '|' + thumbTop + '|' + thumbH + '|' + top + '|' + height + '|' + railRight + '|' + railLeft
-    S.seqAnchor = seqAnchor
-    if (sig !== S.railSig) {
-      setS({ railPositions: pos, railSig: sig, railBox: { top, height }, railRight, railLeft, thumbTop: Math.round(thumbTop), thumbH, scrollerEl: scroller })
-      diagThrottled('rail ' + pos.length + ' dots / anchors ' + S.anchors.size + ' / turns ' + items.length + ' / scroller ' + (scroller === null ? 'none' : scroller.tagName.toLowerCase() + '.' + String(scroller.className ?? '').slice(0, 60)))
-    }
-  }
+  /** Scroll the rendered message row for `seq` to the viewport center. The
+   * element comes from the turnTail anchor map (our own chips register it);
+   * the scrollport is resolved at call time from the shell's semantic
+   * attribute, with scrollIntoView as the fallback. */
   function scrollToSeq(seq: number): void {
-    const el = S.seqAnchor.get(seq) ?? (S.anchors.get(seq)?.el ?? null)
-    if (el === undefined || el === null) {
+    const el = S.anchors.get(seq)?.el ?? null
+    if (el === null) {
       toast('该消息尚未渲染，请稍后重试', 'error')
       return
     }
-    // Drive the scrollport's scrollTop directly so the jump
-    // lands the row at the viewport center even when the row sits inside a
-    // nested scroller; scrollIntoView stays as the fallback.
-    const scroller = S.scrollerEl
+    const scroller = resolveScroller()
     let done = false
-    if (scroller !== null && scroller.isConnected) {
+    if (scroller !== null) {
       try {
         const er = el.getBoundingClientRect()
         const sr = scroller.getBoundingClientRect()
@@ -1103,32 +959,6 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     }
     if (!done) {
       try { el.scrollIntoView({ behavior: 'auto', block: 'center' }) } catch { try { el.scrollIntoView(true) } catch { /* scroll unavailable */ } }
-    }
-    setS({ railHover: null })
-  }
-  function toggleStar(seq: number): void {
-    const sid = S.sessionId
-    if (sid === null) return
-    const current = S.stars[sid] ?? {}
-    const next = { ...current }
-    if (next[seq] === true) delete next[seq]
-    else next[seq] = true
-    const stars = { ...S.stars }
-    stars[sid] = next
-    setS({ stars })
-    saveCfg()
-    updateRailPositions()
-  }
-  async function forkAt(seq: number): Promise<void> {
-    const remote = sessionRemote()
-    if (remote === undefined) { toast('分支不可用：会话 Remote 服务缺失', 'error'); return }
-    try {
-      const result = await remote.fork({ sessionId: S.sessionId as string, atSeq: seq })
-      if (!result.ok) { toast('创建分支失败: ' + remoteErrorMessage(result.error, '未知错误'), 'error'); return }
-      const childId = result.value.sessionId
-      toast('分支会话已创建', 'info', { label: '打开分支', run: () => openSessionItem(childId) })
-    } catch (error) {
-      toast('创建分支失败: ' + String((error as Error)?.message ?? error), 'error')
     }
   }
   function extractLatex(text: string): string[] {
@@ -1907,135 +1737,6 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       },
     }, btns.length > 0 ? React.createElement('span', { className: 'vx-turn-actions' }, btns) : null)
   }
-
-  function RailPopover(): React.ReactElement | null {
-    const s = useS()
-    const h = s.railHover
-    const popRef = React.useRef<HTMLDivElement | null>(null)
-    // Keep the card inside the rail's height: dots near the bottom would push
-    // the action row past the viewport bottom otherwise. Direct DOM writes
-    // avoid the measure → setState → re-measure loop a state clamp causes.
-    React.useLayoutEffect(() => {
-      const el = popRef.current
-      if (el === null || h === null) return
-      const rail = el.parentElement
-      if (rail === null) return
-      const base = Math.max(8, h.y - 90)
-      el.style.top = base + 'px'
-      const over = el.offsetTop + el.offsetHeight - rail.clientHeight
-      if (over > 0) el.style.top = Math.max(8, base - over) + 'px'
-    }, [h?.seq, h?.y])
-    if (h === null) return null
-    const item = s.turns !== null && Array.isArray(s.turns.items) ? s.turns.items.find((x) => x.seq === h.seq) ?? null : null
-    if (item === null) return null
-    const starred = S.sessionId !== null && s.stars[S.sessionId]?.[h.seq] === true
-    const side = s.cfg.timelineLeft === true ? 'left' : 'right'
-    return React.createElement('div', {
-      ref: (el: HTMLDivElement | null): void => { popRef.current = el },
-      className: `vx-glass vx-rail-pop ${side}`,
-      style: { top: Math.max(8, h.y - 90) },
-      // Entering the card cancels the dot's hide timer so the actions (star,
-      // fork, copy) are reachable; leaving re-arms it like a dot leave does.
-      onMouseEnter: () => { if (S.railHoverTimer !== null) { clearTimeout(S.railHoverTimer); S.railHoverTimer = null } },
-      onMouseLeave: () => { S.railHoverTimer = setTimeout(() => setS({ railHover: null }), 350) },
-    },
-      React.createElement('div', { className: 'vx-pattern' }),
-      React.createElement('div', { className: 'vx-pop-time' }, `${fmtClock(item.time)} · 第 ${item.turn ?? '?'} 轮${item.imageCount > 0 ? ` · ${item.imageCount} 张图片` : ''}`),
-      React.createElement('div', { className: 'vx-pop-text' }, item.text.slice(0, 220) + (item.text.length > 220 ? '…' : '')),
-      React.createElement('div', { className: 'vx-pop-row' },
-        React.createElement('button', { className: 'vx-chip', onClick: () => scrollToSeq(h.seq) }, React.createElement(Icon, { n: 'arrowDown', size: 11 }), ' 跳转'),
-        React.createElement('button', { className: 'vx-chip', onClick: () => toggleStar(h.seq) }, React.createElement(Icon, { n: 'star', size: 11, filled: starred }), starred ? ' 已星标' : ' 星标'),
-        React.createElement('button', { className: 'vx-chip', onClick: () => void forkAt(h.seq) }, React.createElement(Icon, { n: 'fork', size: 11 }), ' 分支'),
-        React.createElement('button', { className: 'vx-chip', onClick: () => void copyText(item.text).then((ok) => toast(ok ? '已复制全文' : '复制失败', ok ? 'info' : 'error')) }, React.createElement(Icon, { n: 'copy', size: 11 }), ' 全文'),
-      ),
-      (item.hasLatex === true || item.hasMathml === true || item.hasMermaid === true)
-        ? React.createElement('div', { className: 'vx-pop-row' },
-          item.hasLatex === true ? React.createElement('button', { className: 'vx-chip', onClick: () => void copyLatexOf(item) }, 'LaTeX') : null,
-          item.hasMathml === true ? React.createElement('button', { className: 'vx-chip', onClick: () => void copyMathmlOf(item) }, 'MathML') : null,
-          item.hasMermaid === true ? React.createElement('button', { className: 'vx-chip', onClick: () => openMermaidOf(item) }, 'Mermaid') : null,
-        )
-        : null,
-    )
-  }
-
-  function TimelineRail(props: OverlayProps): React.ReactElement | null {
-    const s = useS()
-    const sessions = useSessionsSafe(props)
-    const summary = sessions !== null && s.sessionId !== null ? sessions.byId[s.sessionId] : null
-    const trackRef = React.useRef<HTMLDivElement | null>(null)
-    React.useEffect(() => {
-      if (s.cfg.timeline !== true || S.sessionId === null) return
-      const running = summary?.running === true
-      const handle = setInterval(() => { if (running) void fetchTurns(S.sessionId as string) }, 3000)
-      return () => clearInterval(handle)
-    }, [s.cfg.timeline, s.sessionId, summary?.running])
-    React.useEffect(() => {
-      if (s.cfg.timeline !== true || S.sessionId === null) return
-      const el = trackRef.current
-      if (el === null) return
-      // The hover card lives inside the 12px rail but must behave like a
-      // normal panel: button presses there are clicks (not thumb drags) and
-      // wheel events should not scroll the chat out from under the reader.
-      const fromPopover = (e: Event): boolean => e.target instanceof Element && e.target.closest('.vx-rail-pop') !== null
-      const down = (e: PointerEvent): void => {
-        const scroller = S.scrollerEl
-        if (scroller === null || !scroller.isConnected) return
-        if (fromPopover(e)) return
-        e.preventDefault()
-        const rect = el.getBoundingClientRect()
-        const startY = e.clientY
-        const startScroll = scroller.scrollTop ?? 0
-        const scrollH = Math.max(1, (scroller.scrollHeight ?? 1) - (scroller.clientHeight ?? rect.height))
-        const onMove = (ev: PointerEvent): void => {
-          const dy = ev.clientY - startY
-          const delta = (dy / Math.max(1, rect.height)) * scrollH
-          scroller.scrollTop = Math.max(0, Math.min(scrollH, startScroll + delta))
-        }
-        const onUp = (): void => {
-          const w = typeof window !== 'undefined' ? window : null
-          if (w !== null) { w.removeEventListener('pointermove', onMove); w.removeEventListener('pointerup', onUp) }
-        }
-        const w = typeof window !== 'undefined' ? window : null
-        if (w !== null) { w.addEventListener('pointermove', onMove); w.addEventListener('pointerup', onUp) }
-      }
-      el.addEventListener('pointerdown', down)
-      // Wheel scrolling: wheeling over the rail scrolls the
-      // chat scrollport directly (the rail replaces the native scrollbar).
-      const onWheel = (e: WheelEvent): void => {
-        const scroller = S.scrollerEl
-        if (scroller === null || !scroller.isConnected) return
-        if (fromPopover(e)) return
-        e.preventDefault()
-        const floor = Math.max(0, (scroller.scrollHeight ?? 1) - (scroller.clientHeight ?? 0))
-        scroller.scrollTop = Math.max(0, Math.min(floor, (scroller.scrollTop ?? 0) + (e.deltaY || 0)))
-      }
-      el.addEventListener('wheel', onWheel, { passive: false })
-      return () => {
-        el.removeEventListener('pointerdown', down)
-        el.removeEventListener('wheel', onWheel)
-      }
-    }, [s.cfg.timeline, s.sessionId, s.scrollerEl])
-    if (s.cfg.timeline !== true || S.sessionId === null) return null
-    const right = s.cfg.timelineLeft !== true
-    const dots = s.railPositions.filter((p) => s.cfg.starsOnly !== true || p.st)
-    return React.createElement('div', {
-      ref: trackRef,
-      className: `vx-rail ${right ? 'right' : 'left'}`,
-      style: { top: s.railBox.top, height: s.railBox.height, ...(right ? { right: s.railRight } : { left: s.railLeft }) },
-    },
-      React.createElement('div', { className: 'vx-thumb', style: { top: s.thumbTop, height: s.thumbH } }),
-      dots.map((p) => React.createElement('button', {
-        key: p.seq,
-        className: 'vx-dot' + (p.st ? ' star' : ''),
-        style: { top: p.y },
-        onMouseEnter: () => { if (S.railHoverTimer !== null) clearTimeout(S.railHoverTimer); setS({ railHover: { seq: p.seq, y: p.y } }) },
-        onMouseLeave: () => { S.railHoverTimer = setTimeout(() => setS({ railHover: null }), 350) },
-        onClick: () => scrollToSeq(p.seq),
-      })),
-      React.createElement(RailPopover, null),
-    )
-  }
-
   function AppearanceTab(): React.ReactElement {
     const s = useS()
     const dark = s.dark === true
@@ -2362,20 +2063,6 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     )
   }
 
-  function TimelineTab(): React.ReactElement {
-    const s = useS()
-    const set = (k: keyof CustomPluginConfig, v: boolean): void => {
-      setS({ cfg: { ...s.cfg, [k]: v } })
-      saveCfg()
-    }
-    return React.createElement('div', { className: 'vx-col' },
-      React.createElement('div', { className: 'vx-muted' }, '为每条用户消息生成导航节点：悬停预览、点击跳转，支持星标与分支。'),
-      React.createElement(Toggle, { label: '显示时间线', checked: s.cfg.timeline === true, onChange: (v) => set('timeline', v) }),
-      React.createElement(Toggle, { label: '时间线在左侧', checked: s.cfg.timelineLeft === true, onChange: (v) => set('timelineLeft', v) }),
-      React.createElement(Toggle, { label: '仅显示星标', checked: s.cfg.starsOnly === true, onChange: (v) => set('starsOnly', v) }),
-    )
-  }
-
   function BackupControls(): React.ReactElement {
     const [mode, setMode] = React.useState<'merge' | 'replace'>('merge')
     const exportBackup = async (): Promise<void> => {
@@ -2422,12 +2109,11 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       const sessions = C.get('sessions') as { binding(id: string): { session: { loadOlder(): Promise<void>; getSnapshot(): { hasMore: boolean } } } | undefined } | undefined
       const face = sessions?.binding(expectedSessionId)?.session
       if (face === undefined) { toast('目标会话不可用', 'error'); return }
-      const rendered = (): boolean => S.seqAnchor.get(item.anchorSeq) !== undefined || S.anchors.get(item.anchorSeq)?.el !== undefined
+      const rendered = (): boolean => S.anchors.get(item.anchorSeq)?.el !== undefined
       for (let page = 0; !rendered() && face.getSnapshot().hasMore && page < 20; page++) {
         if (S.sessionId !== expectedSessionId) { toast('会话已切换，搜索结果已失效', 'error'); return }
         await face.loadOlder()
         await new Promise<void>((resolve) => setTimeout(resolve, 60))
-        updateRailPositions()
       }
       if (S.sessionId !== expectedSessionId) { toast('会话已切换，搜索结果已失效', 'error'); return }
       if (!rendered()) { toast('结果所在消息尚未加载，请继续加载历史后重试', 'error'); return }
@@ -2547,7 +2233,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     React.useEffect(() => { void loadInfo() }, [])
     return React.createElement('div', { className: 'vx-col vx-pad' },
       React.createElement('div', null, 'Custom 便利套件'),
-      React.createElement('div', { className: 'vx-muted' }, '外观与天气特效 · 时间线导航 · 项目文件夹 · 提示词 · 会话导出 · Mermaid 渲染 · 额度面板'),
+      React.createElement('div', { className: 'vx-muted' }, '外观与天气特效 · 项目文件夹 · 提示词 · 会话导出 · Mermaid 渲染 · 额度面板'),
       info !== null && info.ok === true
         ? React.createElement('pre', { className: 'vx-pre' },
           `状态文件: ${String(info.statePath ?? '')}\n今日: ${String(info.today ?? '')}\nMermaid: ${String(info.mermaidBytes ?? 0)} bytes\n今日用量: ${JSON.stringify(info.usageToday ?? {})}\n客户端诊断: ${Array.isArray(info.diagReports) ? `${String(info.diagReports.length)} 条` : '0 条'}`)
@@ -2748,7 +2434,6 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     const commands: Command[] = [
       { key: 'balance', label: '打开额度与用量', detail: '功能', run: () => setS({ commandOpen: false, panelOpen: true, panelTab: 'balance' }) },
       { key: 'export', label: '导出当前会话', detail: S.sessionId === null ? '当前没有打开的会话' : 'Markdown', disabled: S.sessionId === null, run: () => { setS({ commandOpen: false }); runExport('markdown') } },
-      { key: 'timeline', label: `${S.cfg.timeline ? '关闭' : '开启'}时间线`, detail: '功能开关', run: () => { setS({ commandOpen: false, cfg: { ...S.cfg, timeline: !S.cfg.timeline } }); saveCfg() } },
       { key: 'search-current', label: '搜索当前会话', detail: S.sessionId === null ? '当前没有打开的会话' : '功能', disabled: S.sessionId === null, run: () => setS({ commandOpen: false, panelOpen: true, panelTab: 'search' }) },
       { key: 'folders', label: '打开项目文件夹', detail: '功能', run: () => setS({ commandOpen: false, foldersOpen: true, panelOpen: false }) },
       { key: 'prompts', label: '打开提示词库', detail: '功能', run: () => setS({ commandOpen: false, panelOpen: true, panelTab: 'prompt' }) },
@@ -2841,7 +2526,6 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     if (s.panelTab === 'look') return React.createElement(AppearanceTab, null)
     if (s.panelTab === 'folder') return React.createElement(FoldersTab, { useSessions: props.useSessions, useWorkspaces: props.useWorkspaces })
     if (s.panelTab === 'prompt') return React.createElement(PromptsTab, null)
-    if (s.panelTab === 'timeline') return React.createElement(TimelineTab, null)
     if (s.panelTab === 'search') return React.createElement(SearchTab, null)
     if (s.panelTab === 'export') return React.createElement(ExportTab, null)
     if (s.panelTab === 'mermaid') return React.createElement(MermaidTab, null)
@@ -2853,7 +2537,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
   function PersonalizePanel(props: { useSessions: OverlayProps['useSessions']; useWorkspaces: OverlayProps['useWorkspaces'] }): React.ReactElement {
     const s = useS()
     const ref = React.useRef<HTMLDivElement | null>(null)
-    const TABS: Array<[string, string, string]> = [['look', 'sliders', '外观'], ['folder', 'folder', '项目'], ['prompt', 'zap', '提示词'], ['timeline', 'clock', '时间线'], ['search', 'search', '搜索'], ['export', 'download', '导出'], ['mermaid', 'gitBranch', 'Mermaid'], ['tools', 'wrench', '效率'], ['balance', 'wallet', '额度'], ['about', 'info', '关于']]
+    const TABS: Array<[string, string, string]> = [['look', 'sliders', '外观'], ['folder', 'folder', '项目'], ['prompt', 'zap', '提示词'], ['search', 'search', '搜索'], ['export', 'download', '导出'], ['mermaid', 'gitBranch', 'Mermaid'], ['tools', 'wrench', '效率'], ['balance', 'wallet', '额度'], ['about', 'info', '关于']]
     const onHeadDown = (e: React.MouseEvent): void => {
       const target = e.target as HTMLElement
       if (target.tagName === 'BUTTON' || target.tagName === 'A' || target.tagName === 'INPUT') return
@@ -2918,7 +2602,6 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     return React.createElement('div', { className: 'vx-settings-page' },
       React.createElement(AppearanceTab, null),
       React.createElement('div', { className: 'vx-section-title' }, '功能开关'),
-      React.createElement(TimelineTab, null),
       React.createElement(ToolsTab, null),
       React.createElement(MermaidTab, null),
     )
@@ -3023,53 +2706,19 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
         setS({ dark })
       }
     }, [s.booted])
+    // Refresh the turns data while the session is streaming: the turn-tail
+    // chips (LaTeX / MathML / Mermaid) appear as soon as the next fetch lands,
+    // without waiting for a session switch to trigger one.
+    const sessions = useSessionsSafe(props)
+    const summary = sessions !== null && s.sessionId !== null ? sessions.byId[s.sessionId] : null
     React.useEffect(() => {
-      const tick = (): void => {
-        const d = typeof document !== 'undefined' ? document : null
-        if (d !== null && d.visibilityState === 'hidden') return
-        updateRailPositions()
-      }
-      const stop = setInterval(tick, 450)
-      const d = typeof document !== 'undefined' ? document : null
-      const w = typeof window !== 'undefined' ? window : null
-      const h = (): void => tick()
-      if (d !== null) {
-        d.addEventListener('scroll', h, true)
-        d.addEventListener('visibilitychange', h)
-      }
-      if (w !== null) w.addEventListener('resize', h)
-      return () => {
-        clearInterval(stop)
-        if (d !== null) {
-          d.removeEventListener('scroll', h, true)
-          d.removeEventListener('visibilitychange', h)
-        }
-        if (w !== null) w.removeEventListener('resize', h)
-      }
-    }, [])
-    React.useEffect(() => {
-      // History loads and message appends change the scrollport's subtree
-      // without a scroll/resize signal; observe the resolved scrollport so the
-      // rail refreshes (and the stale-turns check runs) right after new turns
-      // render, instead of waiting for the 450ms tick.
-      const w = typeof window !== 'undefined' ? window : null
-      if (w === null || w.MutationObserver === undefined) return
-      const scroller = s.scrollerEl
-      if (scroller === null || !scroller.isConnected) return
-      let timer: ReturnType<typeof setTimeout> | null = null
-      const observer = new MutationObserver(() => {
-        if (timer !== null) clearTimeout(timer)
-        timer = setTimeout(() => { updateRailPositions() }, 120)
-      })
-      observer.observe(scroller, { childList: true, subtree: true })
-      return () => {
-        observer.disconnect()
-        if (timer !== null) clearTimeout(timer)
-      }
-    }, [s.scrollerEl])
+      if (S.sessionId === null) return
+      const running = summary?.running === true
+      const handle = setInterval(() => { if (running && S.sessionId !== null) void fetchTurns(S.sessionId) }, 3000)
+      return () => clearInterval(handle)
+    }, [s.sessionId, summary?.running])
     const children: React.ReactElement[] = [React.createElement(FxCanvas, { key: 'fx' })]
     children.push(React.createElement(MermaidInPlace, { key: 'mmd' }))
-    children.push(React.createElement(TimelineRail, { key: 'rail', useSessions: props.useSessions, useWorkspaces: props.useWorkspaces }))
     if (s.panelOpen === true) children.push(React.createElement(PersonalizePanel, { key: 'panel', useSessions: props.useSessions, useWorkspaces: props.useWorkspaces }))
     if (s.foldersOpen === true) children.push(React.createElement(SidebarFoldersPanel, { key: 'folders', useSessions: props.useSessions, useWorkspaces: props.useWorkspaces }))
     if (s.promptOpen !== null) children.push(React.createElement(PromptPopover, { key: 'prompt' }))
