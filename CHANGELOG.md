@@ -4,12 +4,13 @@ All notable changes to this project are documented here. The format loosely
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions
 follow [Semantic Versioning](https://semver.org/).
 
-## 0.6.0 — 2026-09-29
+## 0.6.0 — 2026-09-30
 
 ### Published
 
-- `npm publish` went out at 17:26:16Z and registry `dist-tags.latest` is now
-  `0.6.0`. The first `PUT` returned 401, npm opened its browser sign-in flow, and
+- `npm publish` went out at 2026-09-29T17:26:16Z — 01:26 local on 2026-09-30, which is
+  why this entry is dated 09-30 — and registry `dist-tags.latest` is now `0.6.0`.
+  The first `PUT` returned 401, npm opened its browser sign-in flow, and
   the retried `PUT` returned **202 Accepted** — npm then keeps the version
   processing for a few minutes, during which the registry still reads
   `latest: 0.5.0`. Anyone re-checking too early will see "not published"; check
