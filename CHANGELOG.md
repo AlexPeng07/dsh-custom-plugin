@@ -174,7 +174,13 @@ refuted by measurement and are recorded below so nobody re-litigates them.
 - Accepted and published: a human walked the isolated 0.1.7-rc.2 profile in a
   browser (personalization panel, prompts into the composer, project folders, the
   timeline rail, quote reply, export entries, `Ctrl+K`) and reported it behaving.
-  Not covered by that pass, in this or any release until someone runs it with a
+  The same person then ran 0.5.0 on their own machine — dsh upgraded to
+  0.1.7-rc.2, plugin updated through the in-app market — and reported it
+  behaving there too. That install's `lib/client.js` is md5
+  `6639a0aebbe7d0eed32b0c2c5c50c544`, 207762 bytes: byte-identical to the repo
+  build this section describes, so the chain "what was verified = what was
+  published = what a user runs" is closed at both ends.
+  Not covered by either pass, in this or any release until someone runs it with a
   key: the per-turn chips (branch, Mermaid render, LaTeX/MathML) and the real
   balance figures, all of which need an actual model reply. `0.5.0` was then
   published to npm, and the tarball pulled back from the registry was verified
