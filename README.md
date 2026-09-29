@@ -49,7 +49,7 @@ Weather FX is shown in dark mode, where only "no color" and "aurora" backgrounds
 
 - **Background colors**: 20 muted low-saturation palettes (each with a matching tab color, `天青灰` by default) plus "no color" (follows the GUI default theme) and the high-saturation aurora gradient. In dark mode only "no color" and "aurora" stay selectable; the other colors are disabled and the plugin text turns white for readability.
 - **Weather FX**: canvas-rendered, pointer-transparent one-click overlays — falling snow, cinematic rain (three depth layers with splashes), and drifting sakura petals; turning it off clears the canvas.
-- **Glass**: frosted glass on every Custom surface, or liquid glass (Chromium displacement refraction, no chromatic dispersion, slight backdrop blur; Safari/Firefox fall back to frosted). A global-glass option applies backdrop blur to dialogs, menus, tooltips and listboxes.
+- **Glass**: frosted glass on every Custom surface, or liquid glass (edge displacement refraction chained with a slight blur + saturation so text over large panels stays readable; engines without SVG-referencing backdrop filters fall back to frosted). A global-glass option extends the same treatment to dialogs, menus, tooltips, listboxes and the system settings window — displaced as well in liquid mode.
 
 ### Project folders
 

@@ -507,7 +507,15 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       dyn += ` body { background-color: ${base} !important; }`
     }
     if (cfg.globalGlass === true) {
-      dyn += " [role='dialog'], [role='menu'], [role='tooltip'], [role='listbox'], [data-radix-popper-content-wrapper] { backdrop-filter: blur(8px) saturate(1.2) !important; -webkit-backdrop-filter: blur(8px) saturate(1.2) !important; }"
+      // In liquid mode the same SVG displacement chain as the plugin's own
+      // surfaces extends to shell overlays (dialogs, menus, tooltips, the
+      // settings window is a dialog too). Engines that cannot reference an
+      // SVG filter from backdrop-filter keep the plain frost blur.
+      const liquidGlobal = cfg.glass === true && cfg.glassMode === 'liquid'
+        && typeof CSS !== 'undefined' && typeof CSS.supports === 'function'
+        && CSS.supports('backdrop-filter', 'url(#vx-lg)')
+      const filter = liquidGlobal ? 'url(#vx-lg) blur(2.5px) saturate(1.12)' : 'blur(8px) saturate(1.2)'
+      dyn += ` [role='dialog'], [role='menu'], [role='tooltip'], [role='listbox'], [data-radix-popper-content-wrapper] { backdrop-filter: ${filter} !important; -webkit-backdrop-filter: ${filter} !important; }`
     }
     setDynCss(dyn)
   }
@@ -1418,7 +1426,6 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     const list = s.prompts.filter((x) => q === '' || String(x.name ?? '').toLowerCase().includes(q) || String(x.text ?? '').toLowerCase().includes(q) || (x.tags ?? []).some((tag) => tag.toLowerCase().includes(q)))
       .sort((a, b) => Number(b.favorite === true) - Number(a.favorite === true) || (b.lastUsedAt ?? 0) - (a.lastUsedAt ?? 0))
     return React.createElement('div', { className: 'vx-glass vx-prompt-pop', style: { left: p.x, top: p.y } },
-      React.createElement('div', { className: 'vx-pattern' }),
       React.createElement('div', { className: 'vx-pop-head' },
         React.createElement('span', null, '提示词库'),
         React.createElement('button', { className: 'vx-chip', title: '关闭', onClick: () => setS({ promptOpen: null }) }, React.createElement(Icon, { n: 'x', size: 12 })),
@@ -1480,7 +1487,6 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       ),
       open
         ? React.createElement('div', { className: 'vx-glass vx-balance-hover' },
-          React.createElement('div', { className: 'vx-pattern' }),
           pinned
             ? React.createElement('div', { className: 'vx-balance-head' },
               React.createElement('span', { className: 'vx-muted' }, '已固定 · 再次点击「额度」或下方按钮取消'),
@@ -1779,8 +1785,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
         React.createElement('button', { className: 'vx-btn' + (s.cfg.glassMode !== 'liquid' ? ' on' : ''), onClick: () => set('glassMode', 'frost') }, '毛玻璃'),
         React.createElement('button', { className: 'vx-btn' + (s.cfg.glassMode === 'liquid' ? ' on' : ''), onClick: () => set('glassMode', 'liquid') }, '液态玻璃'),
       ),
-      React.createElement('div', { className: 'vx-muted' }, '在 Chromium 启用液态玻璃，Safari/Firefox 自动回退毛玻璃。'),
-      React.createElement(Toggle, { label: '全局浮层玻璃', checked: s.cfg.globalGlass === true, onChange: (v) => set('globalGlass', v), hint: '对弹窗/菜单等浮层应用模糊，不改变圆角与边框' }),
+      React.createElement(Toggle, { label: '全局浮层玻璃', checked: s.cfg.globalGlass === true, onChange: (v) => set('globalGlass', v), hint: '对弹窗/菜单等浮层应用玻璃质感；液态玻璃模式下浮层同样位移折射' }),
     )
   }
 
@@ -2255,7 +2260,6 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     }
     return React.createElement('div', { className: 'vx-modal-mask', onClick: () => setS({ ask: null }) },
       React.createElement('div', { className: 'vx-glass vx-modal', style: { width: 'min(360px, 92vw)' }, onClick: (e: React.MouseEvent) => e.stopPropagation() },
-        React.createElement('div', { className: 'vx-pattern' }),
         React.createElement('div', { className: 'vx-pop-head' }, React.createElement('span', null, ask.title)),
         React.createElement('input', { className: 'vx-input', value: val, autoFocus: true, onChange: (e: React.ChangeEvent<HTMLInputElement>) => setVal(e.target.value), onKeyDown: (e: React.KeyboardEvent) => { if (e.key === 'Enter') submit() } }),
         React.createElement('div', { className: 'vx-row vx-pad-sm' },
@@ -2277,7 +2281,6 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     }
     return React.createElement('div', { className: 'vx-modal-mask', onClick: () => answer(false) },
       React.createElement('div', { className: 'vx-glass vx-modal', style: { width: 'min(380px, 92vw)' }, onClick: (e: React.MouseEvent) => e.stopPropagation() },
-        React.createElement('div', { className: 'vx-pattern' }),
         React.createElement('div', { className: 'vx-pad' }, c.message),
         React.createElement('div', { className: 'vx-row vx-pad-sm' },
           React.createElement('button', { className: 'vx-btn vx-btn-danger', onClick: () => answer(true) }, '确定'),
@@ -2302,7 +2305,6 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     }
     return React.createElement('div', { className: 'vx-modal-mask', onClick: () => setS({ templatePrompt: null, templateValues: {} }) },
       React.createElement('div', { className: 'vx-glass vx-modal', style: { width: 'min(440px, 92vw)' }, onClick: (e: React.MouseEvent) => e.stopPropagation() },
-        React.createElement('div', { className: 'vx-pattern' }),
         React.createElement('div', { className: 'vx-pop-head' }, React.createElement('span', null, `填写变量 · ${prompt.name}`)),
         names.map((name) => React.createElement('label', { key: name, className: 'vx-col' }, React.createElement('span', { className: 'vx-muted' }, name), React.createElement('input', { className: 'vx-input', value: s.templateValues[name] ?? '', onChange: (e: React.ChangeEvent<HTMLInputElement>) => setS({ templateValues: { ...S.templateValues, [name]: e.target.value } }) }))),
         React.createElement('div', { className: 'vx-row vx-pad-sm' }, React.createElement('button', { className: 'vx-btn', onClick: submit }, '插入'), React.createElement('button', { className: 'vx-btn', onClick: () => setS({ templatePrompt: null, templateValues: {} }) }, '取消')),
@@ -2380,7 +2382,6 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     if (mm === null) return null
     return React.createElement('div', { className: 'vx-modal-mask', onClick: () => setS({ mermaidModal: null }) },
       React.createElement('div', { className: 'vx-glass vx-modal', onClick: (e: React.MouseEvent) => e.stopPropagation() },
-        React.createElement('div', { className: 'vx-pattern' }),
         React.createElement('div', { className: 'vx-pop-head' },
           React.createElement('span', null, `${mm.title} (${mm.index + 1}/${mm.codes.length})`),
           React.createElement('span', { className: 'vx-row' },
@@ -2489,7 +2490,6 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     }
     return React.createElement('div', { className: 'vx-modal-mask', onClick: () => setS({ batchModal: false }) },
       React.createElement('div', { className: 'vx-glass vx-modal', style: { width: 'min(560px, 92vw)' }, onClick: (e: React.MouseEvent) => e.stopPropagation() },
-        React.createElement('div', { className: 'vx-pattern' }),
         React.createElement('div', { className: 'vx-pop-head' },
           React.createElement('span', null, '批量归档会话'),
           React.createElement('button', { className: 'vx-chip', title: '关闭', onClick: () => setS({ batchModal: false }) }, React.createElement(Icon, { n: 'x', size: 12 })),
@@ -2556,7 +2556,6 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     if (s.panelPos !== null) { style.top = s.panelPos.y; style.left = s.panelPos.x; style.right = undefined }
     else style.right = 76
     return React.createElement('div', { ref, className: 'vx-glass vx-panel', style },
-      React.createElement('div', { className: 'vx-pattern' }),
       React.createElement('div', { className: 'vx-panel-head', onMouseDown: onHeadDown },
         React.createElement(Icon, { n: 'sliders', size: 14 }),
         React.createElement('span', { className: 'vx-panel-title' }, '个性化中心'),
@@ -2578,7 +2577,6 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     const s = useS()
     if (s.foldersOpen !== true) return null
     return React.createElement('div', { className: 'vx-glass vx-folders' },
-      React.createElement('div', { className: 'vx-pattern' }),
       React.createElement('div', { className: 'vx-pop-head' },
         React.createElement(Icon, { n: 'folder', size: 14 }),
         React.createElement('span', null, '项目文件夹'),

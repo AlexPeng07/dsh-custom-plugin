@@ -71,14 +71,19 @@ export const STATIC_CSS = `/* dsh-custom-plugin static styles. Every rule is glo
       color: #eef1f7;
     }
   }
+  /* Liquid glass: the SVG displacement filter bends the backdrop at the
+     surface's edges; the chained blur+saturate keeps text over the middle of
+     large panels readable (pure displacement leaves the mid-area untouched,
+     which read as "nothing happened"). Chromium runs this chain; engines
+     without SVG-referencing backdrop filters fall back to frost below. */
   .vx-liquid .vx-glass {
-    background: rgba(255, 255, 255, .06);
-    backdrop-filter: url(#vx-lg);
-    -webkit-backdrop-filter: url(#vx-lg);
+    background: rgba(255, 255, 255, .1);
+    backdrop-filter: url(#vx-lg) blur(2.5px) saturate(1.12);
+    -webkit-backdrop-filter: url(#vx-lg) blur(2.5px) saturate(1.12);
   }
   @media (prefers-color-scheme: dark) {
     .vx-liquid .vx-glass {
-      background: rgba(0, 0, 0, .06);
+      background: rgba(0, 0, 0, .1);
     }
   }
   @supports not (backdrop-filter: url(#vx-lg)) {
@@ -91,42 +96,6 @@ export const STATIC_CSS = `/* dsh-custom-plugin static styles. Every rule is glo
       .vx-liquid .vx-glass {
         background: rgba(13, 17, 25, .62);
       }
-    }
-  }
-  .vx-liquid .vx-pattern {
-    background-image: radial-gradient(rgba(150, 150, 160, .5) 3px, transparent 3px);
-    background-size: 24px 24px;
-    -webkit-mask-image: radial-gradient(ellipse at top, transparent 20%, black);
-    mask-image: radial-gradient(ellipse at top, transparent 20%, black);
-    animation: vx-pattern-move 25000ms linear infinite;
-  }
-  @media (prefers-color-scheme: dark) {
-    .vx-liquid .vx-pattern {
-      background-image: radial-gradient(rgba(110, 110, 128, .5) 3px, transparent 3px);
-    }
-  }
-  .vx-pattern {
-    position: absolute;
-    inset: 0;
-    pointer-events: none;
-    z-index: -1;
-    background-image: radial-gradient(rgba(150, 150, 160, .42) 1px, transparent 1px);
-    background-size: 24px 24px;
-    -webkit-mask-image: radial-gradient(ellipse at center, transparent 30%, black 100%);
-    mask-image: radial-gradient(ellipse at center, transparent 30%, black 100%);
-    animation: vx-pattern-move 10000ms linear infinite;
-  }
-  @media (prefers-color-scheme: dark) {
-    .vx-pattern {
-      background-image: radial-gradient(rgba(100, 100, 116, .5) 1px, transparent 1px);
-    }
-  }
-  @keyframes vx-pattern-move {
-    from {
-      background-position: 0 0;
-    }
-    to {
-      background-position: 0 24px;
     }
   }
   @keyframes vx-aurora {
@@ -798,13 +767,7 @@ export const STATIC_CSS = `/* dsh-custom-plugin static styles. Every rule is glo
     color: #eef1f7;
   }
   .vx-root.vx-dark .vx-liquid .vx-glass {
-    background: rgba(0, 0, 0, .06);
-  }
-  .vx-root.vx-dark .vx-liquid .vx-pattern {
-    background-image: radial-gradient(rgba(110, 110, 128, .5) 3px, transparent 3px);
-  }
-  .vx-root.vx-dark .vx-pattern {
-    background-image: radial-gradient(rgba(100, 100, 116, .5) 1px, transparent 1px);
+    background: rgba(0, 0, 0, .1);
   }
   .vx-root.vx-dark .vx-balance-hover,
   .vx-root.vx-dark .vx-panel,
@@ -821,13 +784,7 @@ export const STATIC_CSS = `/* dsh-custom-plugin static styles. Every rule is glo
     color: #20242e;
   }
   .vx-root.vx-light .vx-liquid .vx-glass {
-    background: rgba(255, 255, 255, .06);
-  }
-  .vx-root.vx-light .vx-liquid .vx-pattern {
-    background-image: radial-gradient(rgba(150, 150, 160, .5) 3px, transparent 3px);
-  }
-  .vx-root.vx-light .vx-pattern {
-    background-image: radial-gradient(rgba(150, 150, 160, .42) 1px, transparent 1px);
+    background: rgba(255, 255, 255, .1);
   }
   .vx-root.vx-light .vx-balance-hover,
   .vx-root.vx-light .vx-panel,
