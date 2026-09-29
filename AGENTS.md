@@ -44,7 +44,10 @@ reply, and DeepSeek balance / daily token usage.
   and `@deepseek-ai/dsh` to one version (0.2.0-rc.2 as of 2026-09-29), owns
   `$DSH_HOME/profiles/desktop`, defaults to port 19387 instead of 3080, and only
   the `dsh` command shipped with Desktop may manage that profile. Nothing here
-  may hardcode a port or a profile name.
+  may hardcode a port or a profile name. The authority on which dsh version a
+  given install runs is that install's `resources/app.asar/dsh/desktop-runtime.json`
+  — not the repository; `scripts/desktop-runtime.mjs` reads it and reports whether
+  the declared peer range admits it.
 - The desktop renderer runs at `dsh-app://app` and the shell forwards its
   requests to its own Host after deleting `host`, `origin`, `sec-fetch-site` and
   `cookie`, so `src/loopback.ts` accepts them through its

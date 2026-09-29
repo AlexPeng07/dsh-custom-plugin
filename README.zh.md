@@ -269,6 +269,18 @@ DSH_HOME=/tmp/dshnext-home DSH_PORT=13999 COOKIE_JAR=/tmp/dshnext/jar.txt bash s
 `dsh plugin --profile web allow-version <包名>@<版本> --dsh-version <版本> --accept-risk`
 授予精确版本豁免——这样探针能告诉你**到底是什么坏了**，而不是只看到闸口拒绝。
 
+验**桌面版**发版要往前多走一步，因为仓库回答不了"用户装的那一版里到底是哪个 dsh"：
+桌面版把壳和 `@deepseek-ai/dsh` 钉成同一个精确版本，整套运行时打在
+`resources/app.asar` 里。直接读装好的那个 app，命令只读不写，它会把内置版本连同
+"本仓库声明的 peer 范围收不收它"一起打出来：
+
+```bash
+node scripts/desktop-runtime.mjs "D:/DSH"                    # 传安装目录
+node scripts/desktop-runtime.mjs "D:/DSH/resources/app.asar" # 或直接传归档文件
+```
+
+拿到版本号后，再按上面四条命令对着它跑一遍。
+
 ## 许可证
 
 Apache-2.0。部分代码参考 [Nagi-ovo/voyager](https://github.com/Nagi-ovo/voyager) 与 [unovue/inspira-ui](https://github.com/unovue/inspira-ui)。

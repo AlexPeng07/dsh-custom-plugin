@@ -3,6 +3,8 @@ lib/
 *.tsbuildinfo
 *.tgz
 .zcode/
+# Scratch for the live checks: throwaway npm installs, isolated DSH_HOME trees,
+# packed tarballs and the cookie jars holding boot tokens. Never committed.
 .deskprobe/
 .DS_Store
 Thumbs.db

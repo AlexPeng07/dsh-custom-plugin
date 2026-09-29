@@ -287,6 +287,20 @@ and rolls the profile back; `dsh plugin --profile web allow-version <pkg>@<ver>
 probe can tell you *what* actually breaks instead of what the gate already
 refused.
 
+For a **dsh Desktop** release, start one step earlier, because the repository
+cannot tell you what an installer runs: Desktop pins its shell and
+`@deepseek-ai/dsh` to one exact version and ships the whole runtime inside
+`resources/app.asar`. Read it off the installed app instead — the command is
+read-only, and it prints that version together with whether the peer range
+declared here admits it:
+
+```bash
+node scripts/desktop-runtime.mjs "D:/DSH"                    # the installation dir
+node scripts/desktop-runtime.mjs "D:/DSH/resources/app.asar" # or the archive itself
+```
+
+Then run the four commands above against the version it names.
+
 ## License
 
 Apache-2.0. Portions of the code reference [Nagi-ovo/voyager](https://github.com/Nagi-ovo/voyager) and [unovue/inspira-ui](https://github.com/unovue/inspira-ui).

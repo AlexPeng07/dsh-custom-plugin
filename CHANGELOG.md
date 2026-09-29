@@ -62,6 +62,15 @@ follow [Semantic Versioning](https://semver.org/).
   `origin`, `cookie` and `sec-fetch-site` before forwarding; the WebSocket
   upgrade rewrites `Origin` to the Host authority), plus the rejections a
   forged Origin, a cross-site marker, and a non-loopback socket must still get.
+- `scripts/desktop-runtime.mjs`: reads which dsh version an **installed** dsh
+  Desktop carries, straight out of `resources/app.asar/dsh/desktop-runtime.json`,
+  and prints whether the peer range declared here admits it. Promoted from a
+  throwaway probe because Desktop pins shell and runtime together, so "what does
+  this installer actually run" is a question every future Desktop release
+  re-asks and the repository cannot answer. Read-only; takes the installation
+  directory or the archive path. Verified in both directions: on this machine's
+  install it reports `0.2.0-rc.2 / ADMITTED`, and with the peer range temporarily
+  reverted to `^0.1.7-rc.2` the same run reports `REFUSED`.
 - README (both languages) gained an "On dsh Desktop" section: how the shell
   routes requests, why the profile is managed by Desktop's own `dsh` command,
   and which part still needs a window and a login.
