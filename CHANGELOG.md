@@ -171,6 +171,14 @@ refuted by measurement and are recorded below so nobody re-litigates them.
   release, including a stable nobody has reviewed — the very failure this
   upgrade exists to prevent. What stays unverified there (branch / Mermaid /
   LaTeX chips) is unverified here too: those need a real model reply.
+- Accepted and published: a human walked the isolated 0.1.7-rc.2 profile in a
+  browser (personalization panel, prompts into the composer, project folders, the
+  timeline rail, quote reply, export entries, `Ctrl+K`) and reported it behaving.
+  Not covered by that pass, in this or any release until someone runs it with a
+  key: the per-turn chips (branch, Mermaid render, LaTeX/MathML) and the real
+  balance figures, all of which need an actual model reply. `0.5.0` was then
+  published to npm, and the tarball pulled back from the registry was verified
+  byte-identical to the `lib/` this section describes (34 files, 215634 B).
 - Retracted after re-measurement, so the record does not carry them: "the
   `slots.inject(key, fn)` service method does not exist in 0.1.7" (it is
   declared at `dsh-client-ui-renderer`'s registry interface, and all eight
