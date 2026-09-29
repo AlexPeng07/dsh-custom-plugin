@@ -126,7 +126,7 @@ report their service as missing rather than throwing.
 
 ## Install
 
-Prerequisites: Node 22+, pnpm, and the `dsh` CLI (the official `@deepseek-ai/dsh` npm package; `npx @deepseek-ai/dsh` stands in for `dsh` when it is not installed globally). This release targets **dsh 0.1.7-rc.2 through the rest of 0.1.x, plus 0.2.0-rc.2** — dsh checks a bundle's `@deepseek-ai/dsh-*` peer ranges against its own version at install and startup, and skips a bundle that does not match, so `package.json` names only the releases this package was actually built and verified against. 0.6.0 is type-checked and built against 0.2.0-rc.2, and the same artifact was run through the live host probes on both runtime lines: 18 of 19 probes pass on 0.2.0-rc.2 (boot graph of 66 module rows) and on 0.1.7-rc.2 (65 rows), the one skip being the probe that needs a real session. What stays unverified is what was always unverified: the per-turn chips (branch, Mermaid render, LaTeX) need a real model reply, so a credential-free scratch home cannot reach them, and slot rendering still needs a browser pass. The range deliberately excludes 0.2.0-rc.1 (a superseded prerelease), 0.2.0-rc.3 and later prereleases nobody has looked at, and 0.2.0 stable until someone does. Range spelling matters here: `^0.1.7-rc.2` desugars to `>=0.1.7-rc.2 <0.2.0-0`, and every `0.2.0-rc.N` sorts *above* `0.2.0-0`, so a verified prerelease has to be named in its own clause — `pnpm smoke` checks that the build target actually satisfies the declared range and that `engines.dsh` admits the same versions. On an older dsh, install the matching older plugin release (`0.5.0` targets 0.1.7-rc.2) rather than granting a compatibility exemption.
+Prerequisites: Node 22+, pnpm, and the `dsh` CLI (the official `@deepseek-ai/dsh` npm package; `npx @deepseek-ai/dsh` stands in for `dsh` when it is not installed globally). This release targets **dsh 0.1.7-rc.2 through the rest of 0.1.x, plus 0.2.0-rc.2** — dsh checks a bundle's `@deepseek-ai/dsh-*` peer ranges against its own version at install and startup, and skips a bundle that does not match, so `package.json` names only the releases this package was actually built and verified against. 0.7.0 keeps the build target 0.6.0 established (0.2.0-rc.2) and the same peer range; the 0.6.0 artifact ran the live host probes on both runtime lines (0.2.0-rc.2 boot graph of 66 module rows, 0.1.7-rc.2 of 65, 18 of 19 probes passing each, the skip needing a real session), and the 0.7.0 artifact additionally passed the desktop-shape live probe **on a real Desktop install** (see "On dsh Desktop" below). What stays unverified is what was always unverified: the per-turn chips (Mermaid render, LaTeX) need a real model reply, so a credential-free scratch home cannot reach them, and slot rendering still needs a browser pass. The range deliberately excludes 0.2.0-rc.1 (a superseded prerelease), 0.2.0-rc.3 and later prereleases nobody has looked at, and 0.2.0 stable until someone does. Range spelling matters here: `^0.1.7-rc.2` desugars to `>=0.1.7-rc.2 <0.2.0-0`, and every `0.2.0-rc.N` sorts *above* `0.2.0-0`, so a verified prerelease has to be named in its own clause — `pnpm smoke` checks that the build target actually satisfies the declared range and that `engines.dsh` admits the same versions. On an older dsh, install the matching older plugin release (`0.5.0` targets 0.1.7-rc.2) rather than granting a compatibility exemption.
 
 ### From npm
 
@@ -141,7 +141,7 @@ The registry tarball ships prebuilt output — no source build on the installing
 
 dsh Desktop is an Electron shell around the same Web application, and it bundles
 **exactly dsh 0.2.0-rc.2** — the desktop release line pins the shell and the
-runtime together, so a Desktop install is always a 0.2.x runtime. 0.6.0 names
+runtime together, so a Desktop install is always a 0.2.x runtime. 0.7.0 names
 that version in its peer range and installs there with no compatibility
 exemption; 0.5.0 did not, and was refused with the same message a 0.2.x Web
 profile prints.
@@ -156,8 +156,14 @@ renderer requests to its own Host after deleting `host`, `origin`,
 shape is accepted outright (through 0.6.0 the fence additionally required a
 same-origin marker and rejected exactly this shape with `forbidden`; fixed in
 0.7.0 with fence-level unit tests). Foreign-origin and cross-site requests are
-still 403. What has *not* been done is opening this plugin inside a Desktop
-window; that pass belongs to whoever installs it, and it needs your login.
+still 403. **The 0.7.0 artifact has been probed route by route on a real
+Desktop install in the desktop forward shape** (upgraded to this build, Desktop
+restarted, `scripts/desktop-shape-probe.mjs` run): state / debug / backup /
+usage scan / the Mermaid engine preload and script routes all answer 200, and
+foreign-origin and cross-site probes still get 403; the timeline, the three
+export formats and search are re-checked by the same probe once the GUI has
+produced its first session. The visual pass inside the Desktop window (liquid
+glass look, panel layout, pattern removal) belongs to whoever installs it.
 
 Managing the desktop profile takes the `dsh` command that ships with Desktop, not
 the npm one — the public CLI refuses the reserved `desktop` profile:
@@ -261,6 +267,16 @@ real `~/.dsh` unless you set `ALLOW_REAL_DSH_HOME=1`, reports `PASS`/`FAIL` per
 probe, counts and names anything it `SKIP`s, and exits non-zero on any failure.
 CI has no harness to talk to, so run it whenever a dsh release lands; slot
 registration and rendering still need the browser pass described above.
+
+`scripts/desktop-shape-probe.mjs` is a third probe, aimed at a **running dsh
+Desktop** (its Host listens on `127.0.0.1:19387` by default, override with
+`DSH_PORT`): it probes state / debug / backup / usage scan / the Mermaid engine
+and script routes in the exact header shape the desktop shell forwards (loopback
+Host, no `origin`, no `sec-fetch-site`), then runs timeline, the three export
+formats and search against the first session the host has registered; the
+foreign-origin and cross-site probes must still come back 403. It is read-only
+against the real home; if the GUI has no session yet, send one message there and
+re-run.
 
 Checking a new dsh release takes four commands, and never touches your own
 harness home:

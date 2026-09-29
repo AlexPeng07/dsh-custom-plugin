@@ -1,9 +1,9 @@
 # dsh-custom-plugin
 
 Standalone convenience suite for the DeepSeek Harness (DSH) Web GUI:
-personalization (appearance, weather FX, glass), a per-user-message timeline
-rail, project folders, prompts, conversation export, Mermaid rendering, quote
-reply, and DeepSeek balance / daily token usage.
+personalization (appearance, weather FX, glass), project folders, prompts,
+conversation export, Mermaid rendering, quote reply, and DeepSeek balance /
+daily token usage.
 
 ## Package rules
 
@@ -50,11 +50,15 @@ reply, and DeepSeek balance / daily token usage.
   the declared peer range admits it.
 - The desktop renderer runs at `dsh-app://app` and the shell forwards its
   requests to its own Host after deleting `host`, `origin`, `sec-fetch-site` and
-  `cookie`, so `src/loopback.ts` accepts them through its
-  missing-`origin` branch; the WebSocket upgrade path rewrites `Origin` to the
-  Host authority instead. `dsh.client.platform` has exactly one accepted value,
-  `'web'` — any other value makes `dsh-client-modules` drop the row, and desktop
-  reuses the web shell, so the declaration stays `'web'`.
+  `cookie`, so the route guard accepts the unmarked loopback shape — its
+  semantics mirror the platform fence (`loopback.ts`: loopback socket + loopback
+  Host, non-`cross-site`, Origin absent or matching; absent markers are
+  trusted). A foreign Origin or a cross-site marker stays 403. The WebSocket
+  upgrade path rewrites `Origin` to the Host authority instead.
+  `scripts/desktop-shape-probe.mjs` verifies every route against a running
+  Desktop Host in exactly that header shape. `dsh.client.platform` has exactly
+  one accepted value, `'web'` — any other value makes `dsh-client-modules` drop
+  the row, and desktop reuses the web shell, so the declaration stays `'web'`.
 - The served client bundle is larger than `lib/client.js`: dsh's composite
   `/plugins/??…` route concatenates modules and rewrites the
   `sourceMappingURL`. Byte-identity checks compare the installed file, never the

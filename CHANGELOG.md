@@ -4,6 +4,53 @@ All notable changes to this project are documented here. The format loosely
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions
 follow [Semantic Versioning](https://semver.org/).
 
+## 0.7.0 — 2026-09-30
+
+桌面版适配修复版。0.6.0 及之前的产物在 dsh Desktop 里几乎全部功能失效——本版
+定位根因、修复围栏，并按桌面版重新校准了外观与额度两个界面。
+
+### Fixed
+
+- **桌面版全线 `forbidden` 的根因**：插件的访问围栏在回环判定之外额外要求一个
+  浏览器同源标记（`sec-fetch-site: same-origin` 或 `origin` 头），而桌面版
+  Electron 壳把渲染进程请求转发给它自己的 Host 之前会删掉 `host`、`origin`、
+  `sec-fetch-site`、`cookie`——于是每个 `/api/custom-plugin/*` 路由和
+  `/custom-plugin/mermaid.js` 都被误拒为 403 `forbidden`：三种导出、会话搜索、
+  Mermaid 引擎预加载与就地渲染（连带 mermaid.live 按钮不出现）、余额与用量、
+  以及**一切静默失败的状态保存**（主题、玻璃模式、项目文件夹、提示词库在桌面
+  版从未真正持久化过）。0.7.0 起围栏对齐官方 API 围栏的信任语义：回环套接字 +
+  回环 Host、非 `cross-site`、`origin` 缺省或与 Host 一致即放行；异源与跨站
+  仍然 403。新增 guard 级单测（桌面转发形状、桌面 WS 形状、异源、跨站、非法
+  origin、非回环 Host）与 `scripts/desktop-shape-probe.mjs` 活体探针；并在
+  真实桌面安装（F:\DSH，dsh 0.2.0-rc.2）上实测：11 项通过 / 0 失败。
+- **客户端不再静默吞错**：`loadCfg` / `saveCfg` 失败现在 toast + 上报客户端
+  诊断，「看起来生效其实没存上」从此不可复现。
+
+### Removed
+
+- **消息时间线轨道**（系统已内置对话时间线）：轨道、悬停卡（跳转/星标/分支/
+  全文）、「显示时间线 / 时间线在左侧 / 仅显示星标」三个开关与时间线标签页
+  全部移除；`timeline` / `timelineLeft` / `starsOnly` 配置键退役（旧状态文件
+  里的残留键会被宿主归一化丢弃）。保留：消息尾部的 LaTeX / MathML / Mermaid
+  芯片（其数据链 `/timeline` 原样保留，会话运行期间由 OverlayRoot 每 3 秒
+  轮询驱动）、星标数据字段（备份兼容）与搜索定位跳转。
+
+### Changed
+
+- **液态玻璃**：删除「在 Chromium 启用液态玻璃…」的桌面端无关文案；位移折射
+  链上轻微模糊与饱和（`url(#vx-lg) blur(2.5px) saturate(1.12)`），大面积面板
+  中部文字清晰、玻璃可感知；液态模式下「全局浮层玻璃」把同样的位移链延伸到
+  弹窗 / 菜单 / 提示框 / 下拉框与系统设置窗（`CSS.supports` 门控，不支持
+  SVG 位移滤镜的引擎回退毛玻璃）。
+- **点阵背景全局移除**：所有玻璃表面不再渲染滚动的点阵纹理。
+- **额度区改版**：顶栏胶囊在未配置 Key 时显示本机费用估算（`≈¥0.42 · 今日
+  N 次`，按官方价目表折算，不用 Key、不联网）；配置了 Key 照旧显示真实余额。
+  面板默认区只放用量趋势 / 预算 / 今日明细 / 扫描按钮；「余额查询」收为可折
+  叠可选项（配置过 Key 默认展开），未配置时不再显示任何报错。
+- **价目表更新**（2026-09-30 核对官方页）：`deepseek-flash` 峰时输入 ¥2 / 输出
+  ¥8 / 缓存命中 ¥0.04（旧名 `deepseek-v4-flash` / `-vision-exp` 仍按 Flash 计
+  价路由），`deepseek-v4-pro` ¥9 / ¥27 不变；闲时一律半价。
+
 ## 0.6.0 — 2026-09-30
 
 ### Published
