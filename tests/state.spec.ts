@@ -5,11 +5,10 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
+import { mkdir, readdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { defaultState, loadStateFile, mergeState, normalizeCfg, saveStateFile, STATE_FILE } from '../src/state.ts'
+import { defaultState, loadStateFile, mergeState, normalizeCfg, saveStateFile, STATE_FILE, tempPathFor } from '../src/state.ts'
 import { DEFAULT_CONFIG } from '../src/protocol.ts'
 
 describe('defaultState', () => {
@@ -140,9 +139,52 @@ describe('saveStateFile', () => {
       }))
       const text = await readFile(join(home, STATE_FILE), 'utf8')
       expect(() => JSON.parse(text)).not.toThrow()
-      expect(existsSync(join(home, STATE_FILE + '.tmp'))).toBe(false)
+      // Any leftover counts, not just the pre-Desktop fixed name.
+      expect((await readdir(home)).filter(name => name !== STATE_FILE)).toEqual([])
     } finally {
       await rm(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
     }
+  })
+
+  it('drops its own temp when the write fails', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'custom-plugin-save-fail-'))
+    try {
+      const statePath = join(home, STATE_FILE)
+      // A non-empty directory in the rename target's place makes the rename fail.
+      await mkdir(join(statePath, 'blocked'), { recursive: true })
+      // Pin the rejection to the rename itself: a throw from the cleanup path
+      // would satisfy a bare rejects.toThrow() and hide a leaked temp file.
+      const failure = await saveStateFile(defaultState(), home).then(() => undefined, (error: unknown) => error as NodeJS.ErrnoException)
+      expect(failure?.syscall).toBe('rename')
+      expect((await readdir(home)).filter(name => name !== STATE_FILE)).toEqual([])
+    } finally {
+      await rm(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+    }
+  })
+  it('leaves another host in-flight temp file alone instead of writing through it', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'custom-plugin-tmpname-'))
+    try {
+      const statePath = join(home, STATE_FILE)
+      const legacy = `${statePath}.tmp`
+      // The name every dsh host used before the process qualifier. A second
+      // host's unfinished write would land in our document through it.
+      await writeFile(legacy, 'sentinel-from-another-host', 'utf8')
+      await saveStateFile(defaultState(), home)
+      expect(await readFile(legacy, 'utf8')).toBe('sentinel-from-another-host')
+      const saved = JSON.parse(await readFile(statePath, 'utf8')) as { cfg?: unknown }
+      expect(saved.cfg).toBeDefined()
+    } finally {
+      await rm(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+    }
+  })
+})
+
+describe('tempPathFor', () => {
+  it('separates temp names per pid so two hosts sharing one $DSH_HOME cannot rename each other\'s partial write', () => {
+    const target = '/home/.dsh/custom-plugin-state.json'
+    expect(tempPathFor(target, 1111)).not.toBe(tempPathFor(target, 2222))
+    // The fixed name is the collision this exists to avoid.
+    expect(tempPathFor(target, 1111)).not.toBe(`${target}.tmp`)
+    expect(tempPathFor(target, process.pid)).toBe(`${target}.${process.pid}.tmp`)
   })
 })

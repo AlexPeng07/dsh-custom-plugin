@@ -16,7 +16,11 @@ reply, and DeepSeek balance / daily token usage.
 - UI copy is plain Chinese; there is no i18n registration.
 - `src/dsh-home.ts`, `src/mount-once.ts`, `src/loopback.ts` are standalone
   utility modules kept in-tree so the package builds standalone.
-- The Host state file is `$DSH_HOME/custom-plugin-state.json`.
+- The Host state file is `$DSH_HOME/custom-plugin-state.json`. It is shared by
+  every dsh host under that home — including dsh Desktop's separate profile —
+  so an atomic replace there must name its temp file after the writing process
+  (`tempPathFor`); a fixed temp name is a cross-process race, not just an
+  in-process one.
 - The only agent-facing surface is the `custom_plugin_status` tool; the
   plugin never injects system-prompt announcements.
 
@@ -30,6 +34,22 @@ reply, and DeepSeek balance / daily token usage.
   devDependencies without it (or the reverse) is a silent breakage for users —
   `pnpm smoke` compares the two, and only that peer's range decides whether a
   host activates the bundle.
+- dsh Desktop is an Electron shell around the same Web half. It pins the shell
+  and `@deepseek-ai/dsh` to one version (0.2.0-rc.2 as of 2026-09-29), owns
+  `$DSH_HOME/profiles/desktop`, defaults to port 19387 instead of 3080, and only
+  the `dsh` command shipped with Desktop may manage that profile. Nothing here
+  may hardcode a port or a profile name.
+- The desktop renderer runs at `dsh-app://app` and the shell forwards its
+  requests to its own Host after deleting `host`, `origin`, `sec-fetch-site` and
+  `cookie`, so `src/loopback.ts` accepts them through its
+  missing-`origin` branch; the WebSocket upgrade path rewrites `Origin` to the
+  Host authority instead. `dsh.client.platform` has exactly one accepted value,
+  `'web'` — any other value makes `dsh-client-modules` drop the row, and desktop
+  reuses the web shell, so the declaration stays `'web'`.
+- The served client bundle is larger than `lib/client.js`: dsh's composite
+  `/plugins/??…` route concatenates modules and rewrites the
+  `sourceMappingURL`. Byte-identity checks compare the installed file, never the
+  HTTP response.
 - The client bundle resolves its modules against the web shell's frozen seed
   table; `tsdown.config.ts` `PLATFORM_MODULES` mirrors it, and any extra runtime
   `require()` needs a `dsh.client.external` declaration.

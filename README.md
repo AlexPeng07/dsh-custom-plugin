@@ -147,6 +147,44 @@ dsh plugin --profile web add @alexpeng/dsh-custom-plugin
 
 The registry tarball ships prebuilt output — no source build on the installing machine.
 
+### On dsh Desktop
+
+dsh Desktop is an Electron shell around the same Web application, and it bundles
+**exactly dsh 0.2.0-rc.2**: the desktop line pins shell and runtime to one
+version, so a Desktop install is always a 0.2.x runtime. The published peer
+range here does not admit 0.2.x, so Desktop refuses this plugin with the same
+message a 0.2.x Web profile prints — and there is no older plugin release to
+reach for instead, because Desktop owns its own profile and nothing else
+targets it. Granting the exact-version exemption is therefore the only way to
+run this plugin there, which is why the measurements below exist.
+
+Against 0.2.0-rc.2: 18 of 19 live host probes pass (the skip needs a session,
+and a credential-free scratch home has none), the boot graph carries the row and
+all five inject targets, and the Mermaid engine loads locally. The desktop
+request path also does not disturb this plugin's access fence — the shell
+forwards renderer requests to its own Host after deleting `host`, `origin`,
+`sec-fetch-site` and `cookie`, then attaches its own credential, which is a
+shape the loopback fence already accepts. What has *not* been done is opening
+this plugin inside a real Desktop window; the rendering pass still belongs to
+whoever installs it.
+
+Managing the desktop profile takes the `dsh` command that ships with Desktop, not
+the npm one — the public CLI refuses the reserved `desktop` profile:
+
+1. Start Desktop once so the profile exists, then quit it fully (closing the
+   window only hides it; on Windows use the tray).
+2. `dsh plugin --profile desktop allow-version @alexpeng/dsh-custom-plugin@<version> --dsh-version 0.2.0-rc.2 --accept-risk`
+3. `dsh plugin --profile desktop add @alexpeng/dsh-custom-plugin`
+4. Reopen Desktop. The in-app Plugin Manager grants the same exemption and
+   installs, if you would rather not open a terminal.
+
+Appearance, prompt library, project folders, stars and usage all live in
+`$DSH_HOME/custom-plugin-state.json`, which Desktop and Web share by design —
+each keeps its own `profiles/<name>` for code, never for that file — so
+switching between the two shows the same data. Both hosts can therefore write it
+at once, which is why the state replace names its temp file after the writing
+process.
+
 ### From GitHub (source install)
 
 ```sh

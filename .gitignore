@@ -3,6 +3,7 @@ lib/
 *.tsbuildinfo
 *.tgz
 .zcode/
+.deskprobe/
 .DS_Store
 Thumbs.db
 desktop.ini

@@ -4,6 +4,47 @@ All notable changes to this project are documented here. The format loosely
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions
 follow [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Fixed
+
+- **A second dsh host could read a half-written state document.** The atomic
+  replace wrote to one shared temp name, `custom-plugin-state.json.tmp`, while
+  the queue that serializes saves lives inside a single process. dsh Desktop
+  owns `$DSH_HOME/profiles/desktop` and the Web profile owns `profiles/web`,
+  but both hosts read and write the same
+  `$DSH_HOME/custom-plugin-state.json`, so two hosts saving at the same moment
+  wrote and renamed that one temp file against each other — the Windows
+  EPERM/EBUSY shape this queue was built to stop, reachable across processes.
+  Temp names are now qualified by the writing pid (both the state document and
+  the pre-import recovery backup), and a failed turn deletes its own temp
+  instead of leaving a per-pid file behind.
+
+### Verified against dsh Desktop's runtime
+
+dsh Desktop ships an Electron shell around **exactly
+`@deepseek-ai/dsh@0.2.0-rc.2`** — the desktop release line pins the shell and
+the runtime to the same version. Measured here against that version installed
+from npm:
+
+- `dsh plugin --profile web add` refused 0.5.0 and rolled the profile back,
+  naming `peerDependencies {"@deepseek-ai/dsh-tools":"^0.1.7-rc.2"}` — the
+  published peer range excludes every 0.2.x prerelease, because
+  `^0.1.7-rc.2` means `>=0.1.7-rc.2 <0.2.0-0`.
+- After granting the exact-version exemption, 18 of 19 live host probes passed
+  with 0 failures; the one skip was the session-dependent probe, because a
+  credential-free scratch home holds no session. The boot graph carried 66
+  module rows, our row was served, and all five `dsh.client.inject` targets
+  existed.
+- The client bundle as served is 49 bytes larger than the file on disk. That is
+  dsh's composite asset route concatenating modules (`;\n` between rows) and
+  rewriting the `sourceMappingURL` comment to the concatenated URL — not a
+  transform of our bundle. A byte-identity check has to compare the installed
+  file, not the served response.
+- 126 unit tests pass (12 new for the loopback fence, 3 new for the temp
+  naming), typecheck is clean, and `pnpm smoke` is green. The release range was
+  **not** widened by this round; see README for why.
+
 ## 0.5.0 — 2026-09-28
 
 ### Changed

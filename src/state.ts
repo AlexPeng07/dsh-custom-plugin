@@ -10,7 +10,7 @@
  * @module @alexpeng/dsh-custom-plugin/state
  */
 
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { dshHome } from './dsh-home.ts'
 import { DEFAULT_CONFIG, type CustomPluginConfig, type CustomPluginState, type FolderNode, type PromptItem, type StarsMap, type UsageMap } from './protocol.ts'
@@ -107,11 +107,23 @@ export async function loadStateFile(
   return statePath
 }
 
-/** In-flight save per state path: concurrent saves queue instead of racing
- * on the shared .tmp file. Two writers renaming one temp file is the Windows
+/** In-flight save per state path: concurrent saves queue instead of racing on
+ * the rename order. Two writers renaming one temp file is the Windows
  * EPERM/EBUSY source; queuing also coalesces naturally, because each turn
  * serializes the live document when it runs, not when it was requested. */
 const saveQueues = new Map<string, Promise<void>>()
+
+/**
+ * Temp name for an atomic replace, qualified by the writing process.
+ *
+ * The queue above is per-process, but `$DSH_HOME` is not: dsh Web and dsh
+ * Desktop both run hosts against one home (separate profiles, one `$DSH_HOME`),
+ * so a fixed temp name would let the two hosts write and rename the same file
+ * and hand each other a partially written document.
+ */
+export function tempPathFor(target: string, pid: number = process.pid): string {
+  return `${target}.${pid}.tmp`
+}
 
 /** Atomically persist the state document. Saves to the same path are
  * serialized: a caller awaits its own turn's completion, a failed turn never
@@ -122,9 +134,15 @@ export function saveStateFile(state: CustomPluginState, home: string = dshHome()
     .catch(() => {})
     .then(async () => {
       await mkdir(dirname(statePath), { recursive: true })
-      const tmpPath = statePath + '.tmp'
-      await writeFile(tmpPath, JSON.stringify(state), 'utf8')
-      await rename(tmpPath, statePath)
+      const tmpPath = tempPathFor(statePath)
+      try {
+        await writeFile(tmpPath, JSON.stringify(state), 'utf8')
+        await rename(tmpPath, statePath)
+      } catch (error) {
+        // A pid-qualified temp would otherwise survive a failed turn and accumulate.
+        await rm(tmpPath, { force: true }).catch(() => { /* the rename may have landed; nothing left to clean */ })
+        throw error
+      }
     })
   saveQueues.set(statePath, turn)
   return turn.finally(() => {

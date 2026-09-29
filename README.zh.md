@@ -143,6 +143,38 @@ dsh plugin --profile web add @alexpeng/dsh-custom-plugin
 
 registry 上是预构建产物，安装端无需从源码构建。
 
+### 在 dsh 桌面版上
+
+dsh 桌面版是同一套 Web 应用外面的一层 Electron 壳，随包携带**正好是 dsh
+0.2.0-rc.2**：桌面发布线把壳和运行时钉成同一个版本，所以桌面端拿到的永远是
+0.2.x 运行时。本插件发布的 peer 范围还不收 0.2.x，因此桌面版给出的拒绝信息和
+0.2.x 的 Web profile 完全一样——而这里没有"改装旧版插件"这条路，因为桌面版
+独占自己的 profile，其他插件版本都不为它服务。所以在桌面版上只能授予那条精确
+版本豁免，这也是下面这些实测存在的原因。
+
+对 0.2.0-rc.2 的实测：19 项宿主侧探针里 18 项通过（跳过的那一项需要会话，而
+不带凭证的临时 home 里没有会话），boot 图里有我们那一行、五个 inject 目标都
+在、Mermaid 引擎本地加载。桌面版的请求路径也不碰本插件的访问围栏——壳在把渲染
+进程的请求转发给它自己的 Host 之前会删掉 `host`、`origin`、`sec-fetch-site`、
+`cookie`，再挂上它自己的凭证，而这个形状 loopback 围栏本来就是接受的。没做的
+是在真的桌面窗口里打开这个插件；渲染验收仍然归装它的人。
+
+管桌面 profile 要用桌面版自带的 `dsh` 命令，不是 npm 装的那个——公开 CLI 拒绝
+保留的 `desktop` profile：
+
+1. 先启动一次桌面版让 profile 建立，然后完全退出（关窗口只是隐藏；Windows 上
+   从托盘退出）。
+2. `dsh plugin --profile desktop allow-version @alexpeng/dsh-custom-plugin@<版本> --dsh-version 0.2.0-rc.2 --accept-risk`
+3. `dsh plugin --profile desktop add @alexpeng/dsh-custom-plugin`
+4. 重新打开桌面版。应用内的插件管理器也能授同一条豁免并安装，不想开终端就用
+   它。
+
+外观、提示词库、项目文件夹、星标和用量都存在
+`$DSH_HOME/custom-plugin-state.json`，这个文件按设计由桌面版和 Web 共享——两
+边各自持有自己的 `profiles/<名字>`，那里面只放代码不放这个文件——所以在两者
+之间切换看到的是同一份数据。两个宿主因此可能同时写它，这就是状态替换把临时文
+件按写入进程的 pid 命名的原因。
+
 ### 从 GitHub 安装（源码安装）
 
 ```sh

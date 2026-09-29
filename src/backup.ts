@@ -1,7 +1,7 @@
 /** Validation and merge rules for versioned, secret-free local backups. */
 import { rename, writeFile } from 'node:fs/promises'
 import { DEFAULT_CONFIG, type BackupImportMode, type BackupImportPreview, type CustomPluginBackupV1, type CustomPluginConfig, type CustomPluginState, type FolderNode, type PromptItem, type StarsMap, type UsageMap, type UsageRow } from './protocol.ts'
-import { normalizeCfg, normalizePrompt } from './state.ts'
+import { normalizeCfg, normalizePrompt, tempPathFor } from './state.ts'
 import { pruneUsage } from './usage.ts'
 
 export const BACKUP_FORMAT = 'dsh-custom-plugin-backup' as const
@@ -226,7 +226,7 @@ export function importedState(current: CustomPluginState, backup: CustomPluginBa
 
 export async function writeRecoveryBackup(path: string, state: CustomPluginState): Promise<string> {
   const target = path + '.backup.json'
-  const temporary = target + '.tmp'
+  const temporary = tempPathFor(target)
   await writeFile(temporary, JSON.stringify(createBackup(state), null, 2), 'utf8')
   await rename(temporary, target)
   return target
