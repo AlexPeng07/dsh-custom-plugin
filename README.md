@@ -41,13 +41,13 @@ The plugin is dual-face: the host half (`src/`) owns the state document, registe
 </tr>
 </table>
 
-Weather FX is shown in dark mode, where only "no color" and "aurora" backgrounds are selectable. Usage history, backup-import previews, session search, and the command palette are dynamic views of the same panel; open them inside DSH to inspect the live UI — no additional fixed screenshots are included.
+Weather FX is shown in dark mode. Usage history, backup-import previews, session search, and the command palette are dynamic views of the same panel; open them inside DSH to inspect the live UI — no additional fixed screenshots are included.
 
 ## What it does
 
 ### Appearance
 
-- **Background colors**: 20 muted low-saturation palettes (each with a matching tab color, `天青灰` by default) plus "no color" (follows the GUI default theme) and the high-saturation aurora gradient. In dark mode only "no color" and "aurora" stay selectable; the other colors are disabled and the plugin text turns white for readability.
+- **Background colors**: 20 muted low-saturation palettes (each with a matching tab color, `天青灰` by default) plus "no color" (follows the GUI default theme). Every palette works in both themes; dark mode derives the same family's dark variant (hue and low saturation kept, lightness dropped onto the dark ramp), and the swatch preview shows what the current theme will actually paint.
 - **Weather FX**: canvas-rendered, pointer-transparent one-click overlays — falling snow, cinematic rain (three depth layers with splashes), and drifting sakura petals; turning it off clears the canvas.
 - **Glass**: frosted glass on every Custom surface, or liquid glass (edge displacement refraction chained with a slight blur + saturation so text over large panels stays readable; engines without SVG-referencing backdrop filters fall back to frosted). A global-glass option extends the same treatment to dialogs, menus, tooltips, listboxes and the system settings window — displaced as well in liquid mode.
 
@@ -213,7 +213,7 @@ Appearance and feature toggles (the `cfg` field, all with defaults):
 
 | Key | Default | Meaning |
 |---|---|---|
-| `bg` | `天青灰` | `default` (no color) / `aurora` / one of the 20 palette names |
+| `bg` | `天青灰` | `default` (no color) / one of the 20 palette names (both themes; a stored `aurora` migrates to `default`) |
 | `weather` | `none` | `none` / `snow` / `rain` / `sakura` |
 | `glass` | `true` | master glass toggle for Custom surfaces |
 | `glassMode` | `frost` | `frost` frosted / `liquid` displacement glass |
@@ -239,7 +239,7 @@ Appearance and feature toggles (the `cfg` field, all with defaults):
 - The balance panel shows the peak/off-peak token and cost split plus a link to the official pricing page; legacy rows without peak counters are marked inexact and excluded from cost totals until rescanned.
 - OS credential storage detects a `keytar` module present in the profile's `node_modules` when the host starts; when it cannot be loaded, the compatibility state-file fallback is used.
 - Cost estimates use DeepSeek's official peak/off-peak list prices and are indicative only.
-- Dark-mode background restriction is deliberate: only "no color" and "aurora" are selectable in dark mode.
+- Palettes derive a same-family dark variant in dark mode (hue and low saturation kept).
 - DSH currently exposes no archive-restore API; the plugin does not bypass that boundary by editing the underlying registry.
 - The command palette owns `Ctrl+K` / `Cmd+K` (no Alt/Shift, ignored inside editors). dsh's own default on the **web** profile is `Ctrl+Alt+K` (the desktop default is plain `Ctrl+K`), so nothing collides out of the box — but dsh 0.1.7 lets you rebind host shortcuts, and if you assign a host command to plain `Ctrl+K`, both fire. Keep the palette key reserved, or pick another binding there.
 - dsh's shipped `web` profile composes its session-query index with `openAt: never`, so full-text search is off unless the deployment enables it. In-session search therefore answers from a direct log scan (ordered, capped at 100 hits) and the palette's cross-session search shows dsh's own refusal.

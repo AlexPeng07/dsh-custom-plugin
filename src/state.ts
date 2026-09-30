@@ -53,6 +53,8 @@ export function normalizeCfg(raw: unknown): CustomPluginConfig {
   // state file or an external backup.
   cfg.monthlyBudgetCny = Math.max(0, cfg.monthlyBudgetCny ?? 0)
   cfg.budgetWarningPercent = Math.max(1, Math.min(100, cfg.budgetWarningPercent ?? 80))
+  // The aurora preset was removed; migrate a stored value to "no color".
+  if (cfg.bg === 'aurora') cfg.bg = 'default'
   // Retired keys (clouds / wind, and the timeline trio removed with the rail)
   // are dropped by construction: only the keys listed in DEFAULT_CONFIG are
   // ever copied.

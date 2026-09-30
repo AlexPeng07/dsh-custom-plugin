@@ -8,7 +8,7 @@
 export const STATIC_CSS = `/* dsh-custom-plugin static styles. Every rule is global by design: the UI
  * mounts into product slots and overlays, so class names are prefixed vx-
  * and must not be scoped by CSS Modules. Dynamic rules (body background,
- * aurora gradient, global-glass blur) are managed at runtime by a style
+ * global-glass blur) are managed at runtime by a style
  * element in custom.tsx and do not live here. */
 .vx-root {
     position: fixed;
@@ -115,17 +115,6 @@ export const STATIC_CSS = `/* dsh-custom-plugin static styles. Every rule is glo
       .vx-liquid .vx-glass {
         background: rgba(13, 17, 25, .62);
       }
-    }
-  }
-  @keyframes vx-aurora {
-    0% {
-      background-position: 0% 50%;
-    }
-    50% {
-      background-position: 100% 50%;
-    }
-    100% {
-      background-position: 0% 50%;
     }
   }
   .vx-balance-wrap {

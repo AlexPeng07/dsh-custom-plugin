@@ -17,7 +17,8 @@ export const MERMAID_SCRIPT_PATH = '/custom-plugin/mermaid.js'
 
 /** Plugin appearance and behavior configuration, persisted in the host state file. */
 export interface CustomPluginConfig {
-  /** Background preset: 'default' | 'aurora' | one of the 20 palette names. */
+  /** Background preset: 'default' (no color) or one of the 20 palette names.
+   * The removed 'aurora' value migrates to 'default' on load. */
   bg?: string
   /** Weather overlay: 'none' | 'snow' | 'rain' | 'sakura'. */
   weather?: string

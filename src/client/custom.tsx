@@ -5,7 +5,7 @@
  * listener set; components re-render on `setS`. The file ports the earlier
  * dynamic-plugin implementation: React is a platform import, static styles
  * are injected through one owned style element (styles.ts), dynamic body
- * styles (background / aurora / global glass) extend it, and host calls go
+ * styles (background / global glass) extend it, and host calls go
  * over `/api/custom-plugin` fetch routes.
  * @module @alexpeng/dsh-custom-plugin/client/custom
  */
@@ -17,6 +17,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { DEFAULT_CONFIG, type ConversationSearchItem, type ConversationSearchKind, type CredentialStorage, type CustomPluginConfig, type FolderNode, type PromptItem, type TimelineItem, type UsageRow } from '../protocol.ts'
 import { createUsageRow, dayKey, mergeUsageRow } from '../usage.ts'
 import { DEEPSEEK_PRICING_CHECKED_ON, DEEPSEEK_PRICING_SOURCE_URL, estimateUsageCostCny, usageCostBreakdown } from '../pricing.ts'
+import { DARK_CANVAS_LIGHTNESS, PALETTE, toDarkRamp } from './palette.ts'
 import {
   apiBalanceGet,
   apiBackupExport,
@@ -157,32 +158,6 @@ interface Store {
   insertDraft: ((text: string, replace: boolean) => boolean) | null
   greeted: boolean
 }
-
-/** Palette of 20 muted low-saturation backgrounds (with matching tab colors).
- * 天青灰 leads the list: it is the install default and renders first among
- * the palette swatches, right after 无颜色 / 极光. */
-export const PALETTE: Array<[string, string, string]> = [
-  ['天青灰', '#E9EBEE', '#D6DADF'],
-  ['暖象牙', '#F5F0E8', '#E8E0D4'],
-  ['雾灰绿', '#E9EDE6', '#D7DED3'],
-  ['烟熏玫瑰', '#F2EAEC', '#E5D6DA'],
-  ['雾蓝', '#E8EDF2', '#D4DDE6'],
-  ['薰衣草灰', '#EFEDF4', '#E0DCEB'],
-  ['燕麦米', '#F3EEE6', '#E5DED3'],
-  ['薄荷雾', '#EAF0ED', '#D7E3DC'],
-  ['裸桃', '#F5EDE8', '#E8DCD4'],
-  ['石板蓝', '#E6EDF1', '#D2DBE3'],
-  ['紫藤灰', '#EEEBF2', '#E1DAE8'],
-  ['奶油黄', '#F4F0E6', '#E6E1D5'],
-  ['鼠尾草', '#EAEDE5', '#D7DED1'],
-  ['腮红粉', '#F3EAEC', '#E6D6DA'],
-  ['香草白', '#F3F0E6', '#E5E0D4'],
-  ['青灰', '#E7F0F0', '#D3E1E1'],
-  ['杏仁白', '#F0ECE8', '#E2DAD3'],
-  ['尤加利', '#EAF0ED', '#D7E3DB'],
-  ['珍珠灰', '#EDEDEE', '#DCDCDD'],
-  ['淡金', '#F4F1E4', '#E6E1D0'],
-]
 
 /** Neutral glass tokens used when no palette color is active. */
 const NEUTRAL_TOKENS: Record<string, { light: string; dark: string }> = {
@@ -475,14 +450,16 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       tokenDisposer = null
     }
     if (theme !== undefined && typeof theme.overrideTokens === 'function') {
-      if (cfg.bg !== undefined && cfg.bg !== 'default' && cfg.bg !== 'aurora') {
+      if (cfg.bg !== undefined && cfg.bg !== 'default') {
         const entry = PALETTE.find((p) => p[0] === cfg.bg) ?? PALETTE[0]
         const base = entry[1]
         const tab = entry[2] ?? shade(base, 0.94)
         const glassOn = cfg.glass === true
         const mk = (c: string, a: number): string => (glassOn ? rgbaOf(c, a) : c)
-        const darkBase = shade(base, 0.78)
-        const darkTab = shade(tab, 0.78)
+        // Dark variants are derived onto the same hue family's dark ramp (the
+        // light pastels themselves would glare on a dark canvas).
+        const darkBase = toDarkRamp(base, 0.14)
+        const darkTab = toDarkRamp(tab, 0.18)
         tokenDisposer = theme.overrideTokens('custom-plugin-appearance', {
           '--dsw-alias-bg-base': { light: mk(base, 0.5), dark: mk(darkBase, 0.5) },
           '--dsw-alias-bg-layer-1': { light: mk(tab, 0.6), dark: mk(darkTab, 0.6) },
@@ -490,23 +467,17 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
           '--dsw-alias-bg-overlay': { light: mk(shade(base, 1.04), 0.8), dark: mk(shade(darkBase, 0.86), 0.8) },
           '--dsw-specific-sidebar-fill': { light: mk(tab, 0.62), dark: mk(darkTab, 0.62) },
         })
-      } else if (cfg.glass === true || cfg.bg === 'aurora') {
+      } else if (cfg.glass === true) {
         tokenDisposer = theme.overrideTokens('custom-plugin-appearance', NEUTRAL_TOKENS)
       }
     }
     let dyn = ''
-    if (cfg.bg === 'aurora') {
-      dyn += '@keyframes vx-aurora { 0% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } 100% { background-position: 0% 50%; } }'
-      dyn += ' body { background: linear-gradient(120deg, #8fa8d8, #b59fd8, #8fc4b4, #d8a8c0) !important; background-size: 320% 320% !important; animation: vx-aurora 26s ease infinite !important; }'
-      // The composer seat fades from transparent into a translucent-dark
-      // bg-base over 36px (GUI rule on the scrollport's sticky composer
-      // child); over the bright aurora in dark mode that fade reads as a
-      // smudged band at the page bottom — drop it and let the aurora flow
-      // through. Light mode keeps the stock fade.
-      dyn += ' body[data-ds-dark-theme] [data-conversation-scroll] > :has([data-conversation-composer-overlay]) { background: transparent !important; }'
-    } else if (cfg.bg !== undefined && cfg.bg !== 'default') {
+    if (cfg.bg !== undefined && cfg.bg !== 'default') {
       const base = (PALETTE.find((p) => p[0] === cfg.bg) ?? PALETTE[0])[1]
-      dyn += ` body { background-color: ${base} !important; }`
+      // Dark mode derives the same family's dark variant; S.dark is kept in
+      // step with the GUI theme (applyDark) and re-runs this painter.
+      const surface = S.dark === true ? toDarkRamp(base, DARK_CANVAS_LIGHTNESS) : base
+      dyn += ` body { background-color: ${surface} !important; }`
     }
     if (cfg.globalGlass === true) {
       // In liquid mode the same SVG displacement chain as the plugin's own
@@ -565,6 +536,8 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
           delete (cfg as Record<string, unknown>).timeline
           delete (cfg as Record<string, unknown>).timelineLeft
           delete (cfg as Record<string, unknown>).starsOnly
+          // The aurora preset was removed; treat a stored value as "no color".
+          if (cfg.bg === 'aurora') cfg.bg = 'default'
           S.cfg = cfg
         }
         if (Array.isArray(data.folders)) S.folders = data.folders
@@ -855,11 +828,10 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
   function FxCanvas(): React.ReactElement {
     const s = useS()
     const ref = React.useRef<HTMLCanvasElement | null>(null)
-    /** 粒子配色跟随背景亮度：浅色主题（以及任何主题下的高饱和极光）
-     * 需要更深的粒子颜色才可辨识。ref 让 RAF 循环每帧读到最新值，
-     * 主题/背景切换时无需重建粒子场。 */
-    const lightRef = React.useRef(!(s.dark === true) || s.cfg.bg === 'aurora')
-    React.useEffect(() => { lightRef.current = !(s.dark === true) || s.cfg.bg === 'aurora' }, [s.dark, s.cfg.bg])
+    /** 粒子配色跟随背景亮度：浅色主题需要更深的粒子颜色才可辨识。
+     * ref 让 RAF 循环每帧读到最新值，主题/背景切换时无需重建粒子场。 */
+    const lightRef = React.useRef(!(s.dark === true))
+    React.useEffect(() => { lightRef.current = !(s.dark === true) }, [s.dark])
     React.useEffect(() => {
       const cvs = ref.current
       if (cvs === null) return
@@ -1811,17 +1783,20 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     return React.createElement('div', { className: 'vx-col' },
       React.createElement('div', { className: 'vx-muted' }, '主题背景、天气特效与玻璃质感，选择后即时生效。'),
       React.createElement('div', { className: 'vx-section-title' }, '背景颜色'),
-      React.createElement('div', { className: 'vx-muted' }, '20 组低饱和色板；深色模式下仅可用「无颜色」与「极光」。'),
+      React.createElement('div', { className: 'vx-muted' }, '20 组低饱和色板，深浅色模式均可用；深色下自动使用同色系的深色变体（预览即实际效果）。'),
       React.createElement('div', { className: 'vx-swatches' },
         React.createElement('button', { key: 'default', className: 'vx-swatch' + (s.cfg.bg === 'default' ? ' on' : ''), onClick: () => set('bg', 'default'), title: '无颜色（默认主题）' },
           React.createElement('span', { className: 'vx-swatch-box', style: { background: 'repeating-conic-gradient(#ccc 0 25%, #eee 0 50%) 0 0/10px 10px' } }),
           React.createElement('span', { className: 'vx-swatch-label' }, '无颜色')),
-        React.createElement('button', { key: 'aurora', className: 'vx-swatch' + (s.cfg.bg === 'aurora' ? ' on' : ''), onClick: () => set('bg', 'aurora'), title: '极光渐变（保留高饱和）' },
-          React.createElement('span', { className: 'vx-swatch-box', style: { background: 'linear-gradient(135deg,#8fa8d8,#b59fd8,#8fc4b4,#d8a8c0)' } }),
-          React.createElement('span', { className: 'vx-swatch-label' }, '极光')),
-        PALETTE.map((p) => React.createElement('button', { key: p[0], disabled: dark, className: 'vx-swatch' + (s.cfg.bg === p[0] ? ' on' : ''), onClick: () => set('bg', p[0]), title: p[0] + ' ' + p[1] + (dark ? '（深色模式禁用）' : '') },
-          React.createElement('span', { className: 'vx-swatch-box', style: { background: p[1] } }),
-          React.createElement('span', { className: 'vx-swatch-label' }, p[0]))),
+        PALETTE.map((p) => {
+          // Preview shows what the canvas will actually paint in the current
+          // theme: the light pastel in light mode, its same-hue dark variant
+          // in dark mode.
+          const preview = dark ? toDarkRamp(p[1], DARK_CANVAS_LIGHTNESS) : p[1]
+          return React.createElement('button', { key: p[0], className: 'vx-swatch' + (s.cfg.bg === p[0] ? ' on' : ''), onClick: () => set('bg', p[0]), title: p[0] + ' ' + p[1] },
+            React.createElement('span', { className: 'vx-swatch-box', style: { background: preview } }),
+            React.createElement('span', { className: 'vx-swatch-label' }, p[0]))
+        }),
       ),
       React.createElement('div', { className: 'vx-section-title' }, '天气特效'),
       React.createElement('div', { className: 'vx-row wrap' },
@@ -2707,17 +2682,15 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       d.addEventListener('keydown', onKey)
       return () => d.removeEventListener('keydown', onKey)
     }, [])
-    React.useEffect(() => { if (s.booted) applyAppearance() }, [s.booted, s.cfg.bg, s.cfg.glass, s.cfg.glassMode, s.cfg.globalGlass])
+    React.useEffect(() => { if (s.booted) applyAppearance() }, [s.booted, s.cfg.bg, s.cfg.glass, s.cfg.glassMode, s.cfg.globalGlass, s.dark])
     React.useEffect(() => { syncAntiScroll(s.cfg.antiScroll === true) }, [s.cfg.antiScroll])
     React.useEffect(() => {
       const w = typeof window !== 'undefined' ? window : null
       const d = typeof document !== 'undefined' ? document : null
       const applyDark = (dark: boolean): void => {
+        // Palette backgrounds follow the theme now (dark variants are
+        // derived), so a flip only needs to re-render and re-paint.
         S.dark = dark
-        if (dark && S.booted && S.cfg.bg !== 'default' && S.cfg.bg !== 'aurora') {
-          S.cfg = { ...S.cfg, bg: 'default' }
-          saveCfg()
-        }
         setS({ dark })
       }
       applyDark(readDark())
@@ -2754,13 +2727,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       // boot 时再对一次表：此刻主题服务必然就绪，避免启动窗口期的误判
       const dark = readDark()
       S.dark = dark
-      if (dark && S.booted && S.cfg.bg !== 'default' && S.cfg.bg !== 'aurora') {
-        S.cfg = { ...S.cfg, bg: 'default' }
-        setS({ cfg: S.cfg })
-        saveCfg()
-      } else {
-        setS({ dark })
-      }
+      setS({ dark })
     }, [s.booted])
     // Mirror the resolved GUI theme onto <html>: the glass fill rules are
     // theme-scoped at :root so they reach every surface with one selector —
