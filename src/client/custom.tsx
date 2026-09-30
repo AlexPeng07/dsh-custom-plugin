@@ -139,6 +139,7 @@ interface Store {
   dropHint: { id: string; zone: string } | null
   promptOpen: { x: number; y: number } | null
   promptQuery: string
+  balanceOpen: boolean
   batchModal: boolean
   mermaidModal: { title: string; codes: string[]; index: number } | null
   quoteSel: { text: string; x: number; y: number } | null
@@ -285,6 +286,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     dropHint: null,
     promptOpen: null,
     promptQuery: '',
+    balanceOpen: false,
     batchModal: false,
     mermaidModal: null,
     quoteSel: null,
@@ -1423,7 +1425,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     return React.createElement('button', {
       className: 'vx-foot-btn',
       title: '项目文件夹',
-      onClick: () => setS({ foldersOpen: !S.foldersOpen, panelOpen: false }),
+      onClick: () => setS({ foldersOpen: !S.foldersOpen, panelOpen: false, promptOpen: null, balanceOpen: false }),
     }, React.createElement(Icon, { n: 'folder', size: 15 }), props.wide === false ? null : React.createElement('span', { className: 'vx-foot-label' }, '项目'))
   }
 
@@ -1432,7 +1434,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     return React.createElement('button', {
       className: 'vx-header-btn',
       title: '个性化中心',
-      onClick: () => setS({ panelOpen: !S.panelOpen, foldersOpen: false }),
+      onClick: () => setS({ panelOpen: !S.panelOpen, foldersOpen: false, promptOpen: null, balanceOpen: false }),
     }, React.createElement(Icon, { n: 'sliders', size: 13 }), React.createElement('span', null, '个性化'))
   }
 
@@ -1442,8 +1444,11 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       className: 'vx-header-btn',
       title: '快速调用提示词',
       onClick: (e: React.MouseEvent<HTMLButtonElement>) => {
+        // Same contract as the other header surfaces: click toggles, and
+        // opening one closes the others.
+        const open = S.promptOpen !== null
         const r = e.currentTarget.getBoundingClientRect()
-        setS({ promptOpen: { x: Math.max(8, r.left), y: r.bottom + 6 }, promptQuery: '' })
+        setS({ promptOpen: open ? null : { x: Math.max(8, r.left), y: r.bottom + 6 }, promptQuery: '', panelOpen: false, foldersOpen: false, balanceOpen: false })
       },
     }, React.createElement(Icon, { n: 'zap', size: 13 }), React.createElement('span', null, '提示词'))
   }
@@ -1483,8 +1488,6 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     useViewedSession(props)
     const s = useS()
     const b = s.balance
-    const [hover, setHover] = React.useState(false)
-    const [pinned, setPinned] = React.useState(false)
     // Initial fetch plus a refresh every minute, so the balance figure and the
     // today-usage badge stay current without pressing 刷新.
     React.useEffect(() => {
@@ -1512,16 +1515,14 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       : balanceError !== null ? `余额查询失败：${balanceError}（失败后会自动重试，也可在面板中手动刷新）`
       : b === null ? undefined
       : estimateTitle
-    const open = hover || pinned
-    return React.createElement('span', {
-      className: 'vx-balance-wrap',
-      onMouseEnter: () => setHover(true),
-      onMouseLeave: () => setHover(false),
-    },
+    // Same contract as the other header surfaces: click toggles, hover does
+    // nothing, and opening this closes the others.
+    const open = s.balanceOpen === true
+    return React.createElement('span', { className: 'vx-balance-wrap' },
       React.createElement('span', {
-        className: 'vx-balance-text' + (pinned ? ' vx-balance-pinned' : ''),
-        title: pinned ? '再次点击取消固定' : '点击固定面板',
-        onClick: () => setPinned(!pinned),
+        className: 'vx-balance-text' + (open ? ' vx-balance-open' : ''),
+        title: open ? '再次点击收起面板' : '点击打开面板',
+        onClick: () => setS({ balanceOpen: !open, panelOpen: false, promptOpen: null, foldersOpen: false }),
       },
         React.createElement(Icon, { n: 'wallet', size: 13 }),
         React.createElement('span', { title: pillTitle }, balance),
@@ -1529,13 +1530,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       ),
       open
         ? React.createElement('div', { className: 'vx-glass vx-balance-hover' },
-          pinned
-            ? React.createElement('div', { className: 'vx-balance-head' },
-              React.createElement('span', { className: 'vx-muted' }, '已固定 · 再次点击「额度」或下方按钮取消'),
-              React.createElement('button', { className: 'vx-btn vx-btn-sm', onClick: () => setPinned(false) }, React.createElement(Icon, { n: 'x', size: 12 }), ' 取消固定'),
-            )
-            : null,
-          React.createElement(BalancePanelContent, { onInteract: () => setPinned(true) }),
+          React.createElement(BalancePanelContent, null),
         )
         : null,
     )
@@ -1630,7 +1625,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     )
   }
 
-  function BalancePanelContent(props: { onInteract?: () => void }): React.ReactElement {
+  function BalancePanelContent(): React.ReactElement {
     const s = useS()
     const b = s.balance
     // The balance query needs a personal sk- key that account-login Desktop
@@ -1659,7 +1654,6 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
               type: 'password',
               placeholder: configured ? '已配置 Key；输入新 Key 覆盖' : 'DeepSeek API Key (sk-…)',
               value: s.apiKey,
-              onFocus: () => { props.onInteract?.() },
               onChange: (e: React.ChangeEvent<HTMLInputElement>) => { setS({ apiKey: e.target.value, apiKeyDirty: true }) },
               onBlur: () => { if (S.apiKeyDirty) saveCfg() },
             }),

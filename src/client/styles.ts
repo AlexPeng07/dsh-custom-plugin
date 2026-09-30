@@ -149,16 +149,9 @@ export const STATIC_CSS = `/* dsh-custom-plugin static styles. Every rule is glo
   .vx-balance-text:hover {
     background: rgba(127, 164, 224, .28);
   }
-  .vx-balance-text.vx-balance-pinned {
+  .vx-balance-text.vx-balance-open {
     background: rgba(127, 164, 224, .36);
     border-color: rgba(127, 164, 224, .8);
-  }
-  .vx-balance-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    margin-bottom: 8px;
   }
   .vx-balance-today {
     opacity: .75;
