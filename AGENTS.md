@@ -16,6 +16,11 @@ daily token usage.
 - UI copy is plain Chinese; there is no i18n registration.
 - `src/dsh-home.ts`, `src/mount-once.ts`, `src/loopback.ts` are standalone
   utility modules kept in-tree so the package builds standalone.
+- Background palettes and their dark-mode derivation live in
+  `src/client/palette.ts` (`toDarkRamp`: keep hue, compress saturation ×0.55,
+  drop lightness onto the dark ramp). Palettes are selectable in both themes —
+  there is no dark-mode forcing back to default, and theme flips re-run the
+  appearance painter (`s.dark` is in its effect deps).
 - The Host state file is `$DSH_HOME/custom-plugin-state.json`. It is shared by
   every dsh host under that home — including dsh Desktop's separate profile —
   so an atomic replace there must name its temp file after the writing process
