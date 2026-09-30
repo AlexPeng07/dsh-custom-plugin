@@ -6,7 +6,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { DARK_CANVAS_LIGHTNESS, PALETTE, toDarkRamp } from '../src/client/palette.ts'
+import { DARK_CANVAS_LIGHTNESS, DARK_SATURATION_SCALE, PALETTE, toDarkRamp } from '../src/client/palette.ts'
 
 function hslOf(hex: string): [number, number, number] {
   const m = /^#([0-9a-f]{6})$/i.exec(hex)
@@ -32,12 +32,17 @@ describe('palette dark ramp', () => {
       const dark = toDarkRamp(light, DARK_CANVAS_LIGHTNESS)
       const [hIn, sIn] = hslOf(light)
       const [hOut, sOut, lOut] = hslOf(dark)
-      // Neutral grays (s ≈ 0) have no meaningful hue to preserve.
-      if (sIn > 0.02) expect(Math.abs(hOut - hIn)).toBeLessThan(0.02)
+      // Hue must survive where the compressed tint is still visible. The
+      // tolerance absorbs 8-bit quantization: at S≈0.06 / L≈0.12 a channel
+      // step of ±1 shifts the measured hue by ~0.03, while a real hue error
+      // (swapped channels, lost family) drifts by 0.2 or more.
+      if (sOut > 0.05) expect(Math.abs(hOut - hIn)).toBeLessThan(0.04)
       expect(Math.abs(lOut - DARK_CANVAS_LIGHTNESS)).toBeLessThan(0.01)
-      // Saturation survives at the same order so families stay distinguishable.
+      // Saturation is compressed (warm hues must not glare on dark) but a
+      // tint survives so families stay distinguishable.
       expect(sOut).toBeGreaterThan(0)
-      expect(sOut).toBeLessThanOrEqual(sIn + 0.02)
+      expect(sOut).toBeLessThanOrEqual(sIn * DARK_SATURATION_SCALE + 0.02)
+      expect(sOut).toBeLessThan(0.25)
       expect(name.length).toBeGreaterThan(0)
     }
   })

@@ -82,17 +82,26 @@ function hslToRgb(h: number, s: number, l: number): [number, number, number] {
 }
 
 /**
- * Map a palette color onto the dark ramp: hue and saturation are kept (the
- * families stay recognizable), lightness is clamped to `lightness`. Invalid
- * input degrades to a neutral gray at the same lightness.
+ * Map a palette color onto the dark ramp: hue is kept, saturation is
+ * compressed by {@link DARK_SATURATION_SCALE}, and lightness is clamped to
+ * `lightness`. The compression is not optional polish: HSL saturation at dark
+ * lightness reads far stronger for warm hues (gold / rose / peach) than for
+ * blue-grays on a dark canvas, so the raw values made most families glare.
+ * Invalid input degrades to a neutral gray at the same lightness.
  */
 export function toDarkRamp(hex: string, lightness: number): string {
   const l = Math.max(0, Math.min(1, lightness))
   const [h, s] = rgbToHsl(hexToRgb(hex))
-  const clampedS = Math.max(0, Math.min(1, s))
+  const clampedS = Math.max(0, Math.min(1, s * DARK_SATURATION_SCALE))
   const [r, g, b] = hslToRgb(h, clampedS, l)
   return '#' + [r, g, b].map((v) => v.toString(16).padStart(2, '0')).join('')
 }
 
 /** Body-canvas lightness for the dark variant of a palette family. */
 export const DARK_CANVAS_LIGHTNESS = 0.12
+
+/** How much of a family's HSL saturation survives on the dark ramp. 0.55
+ * keeps the families clearly distinguishable while pulling the warm hues
+ * (gold / rose / peach) down from "eye-catching" to "ambient" on the dark
+ * canvas; 0.4 turned them into mud, 0.7 still glared. */
+export const DARK_SATURATION_SCALE = 0.55
