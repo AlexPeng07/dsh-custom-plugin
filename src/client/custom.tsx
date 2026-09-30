@@ -1233,11 +1233,19 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     }
   }
 
+  // The host's outbound balance call shares the machine's network path with
+  // TLS-intercepting proxies and security suites, so a failure is often
+  // transient — retry on a short backoff before the pill settles on the last
+  // error (the 60s poll in HeaderBalance keeps healing after that).
+  let balanceRetryTimer: ReturnType<typeof setTimeout> | null = null
+  let balanceRetries = 0
   async function refreshBalance(): Promise<void> {
+    if (balanceRetryTimer !== null) { clearTimeout(balanceRetryTimer); balanceRetryTimer = null }
     try {
       const result = await apiBalanceGet()
       S.balance = result as unknown as Record<string, unknown>
       S.apiKeyConfigured = result.keyConfigured === true
+      balanceRetries = 0
       // The route also carries the host's live usage ledger; fold today's row
       // in so the 「今日 N 次」 badge refreshes together with the figure.
       const usageToday = result.usageToday
@@ -1249,8 +1257,16 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
         setS({ balance: S.balance, apiKeyConfigured: S.apiKeyConfigured })
       }
     } catch (error) {
-      S.balance = { ok: false, error: String((error as Error)?.message ?? error) }
+      // Keep the configured flag: a route-level failure with a key present is
+      // "额度" (retry-worthy), not "no key" (which would read as an estimate).
+      S.balance = { ok: false, keyConfigured: S.apiKeyConfigured === true, error: String((error as Error)?.message ?? error) }
       setS({ balance: S.balance })
+    }
+    const failed = (S.balance as { ok?: boolean }).ok === false
+    const keyPresent = (S.balance as { keyConfigured?: boolean }).keyConfigured === true
+    if (failed && keyPresent && balanceRetries < 3) {
+      balanceRetries++
+      balanceRetryTimer = setTimeout(() => { balanceRetryTimer = null; void refreshBalance() }, balanceRetries === 1 ? 8000 : 30000)
     }
   }
   async function refreshUsageScan(): Promise<void> {
@@ -1471,12 +1487,17 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     const keyConfigured = b?.ok === false && (b as { keyConfigured?: boolean }).keyConfigured === true
     // With a working key the real balance shows as before; without one the
     // pill falls back to the local cost estimate (today's tokens priced from
-    // the official tariff — no key, no network). '额度?' keeps meaning "a key
+    // the official tariff — no key, no network). '额度' keeps meaning "a key
     // exists but the upstream call failed".
     const balance = bal !== null
       ? ((bal.currency ?? 'CNY') === 'CNY' ? '¥' + (bal.total ?? '') : `${bal.total ?? ''} ${bal.currency ?? ''}`)
-      : (keyConfigured ? '额度?' : b === null ? '额度…' : `≈¥${estimate.toFixed(2)}`)
+      : (keyConfigured ? '额度' : b === null ? '额度…' : `≈¥${estimate.toFixed(2)}`)
     const estimateTitle = `按本机 token 用量与官方价目表折算的估算值（${DEEPSEEK_PRICING_CHECKED_ON} 核对），非账号账单；配置 API Key 后显示真实余额`
+    const balanceError = keyConfigured && b?.ok === false ? String((b as { error?: unknown }).error ?? '未知错误') : null
+    const pillTitle = bal !== null ? undefined
+      : balanceError !== null ? `余额查询失败：${balanceError}（失败后会自动重试，也可在面板中手动刷新）`
+      : b === null ? undefined
+      : estimateTitle
     const open = hover || pinned
     return React.createElement('span', {
       className: 'vx-balance-wrap',
@@ -1489,7 +1510,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
         onClick: () => setPinned(!pinned),
       },
         React.createElement(Icon, { n: 'wallet', size: 13 }),
-        React.createElement('span', { title: bal !== null || keyConfigured ? undefined : estimateTitle }, balance),
+        React.createElement('span', { title: pillTitle }, balance),
         calls > 0 ? React.createElement('span', { className: 'vx-balance-today' }, `今日 ${calls} 次`) : null,
       ),
       open

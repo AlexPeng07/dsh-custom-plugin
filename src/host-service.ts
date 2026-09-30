@@ -704,9 +704,31 @@ export class CustomPluginHost {
         return { ok: false, error: '非 JSON 响应' }
       }
     } catch (error) {
-      return { ok: false, error: String((error as Error)?.message ?? error) }
+      return { ok: false, error: readableFetchError(error) }
     }
   }
+}
+
+/**
+ * Translate a Node `fetch` connection-level failure into a message a user can
+ * act on. Node reports "fetch failed" with the real reason in `error.cause`
+ * (e.g. `SELF_SIGNED_CERT_IN_CHAIN` — a local TLS-intercepting proxy or
+ * security suite, which makes outbound calls fail *intermittently* whenever
+ * the interceptor takes the connection), and passing the bare TypeError
+ * through once read as a mysterious network that "sometimes does not exist".
+ */
+export function readableFetchError(error: unknown): string {
+  const cause = (error as { cause?: { code?: string; message?: string } })?.cause
+  const code = cause?.code ?? ''
+  if (code === 'SELF_SIGNED_CERT_IN_CHAIN' || code === 'DEPTH_ZERO_SELF_SIGNED_CERT' || code === 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY' || code === 'UNABLE_TO_VERIFY_LEAF_SIGNATURE') {
+    return 'TLS 证书校验失败：本机代理或安全软件可能正在解密 HTTPS——请对 api.deepseek.com 放行直连，或将该软件的根证书装入系统信任'
+  }
+  if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') return 'DNS 解析失败：请检查本机网络与代理配置'
+  if (code === 'ETIMEDOUT' || code === 'ECONNRESET' || code === 'ECONNREFUSED' || code === 'EHOSTUNREACH' || code === 'ENETUNREACH') {
+    return `连接失败（${code}）：请检查本机网络与代理配置`
+  }
+  const message = String(cause?.message ?? (error as Error)?.message ?? error)
+  return message === 'fetch failed' ? '网络请求失败：请检查本机网络与代理配置' : message
 }
 
 /** Resolve `mermaid/dist/mermaid.min.js` from the package's own dependency

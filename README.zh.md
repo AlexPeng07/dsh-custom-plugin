@@ -90,7 +90,7 @@ DeepSeek Harness（DSH）Web GUI 的 Custom 便利套件：个性化外观、天
 会话头部常驻用量徽标（可点击固定）：配置了 API Key 时显示官方余额，未配置时显示本机费用估算（如 `≈¥0.42`）与今日调用次数。面板提供：
 
 - **用量与费用（默认区，无 Key 可用）**：今日/历史用量、预算与费用估算全部来自本机会话记录，不需要任何密钥。
-- **余额查询（可折叠可选项，需要 API Key）**：调用官方 `https://api.deepseek.com/user/balance` 接口，优先显示 CNY，赠送与充值余额分列，并显示账户可用状态；未配置 Key 时该区收起、不显示任何报错。
+- **余额查询（可折叠可选项，需要 API Key）**：调用官方 `https://api.deepseek.com/user/balance` 接口，优先显示 CNY，赠送与充值余额分列，并显示账户可用状态；未配置 Key 时该区收起、不显示任何报错。宿主外呼走本机直连（不读系统代理）；若本机代理/安全软件间歇性对 HTTPS 做 TLS 解密，查询会以「TLS 证书校验失败」等可读原因失败并自动重试（8s/30s/30s，60 秒轮询兜底），顶栏悬停可见原因。
 - **Key 解析顺序**：系统凭据存储（可用时）→ 插件旧状态文件中的 Key → 环境变量 `DEEPSEEK_API_KEY` / `DEEPSEEK_KEY` / `DEEPSEEK_TOKEN`（取值需以 `sk-` 开头）→ DSH 凭据文件 `$DSH_HOME/.credentials.yaml`（自动复用 DSH 已配置的 DeepSeek key，无需重复填写）。桌面版账号登录没有 sk- 密钥，属正常状态。
 - **今日用量**：按模型统计输入 / 输出 / 缓存 token 与调用次数，实时折叠自 `session/event` 事件。
 - **费用估算**：按 DeepSeek 当前官方峰谷价目估算（2026-09-30 核对）——高峰为北京时间周一至周五 9–12、14–18 时；其余时间（含周末）均为空闲时段，按半价计：`deepseek-flash`（旧名 `deepseek-v4-flash` / `deepseek-v4-flash-vision-exp` 仍按 Flash 计价路由）峰值 ¥2 / ¥8，`deepseek-v4-pro` ¥9 / ¥27（每百万 tokens 峰时输入 / 输出，缓存命中 ¥0.04 / 写入与未命中输入同价档），仅供参考。
