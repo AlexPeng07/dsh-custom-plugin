@@ -86,6 +86,25 @@ export const STATIC_CSS = `/* dsh-custom-plugin static styles. Every rule is glo
       background: rgba(0, 0, 0, .1);
     }
   }
+  /* The GUI theme classes are mirrored onto <html> by the client, so the
+     liquid fill has to out-rank the theme frost fills *inside* .vx-root as
+     well. The previous ".vx-root.* .vx-liquid .vx-glass" rules never matched
+     anything — vx-liquid lives on <html>, an ANCESTOR of .vx-root, not a
+     descendant — which left the big panels at the 64% frost fill while the
+     balance hover (mounted outside .vx-root) sat at 10%: the "panel is not
+     liquid, the balance card is" report, verbatim. */
+  :root.vx-liquid.vx-dark .vx-glass {
+    background: rgba(0, 0, 0, .1);
+  }
+  :root.vx-liquid.vx-light .vx-glass {
+    background: rgba(255, 255, 255, .1);
+  }
+  :root.vx-liquid .vx-root.vx-dark .vx-glass {
+    background: rgba(0, 0, 0, .1);
+  }
+  :root.vx-liquid .vx-root.vx-light .vx-glass {
+    background: rgba(255, 255, 255, .1);
+  }
   @supports not (backdrop-filter: url(#vx-lg)) {
     .vx-liquid .vx-glass {
       background: rgba(255, 255, 255, .64);
@@ -766,9 +785,6 @@ export const STATIC_CSS = `/* dsh-custom-plugin static styles. Every rule is glo
     background: rgba(13, 17, 25, .62);
     color: #eef1f7;
   }
-  .vx-root.vx-dark .vx-liquid .vx-glass {
-    background: rgba(0, 0, 0, .1);
-  }
   .vx-root.vx-dark .vx-balance-hover,
   .vx-root.vx-dark .vx-panel,
   .vx-root.vx-dark .vx-modal,
@@ -782,9 +798,6 @@ export const STATIC_CSS = `/* dsh-custom-plugin static styles. Every rule is glo
   .vx-root.vx-light .vx-glass {
     background: rgba(255, 255, 255, .64);
     color: #20242e;
-  }
-  .vx-root.vx-light .vx-liquid .vx-glass {
-    background: rgba(255, 255, 255, .1);
   }
   .vx-root.vx-light .vx-balance-hover,
   .vx-root.vx-light .vx-panel,

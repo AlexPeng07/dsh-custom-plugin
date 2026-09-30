@@ -542,6 +542,12 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     }
   }
 
+  // A desktop shell page can load (and this client can boot) before the host
+  // has finished registering the plugin routes: the first state read then
+  // fails and, without a retry, the client would run — and any later saveCfg
+  // would PERSIST — factory defaults over the user's stored configuration.
+  const LOAD_RETRY_DELAYS = [1500, 3000, 6000]
+  let loadCfgAttempt = 0
   async function loadCfg(): Promise<void> {
     let failure: string | null = null
     try {
@@ -565,6 +571,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
         if (typeof data.apiKeyConfigured === 'boolean') S.apiKeyConfigured = data.apiKeyConfigured
         if (data.credentialStorage === 'system' || data.credentialStorage === 'legacy-state' || data.credentialStorage === 'environment' || data.credentialStorage === 'dsh' || data.credentialStorage === 'none') S.credentialStorage = data.credentialStorage
         if (data.usage !== undefined && data.usage !== null && typeof data.usage === 'object') S.usage = data.usage
+        loadCfgAttempt = 0
       } else if (result.ok !== true) {
         // A rejected state read used to be swallowed, which let a broken host
         // path read as "settings silently reset". Surface it.
@@ -575,7 +582,14 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     }
     if (failure !== null) {
       apiDiagReport('loadCfg: ' + failure)
-      if (S.booted) toast('配置读取失败：' + failure, 'error')
+      if (loadCfgAttempt < LOAD_RETRY_DELAYS.length) {
+        const delay = LOAD_RETRY_DELAYS[loadCfgAttempt]
+        loadCfgAttempt++
+        setTimeout(() => { void loadCfg() }, delay)
+      } else if (S.booted) {
+        // Retries exhausted: now it is a real, user-visible failure.
+        toast('配置读取失败：' + failure, 'error')
+      }
     }
     S.booted = true
     setS({})
@@ -2754,6 +2768,16 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
         setS({ dark })
       }
     }, [s.booted])
+    // Mirror the resolved GUI theme onto <html>: the glass fill rules are
+    // theme-scoped at :root so they reach every surface with one selector —
+    // including ones mounted outside .vx-root (the balance hover), which the
+    // .vx-root-scoped rules can never match.
+    React.useEffect(() => {
+      const d = typeof document !== 'undefined' ? document : null
+      if (d === null) return
+      d.documentElement.classList.toggle('vx-dark', s.dark === true)
+      d.documentElement.classList.toggle('vx-light', s.dark !== true)
+    }, [s.dark])
     // Refresh the turns data while the session is streaming: the turn-tail
     // chips (LaTeX / MathML / Mermaid) appear as soon as the next fetch lands,
     // without waiting for a session switch to trigger one.
