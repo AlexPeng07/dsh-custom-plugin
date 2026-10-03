@@ -71,6 +71,36 @@ export const STATIC_CSS = `/* dsh-custom-plugin static styles. Every rule is glo
       color: #eef1f7;
     }
   }
+  /* The GUI theme can disagree with the OS scheme (dsh selects light/dark
+     independently — dark GUI on a light OS left these surfaces frosted
+     light), so the frost fills and panel text colors key on the mirrored
+     root classes, not the OS alone. The media queries above remain the
+     pre-boot fallback, before the client has applied the classes; the liquid
+     rules below out-rank these by specificity, not by order. */
+  :root.vx-light .vx-glass {
+    background: rgba(255, 255, 255, .64);
+    color: inherit;
+  }
+  :root.vx-dark .vx-glass {
+    background: rgba(13, 17, 25, .62);
+    color: #eef1f7;
+  }
+  :root.vx-light .vx-panel,
+  :root.vx-light .vx-modal,
+  :root.vx-light .vx-folders {
+    color: #20242e;
+  }
+  :root.vx-dark .vx-panel,
+  :root.vx-dark .vx-modal,
+  :root.vx-dark .vx-folders {
+    color: #e8ebf2;
+  }
+  :root.vx-light .vx-balance-hover {
+    color: #20242e;
+  }
+  :root.vx-dark .vx-balance-hover {
+    color: #e8ebf2;
+  }
   /* Liquid glass: the SVG displacement filter bends the backdrop at the
      surface's edges; the chained blur+saturate keeps text over the middle of
      large panels readable (pure displacement leaves the mid-area untouched,
@@ -319,10 +349,6 @@ export const STATIC_CSS = `/* dsh-custom-plugin static styles. Every rule is glo
     border-color: #7fa4e0;
     box-shadow: 0 0 0 2px rgba(127, 164, 224, .35);
   }
-  .vx-swatch:disabled {
-    opacity: .35;
-    cursor: not-allowed;
-  }
   .vx-swatch-label {
     font-size: 10px;
     opacity: .85;
@@ -372,16 +398,6 @@ export const STATIC_CSS = `/* dsh-custom-plugin static styles. Every rule is glo
     border-radius: 9px;
     padding: 6px 10px;
     font-size: 12px;
-  }
-  .vx-textarea {
-    border: 1px solid rgba(128, 140, 160, .4);
-    background: rgba(255, 255, 255, .16);
-    color: inherit;
-    border-radius: 9px;
-    padding: 6px 10px;
-    font-size: 12px;
-    resize: vertical;
-    font-family: inherit;
   }
   .vx-toggle-row {
     display: flex;
@@ -790,4 +806,4 @@ export const STATIC_CSS = `/* dsh-custom-plugin static styles. Every rule is glo
   .vx-root.vx-light .vx-toast {
     background: rgba(26, 32, 44, .92);
   }
-}`
+`

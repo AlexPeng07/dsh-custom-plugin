@@ -30,6 +30,11 @@ function applyImpl(ctx: Context): void {
   // `dshHome()` is a directory; the state path is its sibling file.
   let statePath = join(dshHome(), STATE_FILE)
   let stateLoaded = false
+  // Flipped only when the state file could be neither read nor quarantined
+  // aside: every save path funnels through `saveNow`/`saveSoon`, so gating
+  // here keeps the host from persisting never-loaded defaults over a
+  // document that may still be intact on disk.
+  let stateWritable = true
   const sessionModels = new Map<string, string | null>()
   const pendingUsage: Array<{ sessionId: string; usage: NonNullable<Extract<SessionEvent, { type: 'assistant/message' }>['data']['usage']>; time: number; model: string | null }> = []
 
@@ -42,6 +47,7 @@ function applyImpl(ctx: Context): void {
   const saveSoon = (() => {
     let timer: ReturnType<typeof setTimeout> | undefined
     return (): void => {
+      if (!stateWritable) return
       if (timer !== undefined) clearTimeout(timer)
       timer = setTimeout(() => {
         timer = undefined
@@ -56,7 +62,7 @@ function applyImpl(ctx: Context): void {
     sessionQuery: ctx.sessionQuery,
     state,
     statePath: () => statePath,
-    saveNow: () => saveStateFile(state),
+    saveNow: () => (stateWritable ? saveStateFile(state) : Promise.resolve()),
     reportDiag,
     diagReports,
     attachments: ctx.get('attachments'),
@@ -66,14 +72,23 @@ function applyImpl(ctx: Context): void {
     statePath = path
     if (await host.migrateLegacyApiKey()) reportDiag('legacy API key migrated to system credentials')
     stateLoaded = true
-    for (const item of pendingUsage.splice(0)) host.foldUsage(item.sessionId, item.usage, item.time, item.model)
-    return saveStateFile(state)
+    for (const item of pendingUsage.splice(0)) host.foldUsage(item.sessionId, item.usage, item.time, item.model ?? undefined)
+    try {
+      await saveStateFile(state)
+    } catch (error) {
+      // The load itself succeeded; a failed normalization save (full disk,
+      // read-only home) must not flip the host read-only — later saves retry.
+      reportDiag(`state save failed: ${String((error as Error)?.message ?? error)}`)
+    }
   }).catch((error) => {
-    // Keep the default state usable when the file is unreadable. Events are
-    // still folded after the failed load so they are not silently discarded.
-    reportDiag(`state load failed: ${String((error as Error)?.message ?? error)}`)
+    // The document could be neither read nor preserved aside. Keep the host
+    // usable but read-only: events still fold in memory, while saves are
+    // suppressed — persisting the never-loaded defaults would destroy the
+    // very file the plugin could not read.
+    reportDiag(`state file unreadable, running read-only: ${String((error as Error)?.message ?? error)}`)
+    stateWritable = false
     stateLoaded = true
-    for (const item of pendingUsage.splice(0)) host.foldUsage(item.sessionId, item.usage, item.time, item.model)
+    for (const item of pendingUsage.splice(0)) host.foldUsage(item.sessionId, item.usage, item.time, item.model ?? undefined)
   })
 
   // Daily token usage: fold request/context (model) + assistant/message (usage).
@@ -112,6 +127,8 @@ function applyImpl(ctx: Context): void {
   // first diagram render in the browser does not pay the load latency.
   void host.mermaidFetch().then((result) => {
     reportDiag(result.ok ? `mermaid engine ready (${result.bytes} bytes, ${host.mermaidLoadedSource()})` : `mermaid engine failed: ${result.error}`)
+  }).catch((error) => {
+    reportDiag(`mermaid preheat failed: ${String((error as Error)?.message ?? error)}`)
   })
 
   // The status tool: appearance config, today's usage, balance, timeline sample.

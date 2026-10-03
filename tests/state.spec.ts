@@ -8,8 +8,13 @@ import { describe, expect, it } from 'vitest'
 import { mkdir, readdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { defaultState, loadStateFile, mergeState, normalizeCfg, saveStateFile, STATE_FILE, tempPathFor } from '../src/state.ts'
-import { DEFAULT_CONFIG } from '../src/protocol.ts'
+import { defaultState, loadStateFile, mergeState, normalizeCfg, normalizeFolders, normalizeStars, saveStateFile, STATE_FILE, tempPathFor } from '../src/state.ts'
+import { DEFAULT_CONFIG, type UsageRow } from '../src/protocol.ts'
+
+/** A full ledger row; the sync arithmetic touches every counter. */
+function fullRow(over: Partial<UsageRow>): UsageRow {
+  return { in: 0, out: 0, cacheIn: 0, cacheW: 0, reason: 0, calls: 0, peakIn: 0, peakCacheIn: 0, peakCacheW: 0, peakOut: 0, peakSplitKnown: true, ...over }
+}
 
 describe('defaultState', () => {
   it('starts with the default config and empty collections', () => {
@@ -132,6 +137,200 @@ describe('loadStateFile', () => {
     } finally {
       await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
     }
+  })
+})
+
+describe('loadStateFile failure handling', () => {
+  it('quarantines a corrupt document aside instead of silently adopting defaults over it', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'custom-plugin-corrupt-'))
+    try {
+      const statePath = join(home, STATE_FILE)
+      const garbage = '{ "cfg": '
+      await writeFile(statePath, garbage, 'utf8')
+      const state = defaultState()
+      expect(await loadStateFile(state, home, [])).toBe(statePath)
+      // Defaults were adopted, but the original bytes survive aside,
+      // pid-qualified so two hosts sharing one home cannot fight over the
+      // recovery name — the caller may then save without destroying them.
+      expect(state.cfg).toEqual(DEFAULT_CONFIG)
+      expect(await readFile(`${statePath}.corrupt-${process.pid}`, 'utf8')).toBe(garbage)
+      expect(await readdir(home)).toEqual([`${STATE_FILE}.corrupt-${process.pid}`])
+    } finally {
+      await rm(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+    }
+  })
+
+  it('quarantines an unreadable document after the retry ladder exhausts', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'custom-plugin-unreadable-'))
+    try {
+      // A directory at the state path fails readFile without ENOENT on every
+      // platform (EISDIR on POSIX, EPERM on Windows) — the stand-in for an
+      // AV-held or sync-client-locked file that never unlocks.
+      const statePath = join(home, STATE_FILE)
+      await mkdir(statePath)
+      const state = defaultState()
+      expect(await loadStateFile(state, home, [])).toBe(statePath)
+      expect(state.cfg).toEqual(DEFAULT_CONFIG)
+      expect(await readdir(home)).toEqual([`${STATE_FILE}.corrupt-${process.pid}`])
+    } finally {
+      await rm(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+    }
+  })
+
+  it('retries a transient read failure and merges once the file recovers', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'custom-plugin-transient-'))
+    try {
+      const statePath = join(home, STATE_FILE)
+      await mkdir(statePath)
+      // Heal the path (blocking directory -> valid document) well before the
+      // one retry fires, so the ladder's second read finds real content.
+      setTimeout(() => {
+        void rm(statePath, { recursive: true, force: true })
+          .then(() => writeFile(statePath, JSON.stringify({ cfg: { bg: '雾蓝' } }), 'utf8'))
+          .catch(() => { /* a failed heal fails the merge assertion below */ })
+      }, 10)
+      const state = defaultState()
+      await loadStateFile(state, home, [250])
+      expect(state.cfg.bg).toBe('雾蓝')
+      expect((await readdir(home)).filter((name) => name !== STATE_FILE)).toEqual([])
+    } finally {
+      await rm(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+    }
+  })
+
+  it('rejects and leaves the document untouched when quarantine itself fails', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'custom-plugin-quarantine-fail-'))
+    try {
+      const statePath = join(home, STATE_FILE)
+      const garbage = '{ broken'
+      await writeFile(statePath, garbage, 'utf8')
+      // A non-empty directory squatting on the recovery name makes the
+      // quarantine rename fail on every platform; the loader must then
+      // reject so its caller keeps the host read-only instead of saving
+      // defaults over the file it could not read.
+      await mkdir(join(`${statePath}.corrupt-${process.pid}`, 'blocked'), { recursive: true })
+      const state = defaultState()
+      await expect(loadStateFile(state, home, [])).rejects.toThrow()
+      expect(await readFile(statePath, 'utf8')).toBe(garbage)
+    } finally {
+      await rm(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+    }
+  })
+})
+
+describe('saveStateFile cross-host sync', () => {
+  it('merges another host\'s writes back in instead of overwriting them', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'custom-plugin-sync-'))
+    try {
+      const statePath = join(home, STATE_FILE)
+      const f1 = { id: 'f1', name: '工作', children: [], sessionIds: [], workspaceIds: [], prompts: [] }
+      const f2 = { id: 'f2', name: '桌面', children: [], sessionIds: [], workspaceIds: [], prompts: [] }
+      // What this host booted from.
+      await writeFile(statePath, JSON.stringify({ folders: [f1] }), 'utf8')
+      const state = defaultState()
+      await loadStateFile(state, home, [])
+      // The other host saves while this one is running: its own usage day and
+      // a folder created in its GUI.
+      await writeFile(statePath, JSON.stringify({
+        folders: [f1, f2],
+        usage: { '2026-09-20': { 'deepseek-chat': fullRow({ in: 10, calls: 1 }) } },
+      }), 'utf8')
+      // Local progress: a config edit (dirty section) and a usage day of our own.
+      state.cfg.bg = '石板蓝'
+      state.usage['2026-09-21'] = { 'deepseek-chat': fullRow({ in: 7, calls: 1 }) }
+      await saveStateFile(state, home)
+      const saved = JSON.parse(await readFile(statePath, 'utf8')) as { cfg?: { bg?: string }; folders?: unknown[]; usage?: Record<string, Record<string, UsageRow>> }
+      // The untouched folders section adopts the external version instead of
+      // reverting it; the locally-dirty config keeps the local edit.
+      expect(saved.folders).toHaveLength(2)
+      expect(saved.cfg?.bg).toBe('石板蓝')
+      // Both hosts' usage days survive the save.
+      expect(saved.usage?.['2026-09-20']?.['deepseek-chat']?.in).toBe(10)
+      expect(saved.usage?.['2026-09-21']?.['deepseek-chat']?.in).toBe(7)
+    } finally {
+      await rm(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+    }
+  })
+
+  it('unions two hosts\' concurrent additions to the same usage row exactly', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'custom-plugin-sync-row-'))
+    try {
+      const statePath = join(home, STATE_FILE)
+      // The shared base both hosts last saved.
+      await writeFile(statePath, JSON.stringify({ usage: { '2026-09-20': { 'deepseek-chat': fullRow({ in: 10, calls: 2 }) } } }), 'utf8')
+      const state = defaultState()
+      await loadStateFile(state, home, [])
+      // The other host folded +5 in / +1 call since the base.
+      await writeFile(statePath, JSON.stringify({ usage: { '2026-09-20': { 'deepseek-chat': fullRow({ in: 15, calls: 3 }) } } }), 'utf8')
+      // This host folded +3 in / +1 call since the base.
+      const row = state.usage['2026-09-20']['deepseek-chat']
+      row.in = 13
+      row.calls = 3
+      await saveStateFile(state, home)
+      const saved = JSON.parse(await readFile(statePath, 'utf8')) as { usage?: Record<string, Record<string, UsageRow>> }
+      // theirs + ours − base per counter: (15+13−10) in, (3+3−2) calls.
+      expect(saved.usage?.['2026-09-20']?.['deepseek-chat']?.in).toBe(18)
+      expect(saved.usage?.['2026-09-20']?.['deepseek-chat']?.calls).toBe(4)
+    } finally {
+      await rm(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+    }
+  })
+
+  it('saves over a fresh install without a merge attempt', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'custom-plugin-sync-fresh-'))
+    try {
+      const state = defaultState()
+      await loadStateFile(state, home, [])
+      state.cfg.bg = '雾蓝'
+      await saveStateFile(state, home)
+      const saved = JSON.parse(await readFile(join(home, STATE_FILE), 'utf8')) as { cfg?: { bg?: string } }
+      expect(saved.cfg?.bg).toBe('雾蓝')
+      expect((await readdir(home)).filter((name) => name !== STATE_FILE)).toEqual([])
+    } finally {
+      await rm(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+    }
+  })
+})
+
+describe('normalizeFolders / normalizeStars (browser edit gate)', () => {
+  const leaf = { id: 'f1', name: '工作', children: [], sessionIds: ['s1', 's1'], workspaceIds: [], prompts: [] }
+
+  it('accepts a valid tree and dedupes string id lists', () => {
+    const folders = normalizeFolders([leaf, { ...leaf, id: 'f2', name: '生活', children: [{ ...leaf, id: 'f3' }] }])
+    expect(folders).toHaveLength(2)
+    expect(folders![0].sessionIds).toEqual(['s1'])
+    expect(folders![1].children[0].id).toBe('f3')
+  })
+
+  it('rejects duplicate ids, missing arrays, and non-string members', () => {
+    expect(normalizeFolders([leaf, { ...leaf, id: 'f1' }])).toBeNull()
+    expect(normalizeFolders([{ ...leaf, sessionIds: 'nope' }])).toBeNull()
+    expect(normalizeFolders([{ ...leaf, sessionIds: [1] }])).toBeNull()
+    expect(normalizeFolders([{ ...leaf, name: 42 }])).toBeNull()
+    expect(normalizeFolders('nope')).toBeNull()
+  })
+
+  it('rejects a tree deeper than the cap instead of letting stringify blow up later', () => {
+    const deep = (depth: number): unknown => {
+      let node: unknown = { id: `leaf-${depth}`, name: 'x', children: [], sessionIds: [], workspaceIds: [], prompts: [] }
+      for (let i = 0; i < depth; i++) node = { id: `n-${i}`, name: 'x', children: [node], sessionIds: [], workspaceIds: [], prompts: [] }
+      return node
+    }
+    expect(normalizeFolders([deep(30)])).not.toBeNull()
+    expect(normalizeFolders([deep(200)])).toBeNull()
+  })
+
+  it('accepts a well-formed star map and rejects unsafe keys and bad entries', () => {
+    expect(normalizeStars({ s1: { 12: true }, s2: {} })).toEqual({ s1: { 12: true }, s2: {} })
+    // JSON — the actual wire shape — makes __proto__ an own property; an
+    // object literal would have set the prototype instead.
+    expect(normalizeStars(JSON.parse('{"__proto__": {"1": true}}'))).toBeNull()
+    expect(normalizeStars({ constructor: { 1: true } })).toBeNull()
+    expect(normalizeStars({ prototype: { 1: true } })).toBeNull()
+    expect(normalizeStars({ s1: { x: true } })).toBeNull()
+    expect(normalizeStars({ s1: { 12: false } })).toBeNull()
+    expect(normalizeStars({ s1: [true] })).toBeNull()
+    expect(normalizeStars([])).toBeNull()
   })
 })
 

@@ -1,7 +1,7 @@
 {
   "name": "@alexpeng/dsh-custom-plugin",
   "description": "Custom convenience suite for the dsh web GUI: appearance, folders, prompts, session export/search, Mermaid, quote reply, usage analytics, local budget, key-free backups, and a Ctrl/Cmd+K command palette; dual-face plugin mounted without dsh source changes.",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "type": "module",
   "icon": "./icon.svg",
   "main": "lib/index.js",

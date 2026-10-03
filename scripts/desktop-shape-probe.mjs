@@ -3,8 +3,10 @@
  * Desktop-port probe: hit the dsh Desktop Host (127.0.0.1:19387) with the
  * exact header shape the Electron shell produces when forwarding renderer
  * requests — loopback Host, no `origin`, no `sec-fetch-site` — and assert the
- * plugin routes answer. Read-only against the real home: no /state writes.
- * Negative probes (foreign Origin / cross-site) must still be 403.
+ * plugin routes answer. No /state POSTs, but the usage-scan probe below DOES
+ * rebuild today's ledger and persist `$DSH_HOME/custom-plugin-state.json` —
+ * point DSH_HOME at a scratch home when that matters. Negative probes
+ * (foreign Origin / cross-site) must still be 403.
  * @module dsh-custom-plugin/scripts/desktop-shape-probe
  */
 import { readdirSync } from 'node:fs'

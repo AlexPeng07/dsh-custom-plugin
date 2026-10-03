@@ -23,7 +23,7 @@
  */
 
 import { createServer } from 'node:http'
-import { existsSync, readdirSync } from 'node:fs'
+import { existsSync, readdirSync, statSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { dirname, join, delimiter } from 'node:path'
@@ -34,6 +34,15 @@ import semver from 'semver'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const ID = '@alexpeng/dsh-custom-plugin'
+
+// An unbuilt tree used to die below with a raw ENOENT stack; name the fix.
+for (const artifact of ['lib/client.js', 'lib/index.js']) {
+  if (!existsSync(join(root, artifact))) {
+    console.error(`✗ ${artifact} is missing — run pnpm build before smoke`)
+    process.exit(1)
+  }
+}
+
 const failures = []
 const ok = (message) => { console.log(`✓ ${message}`) }
 const bad = (message) => { failures.push(message); console.error(`✗ ${message}`) }
@@ -53,6 +62,53 @@ if (/return\s+module\.exports;\s*\}\s*\}\s*\)\s*;\s*$/.test(clientBody)) {
   ok('lib/client.js: CJS factory footer present')
 } else {
   bad('lib/client.js: factory footer missing — bundle is not a loader closure')
+}
+
+// ── externals contract: the bundle must not require beyond the seed table ─────
+// The client bundle resolves its externals against the web shell's frozen
+// seed table, and tsdown's neverBundle list (PLATFORM_MODULES) is the
+// declaration of what that table is expected to answer. Nothing else
+// cross-checks the two: a require() the declaration does not cover fails at
+// runtime against the seed table and the bundle silently vanishes — the
+// breakage class only a live host would reveal.
+{
+  const tsdownSource = await readFile(join(root, 'tsdown.config.ts'), 'utf8')
+  const block = /const PLATFORM_MODULES = \[([^\]]+)\]/s.exec(tsdownSource)
+  const declared = block === null ? [] : [...block[1].matchAll(/['"]([^'"]+)['"]/g)].map((m) => m[1])
+  if (declared.length === 0) {
+    bad('tsdown.config.ts: PLATFORM_MODULES could not be read — the externals cross-check is blind')
+  } else {
+    const required = new Set([...clientBody.matchAll(/\brequire\((['"])([^'"]+)\1\)/g)].map((m) => m[2]))
+    const undeclared = [...required].filter((id) => !declared.includes(id))
+    if (undeclared.length > 0) {
+      bad(`lib/client.js requires ${undeclared.join(', ')} — outside PLATFORM_MODULES, so the shell seed table would be asked for a specifier it was never declared to answer`)
+    } else {
+      ok(`lib/client.js externals stay within PLATFORM_MODULES (requires: ${[...required].join(', ') || 'none'})`)
+    }
+  }
+}
+
+// A green smoke against a stale artifact certifies the previous build. The
+// runbook says build-then-smoke; compare the artifact against everything
+// that feeds it so the order is enforced, not assumed.
+{
+  const newestUnder = (dir) => {
+    let newest = 0
+    for (const item of readdirSync(dir, { withFileTypes: true, recursive: true })) {
+      if (!item.isFile()) continue
+      // Dirent.path was renamed parentPath in v20.12 and removed in v24.
+      const mtime = statSync(join(item.parentPath ?? item.path, item.name)).mtimeMs
+      if (mtime > newest) newest = mtime
+    }
+    return newest
+  }
+  const srcNewest = Math.max(newestUnder(join(root, 'src/client')), statSync(join(root, 'tsdown.config.ts')).mtimeMs)
+  const libMtime = statSync(join(root, 'lib/client.js')).mtimeMs
+  if (srcNewest > libMtime) {
+    bad('lib/client.js is older than src/client or tsdown.config.ts — rebuild first: pnpm build')
+  } else {
+    ok('lib/client.js is up to date with src/client and tsdown.config.ts')
+  }
 }
 
 const nodeHalf = await import(pathToFileURL(join(root, 'lib/index.js')).href)
@@ -241,9 +297,13 @@ function findBrowser() {
   ].filter((item) => typeof item === 'string' && item !== '')
   const byPath = configured.find((item) => existsSync(item))
   if (byPath !== undefined) return byPath
-  // Bare executable names only resolve through PATH.
+  // Bare executable names only resolve through PATH; on Windows they carry
+  // the .exe suffix (probing bare "msedge" there can never hit).
+  const names = process.platform === 'win32'
+    ? ['msedge.exe', 'chrome.exe', 'chromium.exe']
+    : ['google-chrome', 'chromium', 'chromium-browser', 'msedge']
   const dirs = (process.env.PATH ?? '').split(delimiter).filter((dir) => dir !== '')
-  for (const name of ['google-chrome', 'chromium', 'chromium-browser', 'msedge']) {
+  for (const name of names) {
     for (const dir of dirs) {
       const candidate = join(dir, name)
       if (existsSync(candidate)) return candidate

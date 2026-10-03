@@ -25,3 +25,12 @@ jobs:
       - run: pnpm build
       - name: Artifact and manifest contract checks (no browser)
         run: node scripts/smoke.mjs --static-only
+      - name: Setup Chromium for the registration handshake
+        id: chrome
+        uses: browser-actions/setup-chrome@v1
+        with:
+          chrome-version: stable
+      - name: Registration handshake (headless Chromium)
+        run: node scripts/smoke.mjs
+        env:
+          SMOKE_BROWSER: ${{ steps.chrome.outputs.browser-path }}

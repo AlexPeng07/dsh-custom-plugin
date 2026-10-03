@@ -36,7 +36,9 @@ export const PALETTE: Array<[string, string, string]> = [
   ['淡金', '#F4F1E4', '#E6E1D0'],
 ]
 
-function hexToRgb(hex: string): [number, number, number] {
+/** Parse a #rrggbb (or bare rrggbb) hex color; malformed input yields the
+ * palette's neutral gray rather than throwing. */
+export function hexToRgb(hex: string): [number, number, number] {
   const match = /^#?([0-9a-f]{6})$/i.exec(String(hex ?? '').trim())
   if (match === null) return [235, 238, 242]
   const value = parseInt(match[1], 16)

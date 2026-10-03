@@ -4,6 +4,94 @@ All notable changes to this project are documented here. The format loosely
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions
 follow [Semantic Versioning](https://semver.org/).
 
+## 0.7.1 — 2026-10-03
+
+数据安全与健壮性加固版：封住两条不可恢复配置丢失路径与一条跨宿主丢更新路径，装上浏览器提交的形状门，补齐卸载回收与凭据状态缓存；测试从 143 增至 185。
+
+### Fixed
+
+- **宿主读档失败不再静默用默认值覆盖状态文件**：此前 `loadStateFile` 把
+  `ENOENT`、瞬态占用（Windows 杀毒扫描 / 同步盘 / 与桌面宿主的 rename 竞争）
+  与 JSON 损坏一律折叠成「无文件」，随后启动流程立即把默认文档写入真实路径——
+  folders / prompts / stars / 用量台账被无条件清空且不留副本。现在：瞬态错误按
+  1.5s/3s/6s 重试（与客户端重试梯子同节奏）；重试耗尽或 JSON 损坏时先以
+  pid 后缀名将原文件改名隔离（`.corrupt-<pid>`，两个宿主共享一个
+  `$DSH_HOME` 也不会互相抢占恢复名）再采用默认值；仅当原文件既读不出又移不走
+  时 loader 才 reject，宿主转入只读模式（抑制一切保存）而不是销毁可能完好的
+  文档。启动后的首次规范化保存失败也不再误入加载失败分支。
+- **客户端重试耗尽后不再把出厂空配置写回宿主**：桌面壳页面可能先于宿主路由
+  就绪，客户端重试梯子（约 10.5 秒）耗尽后停在出厂默认值；此后用户切换任何
+  开关都会触发一次全量 POST，把已存 folders / prompts / stars 整组替换为空。
+  现在 `saveCfg` 以「曾成功读取过状态」为门槛：未加载成功一律改为重新读取并
+  提示「配置尚未读取完成，已重新加载，请重试」。
+- **插件停用/重声明后全局副作用全部回收**：卸载清理器此前只注销插槽并移除动
+  态样式，`theme.overrideTokens` 的设计令牌覆盖（停用后 GUI 配色仍被插件锁
+  死）、`<html>` 上的 `vx-liquid/vx-dark/vx-light` 类、液态玻璃 SVG 滤镜节点、
+  待触发的余额重试定时器（会继续外呼最多 3 次）全部残留。现在清理器逐一还原。
+- **共享 `$DSH_HOME` 的两个宿主不再互相清空对方的写入**（Web 与 Desktop 各自持有整份内存文档、整文件回写，最后写者赢）：现在每次保存前先用 stat 身份（mtime+size）对比本进程上次读/写看到的文件，发现外部变更就回读并做三方合并——本进程未动过的配置段（cfg/folders/prompts/stars）采纳外部版本，动过的保留本地版本，用量台账按计数器做 `对方 + 本地 − 共同基线` 的精确并集（两个宿主的会话流来自不同 profile、天然不重叠）。启动加载也改用同一文件句柄做 fstat+read，基线与合并字节描述同一份文档。
+- **`POST /state` 形状门**：浏览器提交的 folders / stars 此前未经校验直接落
+  state——畸形深层嵌套可让此后每次保存的 `JSON.stringify` 抛 `RangeError`，
+  保存从此持续失败需手改状态文件。现在 `normalizeFolders`（唯一 id、纯字符
+  串 id 列表、深度 ≤32、节点 ≤2000）与 `normalizeStars`（安全对象键、纯数字
+  序号、`true` 值、总量 ≤10000）把关，违规整笔拒绝（400「文件夹数据无效」/
+  「星标数据无效」），绝不截断——客户端持有全量文档，静默丢段等于丢数据。
+- **缓冲用量回放不再把宿主已学到的模型覆盖为 `unknown`**：启动缓冲的
+  `session/event` 用量回放时，`null` 模型改为传 `undefined`，让宿主回退到自己
+  在加载期间学到的 session 模型映射。
+- **用量重扫不再白付全量代价后必然失败**：流式对话期间触发重扫时，revision 检查从「全部 I/O 完成后查一次」改为每个会话读取前检查，已注定作废的扫描会立即停止读取剩余会话日志。
+- **Mermaid CDN 兜底不再被 200-HTML 投毒**：绑架门户/镜像异常返回的 200 HTML 页此前会被缓存为「引擎」且宿主生命周期内不再重取；现在要求载荷是 ≥1000 字节、不以 `<` 开头的脚本形态，否则记为该镜像失败并继续尝试下一个。
+- **客户端脚本加载挂起不再无限等待**：`ensureMermaid` 的 120ms 轮询等待没有出口，网络黑洞（onload/onerror 都不触发）会让每个流式新代码块再挂一个永久等待者、「预加载」按钮永远「加载中」；现在 30 秒看门狗翻到 failed 并移除 script 标签，重试可重新插入。
+- **GUI 主题与 OS 配色不一致时玻璃/面板不再用错颜色**：深色 GUI + 浅色 OS 下余额悬浮卡、面板、模态保持浅色磨砂（反之亦然）——这些规则此前只跟 `prefers-color-scheme` 走；现在按客户端镜像到 `<html>` 的 `vx-dark/vx-light` 类选择，媒体查询降级为类就绪前的启动兜底（液态玻璃规则本就按此模式工作，磨砂路径对齐）。
+
+### Changed
+
+- **凭据状态短 TTL 缓存**：`credentialStatus` 每次 `/state` GET 与保存响应都
+  打一次 OS keychain + 读凭据文件；现在对「来源判定」结果缓存 5 秒（从不缓
+  存键值本身），`applyEdit` 与遗留迁移立即失效，保存响应永远如实反映刚应用
+  的编辑。
+- **长会话交互开销**：`TurnTailEntry`（每条消息一个）对轮次数据的查找从每次 store 变更 O(轮数) 线性扫描改为 fetch 时构建的 `seq → item` Map O(1) 查表；选中拖拽时 `selectionchange` 以 60Hz 触发 `setS`，现在文本与坐标未变（<1px）时跳过发布；用量面板的 90 天汇总/按天/按模型统计改为 `useMemo`（预算输入每次击键不再重算全部统计）；面板拖拽改为 mousemove 直写 DOM、mouseup 才落 store；预算状态判定复用 `productivity.budgetState`（此前为生产死代码，客户端内联了一份会漂移的副本）。
+- **死代码清理**：六个无引用 ICONS 条目（clock/fork/arrowUp/arrowDown/moon/
+  sun）、两条无匹配死规则（`.vx-swatch:disabled`、`.vx-textarea`）移除；
+  `hexToRgb` 收敛到 palette.ts 单一导出实现。
+- **smoke 收紧**：未构建即跑 smoke 给出明确「先 pnpm build」报错而非裸 ENOENT 堆栈；新增 bundle `require()` 字面量 ⊆ `PLATFORM_MODULES` 交叉校验（防未声明外部化导致的静默消失类断裂）；`lib/client.js` 落后于 `src/client` 或 `tsdown.config.ts` 时判红（防对过期产物盖章）；Windows 下 PATH 探测补 `.exe` 后缀。
+- **typecheck 收编构建配置**：`tsdown.config.ts`、`vitest.config.ts` 进入 `pnpm typecheck` 范围。
+- **CI 补浏览器段**：`setup-chrome` 后跑全量 `pnpm smoke`——客户端注册握手
+  （bundle 必须注册 {id, factory} 且不物化、无页面错误）首次进入 CI，此前只
+  在本机跑。
+
+### Tests
+
+测试从 143 增至 185。
+
+- **路由错误面**（信任边界此前只测了围栏与备份校验）：全部路由的 405、坏
+  JSON → 400、流级超限 → 413、timeline/export 缺 `sessionId` → 400、kinds
+  数组内单项非法 → 400、`POST /state` 成功路径与 `applyEdit` 失败 → 400 映射、
+  Mermaid 脚本路由引擎未就绪 → 503 及其围栏 403。
+- **状态加载失败处理**：损坏文档隔离、重试耗尽后隔离、瞬态故障恢复后正常合
+  并、隔离失败时 reject 且原文件字节不动。
+- **跨宿主同步合并**：外部写入按段采纳/保留、同一用量行两宿主并发累加的精确
+  并集、全新安装保存不触发合并。
+- **形状门**：合法树/星标通过、重复 id 与非字符串成员拒绝、超深树拒绝、不安
+  全对象键（`JSON.parse` 产生的自有 `__proto__`）拒绝。
+- **装载入口集成测试**（`src/index.ts` 此前零覆盖）：全路由与状态工具注册、
+  启动规范化落盘、`stateReady` 前的用量缓冲、500ms 防抖合并为一次写入、损坏
+  文档隔离后继续写入、隔离失败转只读（诊断含 read-only、内存台账仍在、磁盘
+  无写入）、fiber 卸载回收路由/工具并重新武装单例守卫。
+- **单例守卫 / 家目录 / 凭据存储零覆盖补齐**：`mountOnce` 首挂生效、重挂静默、
+  fiber 卸载后重武装（effect 须「返回」解标记的契约被锁死）；`resolveDshHome`
+  的 `~` 展开与相对路径锚定；keytar 缺席时 `SystemCredentialStore` 全操作软
+  失败（本仓库与最小安装实际走的路径）。
+- **凭据缓存**：TTL 窗口内命中缓存、编辑后失效重解析。
+- **样式不变量**（`styles.spec.ts`）：把 0.7.0 的实发 bug 类锁死为断言
+  ——`.vx-liquid` 永不出现在 `.vx-root` 之后（死规则类）、磨砂/液态玻璃与余
+  额卡必须按 `:root.vx-dark/vx-light` 主题类出规则、无退役类名（vx-dots /
+  vx-timeline）、花括号平衡。测试首次落地就抓出一个存量孤儿 `}`（历史上删
+  媒体块残留，浏览器静默忽略），已清除。
+- **Mermaid 载荷校验**：200-HTML 拒收并落到下一镜像、全部镜像 HTML 时不投毒
+  缓存、过小 200 体拒收。
+- **用量重扫提前中止**：扫描进行中来新用量时，剩余会话不再被读取即返回重试
+  错误。
+
 ## 0.7.0 — 2026-09-30
 
 桌面版适配修复版。0.6.0 及之前的产物在 dsh Desktop 里几乎全部功能失效——本版

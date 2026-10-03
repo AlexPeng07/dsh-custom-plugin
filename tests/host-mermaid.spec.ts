@@ -23,6 +23,10 @@ function makeHost(localMermaidPath?: () => string | null): CustomPluginHost {
   })
 }
 
+/** A CDN body that passes the payload sanity check (script-shaped, past the
+ * size floor) without being the real 3.5 MB bundle. */
+const STUB = '// mermaid stub\n' + 'x'.repeat(2000)
+
 describe('mermaidFetch local-first', () => {
   it('loads the bundled engine from disk without touching the network', async () => {
     const fetchSpy = vi.fn()
@@ -55,12 +59,12 @@ describe('mermaidFetch local-first', () => {
   })
 
   it('falls back to the CDN mirrors when no local dependency resolves', async () => {
-    const fetchSpy = vi.fn(async () => new Response('// mermaid stub', { status: 200 }))
+    const fetchSpy = vi.fn(async () => new Response(STUB, { status: 200 }))
     vi.stubGlobal('fetch', fetchSpy)
     try {
       const host = makeHost(() => null)
       const result = await host.mermaidFetch()
-      expect(result).toEqual({ ok: true, bytes: 15 })
+      expect(result).toEqual({ ok: true, bytes: STUB.length })
       expect(host.mermaidLoadedSource()).toBe('cdn')
       expect(fetchSpy).toHaveBeenCalledTimes(1)
     } finally {
@@ -73,7 +77,7 @@ describe('mermaidFetch local-first', () => {
     const gate = new Promise<void>((resolve) => { release = resolve })
     const fetchSpy = vi.fn(async () => {
       await gate
-      return new Response('// mermaid stub', { status: 200 })
+      return new Response(STUB, { status: 200 })
     })
     vi.stubGlobal('fetch', fetchSpy)
     try {
@@ -83,7 +87,52 @@ describe('mermaidFetch local-first', () => {
       await Promise.resolve()
       expect(fetchSpy).toHaveBeenCalledTimes(1)
       release()
-      await expect(Promise.all([first, second])).resolves.toEqual([{ ok: true, bytes: 15 }, { ok: true, bytes: 15 }])
+      await expect(Promise.all([first, second])).resolves.toEqual([{ ok: true, bytes: STUB.length }, { ok: true, bytes: STUB.length }])
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('refuses to cache an HTML interstitial and falls through to the next mirror', async () => {
+    // A captive portal answers 200 with a login page; the payload check must
+    // reject it instead of poisoning the host-lifetime engine cache.
+    const responses = ['<!doctype html><html><body>sign in</body></html>' + 'x'.repeat(2000), STUB]
+    let call = 0
+    const fetchSpy = vi.fn(async () => new Response(responses[Math.min(call++, responses.length - 1)], { status: 200 }))
+    vi.stubGlobal('fetch', fetchSpy)
+    try {
+      const host = makeHost(() => null)
+      const result = await host.mermaidFetch()
+      expect(result).toEqual({ ok: true, bytes: STUB.length })
+      expect(host.mermaidLoadedSource()).toBe('cdn')
+      expect(fetchSpy).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('fails without caching when every mirror serves an HTML page', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('<html>blocked</html>' + 'x'.repeat(2000), { status: 200 })))
+    try {
+      const host = makeHost(() => null)
+      const result = await host.mermaidFetch()
+      expect(result.ok).toBe(false)
+      if (result.ok === false) expect(result.error).toContain('无法获取 Mermaid 引擎')
+      expect(host.mermaidScript()).toBe('')
+      expect(host.mermaidBytes()).toBe(0)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('rejects a too-small 200 body instead of caching it as the engine', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('// tiny', { status: 200 })))
+    try {
+      const host = makeHost(() => null)
+      const result = await host.mermaidFetch()
+      expect(result.ok).toBe(false)
+      expect(host.mermaidScript()).toBe('')
+      expect(host.mermaidBytes()).toBe(0)
     } finally {
       vi.unstubAllGlobals()
     }

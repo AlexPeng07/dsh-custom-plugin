@@ -125,6 +125,47 @@ describe('CustomPluginHost.usageScan', () => {
     expect(state.usage[dayKey(time)]['deepseek-v4-flash'].in).toBe(20)
   })
 
+  it('stops reading sessions once live usage invalidates the scan', async () => {
+    const state = defaultState()
+    const time = Date.now()
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    let reads = 0
+    const records = Array.from({ length: 9 }, (_, index) => ({ header: { id: `session-${index}` } }))
+    const sessionQuery = {
+      listSessions: async () => records,
+      readSession: async () => {
+        reads++
+        // Every read parks: the four concurrency workers all sit on their
+        // first session until the live event lands.
+        await gate
+        return { events: [requestContext(time), usageEvent(time, 1)] }
+      },
+    }
+    const host = new CustomPluginHost({
+      sessionQuery: sessionQuery as never,
+      state,
+      statePath: () => 'custom-plugin-state.json',
+      saveNow: async () => {},
+      reportDiag: () => {},
+      diagReports: [],
+      credentialStore: { available: false, get: async () => '', set: async () => false, clear: async () => false },
+    })
+    host.rememberModel('live-session', 'deepseek-v4-flash')
+
+    const scan = host.usageScan()
+    await new Promise<void>((resolve) => setTimeout(resolve, 10))
+    expect(reads).toBe(4)
+    host.foldUsage('live-session', { inputTokens: 20, outputTokens: 5 }, time)
+    release()
+    const result = await scan
+
+    expect(result).toEqual({ ok: false, error: '扫描期间产生了新用量，未覆盖现有用量，请稍后重试' })
+    // The remaining five sessions are skipped by the per-item revision check
+    // instead of being read and then discarded.
+    expect(reads).toBe(4)
+  })
+
   it('returns the replayed day so a scan crossing midnight cannot relabel it', async () => {
     const state = defaultState()
     const time = Date.now()

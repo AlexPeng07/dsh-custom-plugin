@@ -17,7 +17,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { DEFAULT_CONFIG, type ConversationSearchItem, type ConversationSearchKind, type CredentialStorage, type CustomPluginConfig, type FolderNode, type PromptItem, type TimelineItem, type UsageRow } from '../protocol.ts'
 import { createUsageRow, dayKey, mergeUsageRow } from '../usage.ts'
 import { DEEPSEEK_PRICING_CHECKED_ON, DEEPSEEK_PRICING_SOURCE_URL, estimateUsageCostCny, usageCostBreakdown } from '../pricing.ts'
-import { DARK_CANVAS_LIGHTNESS, PALETTE, toDarkRamp } from './palette.ts'
+import { DARK_CANVAS_LIGHTNESS, hexToRgb, PALETTE, toDarkRamp } from './palette.ts'
 import {
   apiBalanceGet,
   apiBackupExport,
@@ -32,7 +32,7 @@ import {
   apiTimelineGet,
   apiUsageScan,
 } from './api.ts'
-import { archiveBatch, fillPromptTemplate, isCommandPaletteShortcut, normalizePromptItem, parsePromptsMarkdown, promptsMarkdown, promptVariables, summarizeUsage, usageCsv } from '../productivity.ts'
+import { archiveBatch, budgetState, fillPromptTemplate, isCommandPaletteShortcut, normalizePromptItem, parsePromptsMarkdown, promptsMarkdown, promptVariables, summarizeUsage, usageCsv } from '../productivity.ts'
 import { MERMAID_SCRIPT_PATH } from '../protocol.ts'
 import { isGenericInfostring, isMermaidCode, normalizeMermaidText } from './mermaid-code.ts'
 import { mermaidLiveUrl } from './mermaid-url.ts'
@@ -129,6 +129,10 @@ interface Store {
   usage: Record<string, Record<string, UsageRow>>
   sessionId: string | null
   turns: { sessionId: string; items: TimelineItem[] } | null
+  /** seq → item index over `turns.items`, built once per fetch: one
+   * TurnTailEntry per rendered turn reads it on every store change, and a
+   * linear `find` per entry made each store event cost O(turns × entries). */
+  turnsBySeq: Map<number, TimelineItem> | null
   anchors: Map<number, { el: HTMLElement; turn: TurnLocationLike | null }>
   panelOpen: boolean
   panelTab: string
@@ -250,6 +254,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     usage: {},
     sessionId: null,
     turns: null,
+    turnsBySeq: null,
     anchors: new Map(),
     panelOpen: false,
     panelTab: 'look',
@@ -326,7 +331,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       sessionScopeHolders++
       if (S.sessionId !== id) {
         S.anchors.clear()
-        setS({ sessionId: id, turns: null })
+        setS({ sessionId: id, turns: null, turnsBySeq: null })
         void fetchTurns(id)
       }
       return () => {
@@ -336,7 +341,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
         // node the next session never rendered.
         if (sessionScopeHolders === 0 && S.sessionId === id) {
           S.anchors.clear()
-          setS({ sessionId: null, turns: null })
+          setS({ sessionId: null, turns: null, turnsBySeq: null })
         }
       }
     }, [id])
@@ -347,7 +352,6 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     folder: [['path', { d: 'M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z' }]],
     folderPlus: [['path', { d: 'M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z' }], ['line', { x1: 12, y1: 10, x2: 12, y2: 16 }], ['line', { x1: 9, y1: 13, x2: 15, y2: 13 }]],
     zap: [['path', { d: 'M13 2 3 14h9l-1 8 10-12h-9l1-8z' }]],
-    clock: [['circle', { cx: 12, cy: 12, r: 10 }], ['polyline', { points: '12 6 12 12 16 14' }]],
     download: [['path', { d: 'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4' }], ['polyline', { points: '7 10 12 15 17 10' }], ['line', { x1: 12, y1: 15, x2: 12, y2: 3 }]],
     gitBranch: [['line', { x1: 6, y1: 3, x2: 6, y2: 15 }], ['circle', { cx: 18, cy: 6, r: 3 }], ['circle', { cx: 6, cy: 18, r: 3 }], ['path', { d: 'M18 9a9 9 0 0 1-9 9' }]],
     wrench: [['path', { d: 'M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z' }]],
@@ -355,7 +359,6 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     info: [['circle', { cx: 12, cy: 12, r: 10 }], ['line', { x1: 12, y1: 16, x2: 12, y2: 12 }], ['line', { x1: 12, y1: 8, x2: 12.01, y2: 8 }]],
     x: [['line', { x1: 18, y1: 6, x2: 6, y2: 18 }], ['line', { x1: 6, y1: 6, x2: 18, y2: 18 }]],
     star: [['path', { d: 'M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z' }]],
-    fork: [['line', { x1: 6, y1: 3, x2: 6, y2: 15 }], ['circle', { cx: 18, cy: 6, r: 3 }], ['circle', { cx: 6, cy: 18, r: 3 }], ['path', { d: 'M18 9a9 9 0 0 1-9 9' }]],
     copy: [['rect', { x: 9, y: 9, width: 13, height: 13, rx: 2 }], ['path', { d: 'M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1' }]],
     check: [['polyline', { points: '20 6 9 17 4 12' }]],
     quote: [['path', { d: 'M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z' }]],
@@ -370,11 +373,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     snowflake: [['line', { x1: 2, y1: 12, x2: 22, y2: 12 }], ['line', { x1: 12, y1: 2, x2: 12, y2: 22 }], ['path', { d: 'm20 16-4-4 4-4' }], ['path', { d: 'm4 8 4 4-4 4' }], ['path', { d: 'm16 4-4 4-4-4' }], ['path', { d: 'm8 20 4-4 4 4' }]],
     cloudRain: [['path', { d: 'M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242' }], ['line', { x1: 16, y1: 14, x2: 16, y2: 20 }], ['line', { x1: 8, y1: 14, x2: 8, y2: 20 }], ['line', { x1: 12, y1: 16, x2: 12, y2: 22 }]],
     flower: [['circle', { cx: 12, cy: 12, r: 3 }], ['circle', { cx: 12, cy: 4.5, r: 2.1 }], ['circle', { cx: 18.5, cy: 8.3, r: 2.1 }], ['circle', { cx: 16, cy: 15.7, r: 2.1 }], ['circle', { cx: 8, cy: 15.7, r: 2.1 }], ['circle', { cx: 5.5, cy: 8.3, r: 2.1 }]],
-    arrowUp: [['polyline', { points: '18 15 12 9 6 15' }]],
-    arrowDown: [['polyline', { points: '6 9 12 15 18 9' }]],
     minimize: [['polyline', { points: '4 14 10 14 10 20' }], ['polyline', { points: '20 10 14 10 14 4' }], ['line', { x1: 14, y1: 10, x2: 21, y2: 3 }], ['line', { x1: 3, y1: 21, x2: 10, y2: 14 }]],
-    moon: [['path', { d: 'M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z' }]],
-    sun: [['circle', { cx: 12, cy: 12, r: 4 }], ['line', { x1: 12, y1: 2, x2: 12, y2: 5 }], ['line', { x1: 12, y1: 19, x2: 12, y2: 22 }], ['line', { x1: 2, y1: 12, x2: 5, y2: 12 }], ['line', { x1: 19, y1: 12, x2: 22, y2: 12 }], ['line', { x1: 4.93, y1: 4.93, x2: 7.07, y2: 7.07 }], ['line', { x1: 16.93, y1: 16.93, x2: 19.07, y2: 19.07 }], ['line', { x1: 4.93, y1: 19.07, x2: 7.07, y2: 16.93 }], ['line', { x1: 16.93, y1: 7.07, x2: 19.07, y2: 4.93 }]],
     list: [['line', { x1: 8, y1: 6, x2: 21, y2: 6 }], ['line', { x1: 8, y1: 12, x2: 21, y2: 12 }], ['line', { x1: 8, y1: 18, x2: 21, y2: 18 }], ['line', { x1: 3, y1: 6, x2: 3.01, y2: 6 }], ['line', { x1: 3, y1: 12, x2: 3.01, y2: 12 }], ['line', { x1: 3, y1: 18, x2: 3.01, y2: 18 }]],
   }
 
@@ -421,12 +420,6 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     setS({ confirmAsk: { message, cb } })
   }
 
-  function hexToRgb(hex: string): [number, number, number] {
-    const match = /^#?([0-9a-f]{6})$/i.exec(String(hex ?? '').trim())
-    if (match === null) return [235, 238, 242]
-    const value = parseInt(match[1], 16)
-    return [(value >> 16) & 255, (value >> 8) & 255, value & 255]
-  }
   function rgbaOf(hex: string, alpha: number): string {
     const c = hexToRgb(hex)
     return `rgba(${c[0]},${c[1]},${c[2]},${alpha})`
@@ -521,6 +514,10 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
   // would PERSIST — factory defaults over the user's stored configuration.
   const LOAD_RETRY_DELAYS = [1500, 3000, 6000]
   let loadCfgAttempt = 0
+  // Whether a state read has ever succeeded. A save built on unloaded
+  // defaults would replace stored folders/prompts/stars with factory
+  // empties, so saveCfg refuses to POST until this is true.
+  let cfgLoaded = false
   async function loadCfg(): Promise<void> {
     let failure: string | null = null
     try {
@@ -547,6 +544,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
         if (data.credentialStorage === 'system' || data.credentialStorage === 'legacy-state' || data.credentialStorage === 'environment' || data.credentialStorage === 'dsh' || data.credentialStorage === 'none') S.credentialStorage = data.credentialStorage
         if (data.usage !== undefined && data.usage !== null && typeof data.usage === 'object') S.usage = data.usage
         loadCfgAttempt = 0
+        cfgLoaded = true
       } else if (result.ok !== true) {
         // A rejected state read used to be swallowed, which let a broken host
         // path read as "settings silently reset". Surface it.
@@ -575,6 +573,15 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
   }
 
   function saveCfg(): void {
+    if (!cfgLoaded) {
+      // The host can come up after the retry ladder has exhausted; saving
+      // the factory snapshot then would wipe everything stored. Reload
+      // instead of saving.
+      toast('配置尚未读取完成，已重新加载，请重试', 'error')
+      loadCfgAttempt = 0
+      void loadCfg()
+      return
+    }
     const cfg = { ...S.cfg }
     delete (cfg as Record<string, unknown>).clouds
     delete (cfg as Record<string, unknown>).wind
@@ -885,9 +892,13 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       // arriving after a newer one.
       if (sessionId !== S.sessionId || requestSerial !== turnsRequestSerial) return
       if (result.ok === true) {
-        S.turns = { sessionId, items: result.items ?? [] }
-        setS({ turns: S.turns })
-        diagThrottled('timeline ' + (result.items?.length ?? 0) + ' items ' + sessionId.slice(0, 24))
+        const items = result.items ?? []
+        const bySeq = new Map<number, TimelineItem>()
+        for (const item of items) bySeq.set(item.seq, item)
+        S.turns = { sessionId, items }
+        S.turnsBySeq = bySeq
+        setS({ turns: S.turns, turnsBySeq: bySeq })
+        diagThrottled('timeline ' + items.length + ' items ' + sessionId.slice(0, 24))
       } else {
         diagThrottled('timeline failed: ' + String(result.error ?? 'unknown'))
       }
@@ -1034,6 +1045,19 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       return mermaidState.status === 'ready'
     }
     mermaidState = { status: 'loading' }
+    // A stalled script load (a network black hole where neither onload nor
+    // onerror ever fires) would park every later caller in the poll loop
+    // forever — each new block during streaming adds another 120 ms waiter.
+    // The watchdog fails the load after 30 s and drops the script tag so a
+    // retry can re-add it.
+    const d0 = typeof document !== 'undefined' ? document : null
+    const watchdog = setTimeout(() => {
+      if (mermaidState.status !== 'loading') return
+      mermaidState = { status: 'failed', error: '脚本加载超时' }
+      try {
+        if (d0 !== null) for (const el of d0.querySelectorAll(`script[src="${MERMAID_SCRIPT_PATH}"]`)) el.remove()
+      } catch { /* selector/query failed; the tag is inert without the state */ }
+    }, 30000)
     try {
       const result = await apiMermaidFetch()
       if (result.ok === true) {
@@ -1054,6 +1078,8 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     } catch (error) {
       mermaidState = { status: 'failed', error: String((error as Error)?.message ?? error) }
       return false
+    } finally {
+      clearTimeout(watchdog)
     }
   }
   async function renderMermaid(code: string, dark = false): Promise<{ ok: true; svg: string } | { ok: false; error: string }> {
@@ -1553,25 +1579,33 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
 
   function UsageHistory(): React.ReactElement {
     const s = useS()
-    const keys = recentDayKeys(s.usageRange)
-    const selected = new Set(keys)
-    const summary = summarizeUsage(s.usage, selected)
-    const daily = keys.map((day) => ({ day, ...summarizeUsage(s.usage, new Set([day])) }))
-    const maxTokens = Math.max(1, ...daily.map((row) => row.tokens))
-    const byModel: Record<string, UsageRow> = Object.create(null) as Record<string, UsageRow>
-    for (const day of keys) {
-      for (const [model, row] of Object.entries(s.usage[day] ?? {})) {
-        const target = byModel[model] ?? (byModel[model] = createUsageRow())
-        mergeUsageRow(target, row)
+    // summarizeUsage walks every day/model row once per call; with the 90-day
+    // range that is dozens of passes, and the budget inputs re-render this
+    // component on every keystroke. The memo keys cover both inputs that
+    // change the result; budget keystrokes change neither.
+    const { summary, daily, maxTokens, byModel, month } = React.useMemo(() => {
+      const keys = recentDayKeys(s.usageRange)
+      const selected = new Set(keys)
+      const summary = summarizeUsage(s.usage, selected)
+      const daily = keys.map((day) => ({ day, ...summarizeUsage(s.usage, new Set([day])) }))
+      const maxTokens = Math.max(1, ...daily.map((row) => row.tokens))
+      const byModel: Record<string, UsageRow> = Object.create(null) as Record<string, UsageRow>
+      for (const day of keys) {
+        for (const [model, row] of Object.entries(s.usage[day] ?? {})) {
+          const target = byModel[model] ?? (byModel[model] = createUsageRow())
+          mergeUsageRow(target, row)
+        }
       }
-    }
-    const monthPrefix = dayKey().slice(0, 7) + '-'
-    const monthDays = new Set(Object.keys(s.usage).filter((day) => day.startsWith(monthPrefix)))
-    const month = summarizeUsage(s.usage, monthDays)
+      const monthPrefix = dayKey().slice(0, 7) + '-'
+      const monthDays = new Set(Object.keys(s.usage).filter((day) => day.startsWith(monthPrefix)))
+      const month = summarizeUsage(s.usage, monthDays)
+      return { summary, daily, maxTokens, byModel, month }
+    }, [s.usage, s.usageRange])
     const budget = Math.max(0, Number(s.cfg.monthlyBudgetCny ?? 0))
     const warning = Math.max(1, Math.min(100, Number(s.cfg.budgetWarningPercent ?? 80)))
     const ratio = budget > 0 && month.exact ? month.costCny / budget * 100 : 0
-    const budgetText = budget <= 0 ? '预算提醒已关闭' : !month.exact ? '历史峰闲数据不完整，无法判断预算' : ratio >= 100 ? `已超出月预算（${ratio.toFixed(0)}%）` : ratio >= warning ? `已达到月预算 ${ratio.toFixed(0)}%` : `本月预算使用 ${ratio.toFixed(0)}%`
+    const state = budgetState(month, budget, warning)
+    const budgetText = state === 'disabled' ? '预算提醒已关闭' : state === 'unknown' ? '历史峰闲数据不完整，无法判断预算' : state === 'over' ? `已超出月预算（${ratio.toFixed(0)}%）` : state === 'warning' ? `已达到月预算 ${ratio.toFixed(0)}%` : `本月预算使用 ${ratio.toFixed(0)}%`
     return React.createElement('div', { className: 'vx-col' },
       React.createElement('div', { className: 'vx-row wrap' },
         ([7, 30, 90] as const).map((range) => React.createElement('button', { key: range, className: 'vx-btn' + (s.usageRange === range ? ' on' : ''), onClick: () => setS({ usageRange: range }) }, `${range} 天`)),
@@ -1589,7 +1623,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
         React.createElement('thead', null, React.createElement('tr', null, React.createElement('th', null, '模型'), React.createElement('th', null, 'Token'), React.createElement('th', null, '调用'), React.createElement('th', null, '费用 ¥'))),
         React.createElement('tbody', null, Object.entries(byModel).map(([model, row]) => { const cost = usageCostBreakdown(row, model); return React.createElement('tr', { key: model }, React.createElement('td', null, model), React.createElement('td', null, formatTokenCount(row.in + row.out + row.cacheIn + row.cacheW)), React.createElement('td', null, row.calls), React.createElement('td', null, cost.exact ? cost.totalCostCny.toFixed(4) : '—')) })),
       ) : null,
-      React.createElement('div', { className: ratio >= 100 ? 'vx-error' : 'vx-muted' }, budgetText),
+      React.createElement('div', { className: state === 'over' ? 'vx-error' : 'vx-muted' }, budgetText),
       React.createElement('div', { className: 'vx-row wrap' },
         React.createElement('label', { className: 'vx-muted' }, '月预算 ¥ ', React.createElement('input', { className: 'vx-input', style: { width: 100 }, type: 'number', min: 0, step: 1, value: budget, onChange: (e: React.ChangeEvent<HTMLInputElement>) => setS({ cfg: { ...S.cfg, monthlyBudgetCny: Math.max(0, Number(e.target.value) || 0) } }), onBlur: saveCfg })),
         React.createElement('label', { className: 'vx-muted' }, '预警 ', React.createElement('input', { className: 'vx-input', style: { width: 72 }, type: 'number', min: 1, max: 100, value: warning, onChange: (e: React.ChangeEvent<HTMLInputElement>) => setS({ cfg: { ...S.cfg, budgetWarningPercent: Math.max(1, Math.min(100, Number(e.target.value) || 80)) } }), onBlur: saveCfg }), ' %'),
@@ -1710,7 +1744,13 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
           const node = sel.anchorNode
           if (node !== null && node.nodeType === 1 && /TEXTAREA|INPUT/.test((node as HTMLElement).nodeName)) return
           const r = range.getBoundingClientRect()
-          setS({ quoteSel: { text: text.slice(0, 8000), x: r.left + r.width / 2, y: r.top - 6 } })
+          const next = { text: text.slice(0, 8000), x: r.left + r.width / 2, y: r.top - 6 }
+          // selectionchange fires continuously while a selection is being
+          // dragged; a sub-pixel move over unchanged text must not re-render
+          // every store subscriber (one TurnTailEntry per rendered turn).
+          const prev = S.quoteSel
+          if (prev !== null && prev.text === next.text && Math.abs(prev.x - next.x) < 1 && Math.abs(prev.y - next.y) < 1) return
+          setS({ quoteSel: next })
         } catch { /* selection read failed */ }
       }
       d.addEventListener('selectionchange', onSel)
@@ -1747,7 +1787,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     const turn = props.turn
     const s = useS()
     let registered: HTMLElement | null = null
-    const item = (seq !== null && s.turns !== null && s.turns.sessionId === S.sessionId) ? s.turns.items.find((t) => t.seq === seq) ?? null : null
+    const item = (seq !== null && s.turns !== null && s.turns.sessionId === S.sessionId) ? s.turnsBySeq?.get(seq) ?? null : null
     const btns: React.ReactElement[] = []
     if (item !== null && s.cfg.formula === true) {
       if (item.hasLatex === true) btns.push(React.createElement('button', { key: 'lx', className: 'vx-chip', title: '复制 LaTeX 公式', onClick: () => void copyLatexOf(item) }, React.createElement(Icon, { n: 'copy', size: 11 }), ' LaTeX'))
@@ -2580,8 +2620,21 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       const start = { mx: e.clientX, my: e.clientY, x: rect.left, y: rect.top }
       const d = typeof document !== 'undefined' ? document : null
       if (d === null) return
-      const move = (ev: MouseEvent): void => setS({ panelPos: { x: start.x + ev.clientX - start.mx, y: start.y + ev.clientY - start.my } })
-      const up = (): void => { d.removeEventListener('mousemove', move); d.removeEventListener('mouseup', up) }
+      let final: { x: number; y: number } | null = null
+      const move = (ev: MouseEvent): void => {
+        // Direct DOM writes during the drag: publishing through the store
+        // would re-render every subscriber at mousemove rate for one
+        // element's position. The store only learns the resting place.
+        final = { x: start.x + ev.clientX - start.mx, y: start.y + ev.clientY - start.my }
+        el.style.left = `${final.x}px`
+        el.style.top = `${final.y}px`
+        el.style.right = 'auto'
+      }
+      const up = (): void => {
+        d.removeEventListener('mousemove', move)
+        d.removeEventListener('mouseup', up)
+        if (final !== null) setS({ panelPos: final })
+      }
       d.addEventListener('mousemove', move)
       d.addEventListener('mouseup', up)
     }
@@ -2819,6 +2872,26 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
   return () => {
     for (const unregister of unregisterAll.splice(0)) {
       try { unregister() } catch { /* already unregistered */ }
+    }
+    // Slot teardown unmounts only the React surfaces; the appearance
+    // painter's page-global side effects — theme token overrides, root
+    // classes, the liquid-glass SVG filter, a pending balance retry — live
+    // outside those surfaces and outlive a live disable/re-declare unless
+    // reverted here.
+    if (tokenDisposer !== null) {
+      try { tokenDisposer() } catch { /* best effort */ }
+      tokenDisposer = null
+    }
+    if (balanceRetryTimer !== null) {
+      clearTimeout(balanceRetryTimer)
+      balanceRetryTimer = null
+    }
+    const d = typeof document !== 'undefined' ? document : null
+    if (d !== null) {
+      for (const cls of ['vx-liquid', 'vx-dark', 'vx-light']) {
+        try { d.documentElement.classList.remove(cls) } catch { /* classList unavailable */ }
+      }
+      try { d.getElementById('vx-lg-filter')?.remove() } catch { /* node already gone */ }
     }
     removeDynCss()
   }

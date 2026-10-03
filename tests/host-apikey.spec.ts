@@ -153,3 +153,29 @@ describe('resolveApiKey three-tier chain', () => {
     expect(await (host as unknown as { resolveApiKey: () => Promise<string> }).resolveApiKey()).toBe('')
   })
 })
+
+describe('credentialStatus short-TTL cache', () => {
+  it('caches the source verdict between calls and re-resolves after an edit', async () => {
+    stubEmptyEnv()
+    let reads = 0
+    let stored = ''
+    const store: CredentialStore = {
+      available: true,
+      get: async () => { reads++; return stored },
+      set: async (value: string) => { stored = value; return true },
+      clear: async () => { stored = ''; return true },
+    }
+    const { host } = makeHost({ store })
+    // Two reads inside the TTL window cost one keychain roundtrip…
+    await host.stateView()
+    await host.credentialStatus()
+    expect(reads).toBe(1)
+    // …and an edit (even one not touching the key) invalidates the verdict,
+    // so a save response never reports a stale source for the just-applied
+    // state.
+    await host.applyEdit({ apiKey: 'sk-new-value' })
+    expect(await host.credentialStatus()).toMatchObject({ apiKeyConfigured: true, credentialStorage: 'system' })
+    // The post-edit status call above re-resolved through the invalidated cache.
+    expect(reads).toBeGreaterThanOrEqual(2)
+  })
+})

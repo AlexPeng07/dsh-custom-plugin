@@ -16,7 +16,7 @@ import { SystemCredentialStore, type CredentialStore } from './system-credential
 import type { BackupImportMode, BalanceInfo, ConversationSearchItem, ConversationSearchKind, ConversationSearchResult, CredentialStorage, CustomPluginBackupV1, CustomPluginPublicState, CustomPluginState, TimelineItem, UsageRow } from './protocol.ts'
 import { aggregateDayUsage, createUsageRow, dayKey, foldUsageRecord, isPeakHour, mergeUsageRow, pruneUsage, type UsageRecord } from './usage.ts'
 import { backupPreview, createBackup, importedState, parseBackup, writeRecoveryBackup } from './backup.ts'
-import { normalizeCfg, normalizePrompt } from './state.ts'
+import { normalizeCfg, normalizeFolders, normalizePrompt, normalizeStars } from './state.ts'
 
 const USAGE_SCAN_CONCURRENCY = 4
 
@@ -25,6 +25,9 @@ type MermaidFetchResult = { ok: true; bytes: number } | { ok: false; error: stri
 
 interface ScanEntry {
   readable: boolean
+  /** Live usage arrived before this session's read: the whole replay is
+   * already invalidated, later sessions were not even read. */
+  stale?: boolean
   usage: Record<string, UsageRow>
 }
 
@@ -91,6 +94,13 @@ export class CustomPluginHost {
   private mermaidSource = ''
   private localMermaidPath: () => string | null
   private readCredential: () => Promise<string>
+  // The credential resolution hits the OS keychain plus a file read; both
+  // /state GET and every save response report it, so the *source* verdict
+  // (never the key) is cached briefly. applyEdit and the legacy migration
+  // invalidate, which keeps a save response truthful about the edit just
+  // applied.
+  private credentialCache: { at: number; status: Pick<CustomPluginPublicState, 'apiKeyConfigured' | 'credentialStorage'> } | null = null
+  private static readonly CREDENTIAL_CACHE_TTL_MS = 5000
 
   constructor(options: CustomPluginHostOptions) {
     this.sessionQuery = options.sessionQuery
@@ -227,6 +237,7 @@ export class CustomPluginHost {
 
   /** Apply a browser-side state edit (config, folders, prompts, stars, api key). */
   async applyEdit(edit: { cfg?: Partial<CustomPluginState['cfg']>; folders?: CustomPluginState['folders']; prompts?: CustomPluginState['prompts']; stars?: CustomPluginState['stars']; apiKey?: string }): Promise<void> {
+    this.credentialCache = null
     await this.runStateOperation(async () => {
       const previous = JSON.parse(JSON.stringify(this.state)) as CustomPluginState
       try {
@@ -242,9 +253,20 @@ export class CustomPluginHost {
 
   private async applyEditNow(edit: { cfg?: Partial<CustomPluginState['cfg']>; folders?: CustomPluginState['folders']; prompts?: CustomPluginState['prompts']; stars?: CustomPluginState['stars']; apiKey?: string }): Promise<void> {
     if (edit.cfg !== undefined && edit.cfg !== null && typeof edit.cfg === 'object') this.state.cfg = normalizeCfg({ ...this.state.cfg, ...edit.cfg })
-    if (Array.isArray(edit.folders)) this.state.folders = edit.folders
+    if (Array.isArray(edit.folders)) {
+      const folders = normalizeFolders(edit.folders)
+      // Reject rather than persist: a shape beyond the validators could make
+      // every later save's JSON.stringify throw, and the client owns the full
+      // document, so silent truncation would drop parts of it.
+      if (folders === null) throw new Error('文件夹数据无效')
+      this.state.folders = folders
+    }
     if (Array.isArray(edit.prompts)) this.state.prompts = edit.prompts.map(normalizePrompt).filter((item): item is NonNullable<ReturnType<typeof normalizePrompt>> => item !== null)
-    if (edit.stars !== undefined && edit.stars !== null && typeof edit.stars === 'object') this.state.stars = edit.stars
+    if (edit.stars !== undefined && edit.stars !== null && typeof edit.stars === 'object') {
+      const stars = normalizeStars(edit.stars)
+      if (stars === null) throw new Error('星标数据无效')
+      this.state.stars = stars
+    }
     if (typeof edit.apiKey === 'string') {
       const key = edit.apiKey.trim()
       if (key === '') {
@@ -292,6 +314,7 @@ export class CustomPluginHost {
 
   /** Move a legacy plaintext state key into the OS store when available. */
   async migrateLegacyApiKey(): Promise<boolean> {
+    this.credentialCache = null
     const key = (this.state.apiKey ?? '').trim()
     if (!/^sk-/.test(key) || !this.credentialStore.available) return false
     let existing = ''
@@ -494,8 +517,12 @@ export class CustomPluginHost {
 
   /** Browser-safe credential status used by state and save responses. */
   async credentialStatus(): Promise<Pick<CustomPluginPublicState, 'apiKeyConfigured' | 'credentialStorage'>> {
+    const now = Date.now()
+    if (this.credentialCache !== null && now - this.credentialCache.at < CustomPluginHost.CREDENTIAL_CACHE_TTL_MS) return this.credentialCache.status
     const resolved = await this.resolveApiKeyWithSource()
-    return { apiKeyConfigured: resolved.key !== '', credentialStorage: resolved.source }
+    const status = { apiKeyConfigured: resolved.key !== '', credentialStorage: resolved.source }
+    this.credentialCache = { at: now, status }
+    return status
   }
 
   /** Query the DeepSeek balance endpoint (15s timeout). */
@@ -550,6 +577,11 @@ export class CustomPluginHost {
     const agg: Record<string, UsageRow> = {}
     let scanned = 0
     const entries = await mapConcurrent(records, USAGE_SCAN_CONCURRENCY, async (record): Promise<ScanEntry> => {
+      // Live usage arriving mid-replay invalidates the whole snapshot anyway;
+      // checking per item (not once at the end) stops paying for session
+      // reads that are already doomed to be discarded — exactly the window
+      // where a streaming conversation invites rescan retries.
+      if (this.usageRevision !== revisionAtStart) return { readable: false, stale: true, usage: {} }
       try {
         const snapshot = await this.readSessionLog(record.header.id)
         const dayUsage = aggregateDayUsage(snapshot.events, today)
@@ -561,6 +593,7 @@ export class CustomPluginHost {
     })
     let failedSessions = 0
     for (const entry of entries) {
+      if (entry.stale === true) continue
       if (!entry.readable) {
         failedSessions++
         continue
@@ -631,7 +664,11 @@ export class CustomPluginHost {
     for (const url of urls) {
       try {
         const result = await this.httpText(url)
-        if (result.ok) { text = result.text; break }
+        if (result.ok) {
+          if (looksLikeMermaidBundle(result.text)) { text = result.text; break }
+          lastError = `镜像返回了非脚本内容 (${result.text.length} bytes)`
+          continue
+        }
         lastError = result.error ?? ''
       } catch (error) {
         lastError = String((error as Error)?.message ?? error)
@@ -729,6 +766,15 @@ export function readableFetchError(error: unknown): string {
   }
   const message = String(cause?.message ?? (error as Error)?.message ?? error)
   return message === 'fetch failed' ? '网络请求失败：请检查本机网络与代理配置' : message
+}
+
+/** A 200 from a mirror is not proof of the engine: captive portals and
+ * misconfigured mirrors happily serve an HTML interstitial with status 200.
+ * The real bundle is a multi-megabyte script that never starts with a
+ * document tag; anything else must not poison the host-lifetime cache. */
+function looksLikeMermaidBundle(text: string): boolean {
+  const head = text.slice(0, 64).replace(/^\uFEFF/, '').trimStart()
+  return text.length >= 1000 && !head.startsWith('<')
 }
 
 /** Resolve `mermaid/dist/mermaid.min.js` from the package's own dependency
