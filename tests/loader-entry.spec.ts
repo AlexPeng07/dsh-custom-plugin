@@ -94,7 +94,7 @@ const setTimeoutNative: typeof setTimeout = setTimeout
 /** Poll until the persisted document satisfies `probe` — Windows AV scans
  * can hold a fresh tmp file far longer than any fixed tick budget, so boot
  * writes are awaited by observation, not by turn count. */
-async function waitForState(home: string, probe: (doc: Record<string, unknown>) => boolean, ms = 4000): Promise<void> {
+async function waitForState(home: string, probe: (doc: Record<string, unknown>) => boolean, ms = 8000): Promise<void> {
   const deadline = Date.now() + ms
   for (;;) {
     try {
@@ -302,7 +302,9 @@ describe('loader entry', () => {
       await writeFile(join(home, STATE_FILE), JSON.stringify({ cfg: {} }), 'utf8')
       const first = makeFakeCtx()
       apply(first.ctx)
-      await ioTick()
+      // The boot save must land before anything else: a fixed tick budget
+      // here left it racing rmHome under load.
+      await waitForState(home, (doc) => Array.isArray(doc.folders))
       first.runEffects()
       expect(first.routesDisposed).toBe(EXPECTED_ROUTE_PATHS.size)
       expect(first.toolDisposed).toBe(true)
@@ -312,6 +314,11 @@ describe('loader entry', () => {
       expect(second.routePaths).toHaveLength(EXPECTED_ROUTE_PATHS.size)
       // session/disposed must not throw on the cleanup path.
       second.fire('session/disposed', { id: 's1' }, undefined)
+      // The second mount persists too, with bytes identical to the first's —
+      // observe it through a real content delta (a folded usage event) so
+      // its fire-and-forget save cannot race the teardown below either.
+      second.fire('session/event', { id: 's1' }, { type: 'assistant/message', data: { usage: { inputTokens: 3 } }, time: Date.now() })
+      await waitForState(home, (doc) => doc.usage !== undefined)
     } finally {
       await rmHome(home)
     }
