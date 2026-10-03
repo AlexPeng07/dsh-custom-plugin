@@ -249,7 +249,7 @@ describe('loader entry', () => {
     }
   })
 
-  it('runs read-only when the document is unreadable and cannot be quarantined', async () => {
+  it('runs read-only when the document is unreadable and cannot be quarantined', { timeout: 20_000 }, async () => {
     const home = await tempHome('custom-plugin-readonly-')
     try {
       const statePath = join(home, STATE_FILE)
@@ -262,20 +262,34 @@ describe('loader entry', () => {
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
       const fake = makeFakeCtx()
       apply(fake.ctx)
-      // Walk the 1.5s/3s/6s retry ladder to exhaustion; each step needs one
-      // real IO round for the failed open to land.
-      for (let i = 0; i < 40; i++) {
+      // Walk the 1.5s/3s/6s retry ladder to exhaustion. Each retry only
+      // schedules after its failed open has landed, so advance fake time by
+      // observation, not a fixed budget. The readiness probe is ONE execute
+      // promise (its execute awaits stateReady) raced against a short real
+      // timer each round: the fs work inside it gets unlimited wall clock
+      // across rounds — a per-probe timeout would measure execute's own
+      // contended duration instead of readiness and lose forever on a loaded
+      // runner (the CI flake).
+      const readyProbe = fake.tool!.execute({}, undefined).then((value) => value, () => null)
+      let status: Record<string, unknown> | null = null
+      for (let i = 0; i < 200 && status === null; i++) {
         await vi.advanceTimersByTimeAsync(12_000)
-        await ioTick(8)
+        await ioTick(50)
+        status = await Promise.race([
+          readyProbe,
+          new Promise<null>((resolve) => { setTimeoutNative(() => resolve(null), 20) }),
+        ])
       }
+      expect(status).not.toBeNull()
       // Live usage after the failed load: folded in memory, never written.
       fake.fire('session/event', { id: 's1' }, { type: 'assistant/message', data: { usage: { inputTokens: 5 } }, time: Date.now() })
       await vi.advanceTimersByTimeAsync(5_000)
       await ioTick()
       expect((await readdir(home)).sort()).toEqual([`${STATE_FILE}.corrupt-${process.pid}`, STATE_FILE].sort())
-      const status = await fake.tool!.execute({}, undefined)
-      expect(String((status.diagReports as string[]).find((line) => line.includes('read-only')))).toContain('state file unreadable')
-      expect(status.usageToday).toMatchObject({ unknown: { in: 5 } })
+      expect(String(((status as Record<string, unknown>).diagReports as string[]).find((line) => line.includes('read-only')))).toContain('state file unreadable')
+      // A fresh snapshot: the probe's predates the usage event just fired.
+      const fresh = await fake.tool!.execute({}, undefined)
+      expect(fresh.usageToday).toMatchObject({ unknown: { in: 5 } })
     } finally {
       vi.useRealTimers()
       await rmHome(home)
