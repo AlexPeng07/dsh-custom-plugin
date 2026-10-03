@@ -7,6 +7,10 @@
 [![CI](https://github.com/AlexPeng07/dsh-custom-plugin/actions/workflows/ci.yml/badge.svg)](https://github.com/AlexPeng07/dsh-custom-plugin/actions/workflows/ci.yml)
 [![Awesome DSH Plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
 
+<p align="center">
+  <img src="https://www.npm.bet/svg?q=%40alexpeng%2Fdsh-custom-plugin&amp;timeRange=last-month&amp;grouping=day&amp;metric=downloads&amp;zeroMode=estimated" alt="npm downloads, last month" width="560">
+</p>
+
 English | [中文](README.zh.md)
 
 Custom convenience suite for the DeepSeek Harness (DSH) Web GUI: personalization, weather FX, glass effects, project folders, enhanced prompts, conversation export/search, Mermaid rendering, quote reply, 7/30/90-day usage analytics, budget and key-free local backups, plus a Ctrl/Cmd+K command palette.

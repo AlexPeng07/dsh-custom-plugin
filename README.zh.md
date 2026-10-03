@@ -7,6 +7,10 @@
 [![CI](https://github.com/AlexPeng07/dsh-custom-plugin/actions/workflows/ci.yml/badge.svg)](https://github.com/AlexPeng07/dsh-custom-plugin/actions/workflows/ci.yml)
 [![Awesome DSH Plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
 
+<p align="center">
+  <img src="https://www.npm.bet/svg?q=%40alexpeng%2Fdsh-custom-plugin&amp;timeRange=last-month&amp;grouping=day&amp;metric=downloads&amp;zeroMode=estimated" alt="npm 下载趋势（近一个月）" width="560">
+</p>
+
 [English](README.md) | 中文
 
 DeepSeek Harness（DSH）Web GUI 的 Custom 便利套件：个性化外观、天气特效、玻璃效果、项目文件夹、增强提示词库、会话导出与会话搜索、Mermaid 渲染、引用回复、7/30/90 天用量分析、预算与无密钥本地备份，以及 Ctrl/Cmd+K 快捷面板。
