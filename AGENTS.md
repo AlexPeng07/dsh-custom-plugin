@@ -26,6 +26,31 @@ daily token usage.
   so an atomic replace there must name its temp file after the writing process
   (`tempPathFor`); a fixed temp name is a cross-process race, not just an
   in-process one.
+- State-document invariants (all covered by `tests/state.spec.ts` /
+  `tests/loader-entry.spec.ts` — keep them holding when touching
+  `src/state.ts`, `src/index.ts`, `src/host-service.ts`):
+  - `loadStateFile` distinguishes ENOENT (fresh install) from transient read
+    errors (1.5s/3s/6s retry ladder) and corruption (rename aside as
+    `.corrupt-<pid>` before adopting defaults). Only a document that can be
+    neither read nor quarantined makes it reject, and the loader then flips
+    the read-only gate (`stateWritable` funnels through `saveNow`/`saveSoon`)
+    instead of ever persisting never-loaded defaults.
+  - Every save stat-compares (mtime+size) against the last-seen baseline and
+    three-way-merges an externally written document back in; the usage ledger
+    unions per counter (`theirs + ours − base`). A whole-file overwrite on top
+    of a foreign write is the bug this exists to prevent.
+  - Browser edits are gated by `normalizeFolders` / `normalizeStars`
+    (`src/state.ts`): reject the whole edit, never truncate — the client owns
+    the full document. `credentialStatus` is a 5s-TTL cache invalidated by
+    `applyEdit` and `migrateLegacyApiKey`; keep save responses truthful about
+    the edit just applied.
+- The client's uninstall disposer must revert every page-global side effect
+  (theme token overrides, `<html>` root classes, the liquid-glass SVG filter,
+  pending retry timers); a new global effect added to the appearance painter
+  needs a matching line in the disposer at the bottom of
+  `src/client/custom.tsx`. `saveCfg` refuses to POST until a state read has
+  succeeded (`cfgLoaded`) — unloaded factory defaults must never reach the
+  host.
 - The only agent-facing surface is the `custom_plugin_status` tool; the
   plugin never injects system-prompt announcements.
 
@@ -70,7 +95,10 @@ daily token usage.
   HTTP response.
 - The client bundle resolves its modules against the web shell's frozen seed
   table; `tsdown.config.ts` `PLATFORM_MODULES` mirrors it, and any extra runtime
-  `require()` needs a `dsh.client.external` declaration.
+  `require()` needs a `dsh.client.external` declaration. `pnpm smoke` now
+  cross-checks this statically (bundle `require()` literals ⊆ PLATFORM_MODULES)
+  and fails on a stale `lib/client.js`, so drift cannot ship silently; CI runs
+  the full smoke including the headless-Chromium registration handshake.
 - Slot-prop data shapes are declared locally (`src/client/custom.tsx`) rather
   than imported from harness controller packages, which rename between releases.
   Only `SnapshotSelectorHook` comes from the slot SDK.
@@ -86,3 +114,7 @@ daily token usage.
   `pnpm smoke`
   CI runs all of these (`check:readme` first), so a stale README hash or a
   failed build breaks the branch even if the local list was skipped.
+- Git identity: the GitHub account blocks pushes that expose the real email,
+  so commits must use the noreply address — repo-local `git config
+  user.email` is already `309235349+AlexPeng07@users.noreply.github.com`;
+  don't override it with the global outlook.com one.
