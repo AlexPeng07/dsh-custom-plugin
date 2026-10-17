@@ -10,6 +10,8 @@ import type { SessionEventSearchRequest, SessionLogSnapshot, SessionQueryEngine 
 import type { SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
 import { createRequire } from 'node:module'
 import { readFileSync } from 'node:fs'
+import { readFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
 import { buildExportRows, buildMarkdown, buildPdfHtml, eventSearchText, extractTurns, searchKindOf, snippetAround } from './extract.ts'
 import { readDeepSeekCredential } from './credentials.ts'
 import { SystemCredentialStore, type CredentialStore } from './system-credentials.ts'
@@ -19,6 +21,22 @@ import { backupPreview, createBackup, importedState, parseBackup, writeRecoveryB
 import { normalizeCfg, normalizeFolders, normalizePrompt, normalizeStars } from './state.ts'
 
 const USAGE_SCAN_CONCURRENCY = 4
+
+/** CDN fallback version: the exact package this build ships. A hardcoded
+ * `mermaid@11.6.0` while the local dependency resolved 11.17.x made the
+ * offline and fallback engines diverge in behavior. */
+const MERMAID_CDN_VERSION = resolveMermaidVersion()
+
+function resolveMermaidVersion(): string {
+  try {
+    const require = createRequire(import.meta.url)
+    const pkg = JSON.parse(readFileSync(require.resolve('mermaid/package.json'), 'utf8')) as { version?: unknown }
+    if (typeof pkg.version === 'string' && /^\d+\.\d+\.\d+/.test(pkg.version)) return pkg.version
+  } catch {
+    // dependency absent (e.g. an installed package missing the optional tree)
+  }
+  return '11.6.0'
+}
 
 type UsageScanResult = { ok: true; day: string; usageToday: unknown; scannedSessions: number } | { ok: false; error: string }
 type MermaidFetchResult = { ok: true; bytes: number } | { ok: false; error: string }
@@ -92,6 +110,7 @@ export class CustomPluginHost {
   private mermaidBytesValue = 0
   private mermaidJs = ''
   private mermaidSource = ''
+  private mermaidEtagValue = ''
   private localMermaidPath: () => string | null
   private readCredential: () => Promise<string>
   // The credential resolution hits the OS keychain plus a file read; both
@@ -239,7 +258,17 @@ export class CustomPluginHost {
   async applyEdit(edit: { cfg?: Partial<CustomPluginState['cfg']>; folders?: CustomPluginState['folders']; prompts?: CustomPluginState['prompts']; stars?: CustomPluginState['stars']; apiKey?: string }): Promise<void> {
     this.credentialCache = null
     await this.runStateOperation(async () => {
-      const previous = JSON.parse(JSON.stringify(this.state)) as CustomPluginState
+      // Only the edited sections can change, and every setter replaces its
+      // section wholesale. A shallow snapshot is therefore a complete rollback
+      // point; deep-cloning the usage ledger here made every toggle O(ledger)
+      // and grew worse with retention.
+      const previous = {
+        cfg: this.state.cfg,
+        folders: this.state.folders,
+        prompts: this.state.prompts,
+        stars: this.state.stars,
+        apiKey: this.state.apiKey,
+      }
       try {
         await this.applyEditNow(edit)
       } catch (error) {
@@ -296,7 +325,16 @@ export class CustomPluginHost {
       const backup = parseBackup(raw)
       const preview = backupPreview(this.state, backup)
       if (dryRun) return { ok: true, preview }
-      const previous = JSON.parse(JSON.stringify(this.state)) as CustomPluginState
+      // Same shallow-rollback reasoning as applyEdit: importedState builds
+      // fresh objects, so section references are enough to undo the commit.
+      const previous = {
+        cfg: this.state.cfg,
+        folders: this.state.folders,
+        prompts: this.state.prompts,
+        stars: this.state.stars,
+        usage: this.state.usage,
+        apiKey: this.state.apiKey,
+      }
       const recoveryPath = await writeRecoveryBackup(this.statePath(), previous)
       const next = importedState(previous, backup, mode)
       Object.assign(this.state, next)
@@ -643,21 +681,21 @@ export class CustomPluginHost {
     const localPath = this.localMermaidPath()
     if (localPath !== null && localPath !== '') {
       try {
-        const text = readFileSync(localPath, 'utf8')
+        // Async read: the bundled engine is ~3.5 MB, and a synchronous read
+        // here stalls every Host request behind it during boot.
+        const text = await readFile(localPath, 'utf8')
         if (text.length > 0) {
-          this.mermaidJs = text
-          this.mermaidBytesValue = text.length
-          this.mermaidSource = 'local'
-          return { ok: true, bytes: text.length }
+          this.cacheMermaid(text, 'local')
+          return { ok: true, bytes: this.mermaidBytesValue }
         }
       } catch {
         // unreadable local bundle: fall through to the CDN mirrors
       }
     }
     const urls = [
-      'https://cdn.jsdelivr.net/npm/mermaid@11.6.0/dist/mermaid.min.js',
-      'https://fastly.jsdelivr.net/npm/mermaid@11.6.0/dist/mermaid.min.js',
-      'https://unpkg.com/mermaid@11.6.0/dist/mermaid.min.js',
+      `https://cdn.jsdelivr.net/npm/mermaid@${MERMAID_CDN_VERSION}/dist/mermaid.min.js`,
+      `https://fastly.jsdelivr.net/npm/mermaid@${MERMAID_CDN_VERSION}/dist/mermaid.min.js`,
+      `https://unpkg.com/mermaid@${MERMAID_CDN_VERSION}/dist/mermaid.min.js`,
     ]
     let text = ''
     let lastError = ''
@@ -675,10 +713,18 @@ export class CustomPluginHost {
       }
     }
     if (text === '') return { ok: false, error: `无法获取 Mermaid 引擎: ${lastError}` }
+    this.cacheMermaid(text, 'cdn')
+    return { ok: true, bytes: this.mermaidBytesValue }
+  }
+
+  /** Cache the engine and its validators. `bytes` is UTF-8 length, not the
+   * JavaScript string length: the status/debug payloads call it bytes, and a
+   * non-ASCII bundle would otherwise under-report the transfer size. */
+  private cacheMermaid(text: string, source: 'local' | 'cdn'): void {
     this.mermaidJs = text
-    this.mermaidBytesValue = text.length
-    this.mermaidSource = 'cdn'
-    return { ok: true, bytes: text.length }
+    this.mermaidBytesValue = Buffer.byteLength(text, 'utf8')
+    this.mermaidSource = source
+    this.mermaidEtagValue = createHash('sha256').update(text).digest('hex').slice(0, 32)
   }
 
   /** The cached Mermaid engine script (served at the script path). */
@@ -691,15 +737,22 @@ export class CustomPluginHost {
     return this.mermaidBytesValue
   }
 
+  /** Cache validator for the engine script ('' while unloaded). */
+  mermaidEtag(): string {
+    return this.mermaidEtagValue
+  }
+
   /** Where the engine came from: 'local', 'cdn', or '' while unloaded. */
   mermaidLoadedSource(): string {
     return this.mermaidSource
   }
 
   /** Whether any DeepSeek key source resolves (state, environment, credential
-   * file) — the honest answer behind the panel's "key configured" badge. */
+   * file) — the honest answer behind the panel's "key configured" badge.
+   * Goes through the 5s source cache: the status tool and About tab call this
+   * independently of `/state`, and each miss hits the OS keychain plus a file. */
   async hasApiKey(): Promise<boolean> {
-    return await this.resolveApiKey() !== ''
+    return (await this.credentialStatus()).apiKeyConfigured
   }
 
   /** Diagnostics snapshot for the status tool and the About tab. */

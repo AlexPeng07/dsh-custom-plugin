@@ -5,7 +5,7 @@
 
 import { describe, expect, it } from 'vitest'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
-import { aggregateDayUsage, dayKey, isPeakHour, pruneUsage } from '../src/usage.ts'
+import { aggregateDayUsage, dayKey, isPeakHour, normalizeUsageMap, pruneUsage } from '../src/usage.ts'
 
 /** Timestamp whose Beijing (UTC+8) wall clock reads the given fields, so tests
  * are independent of the host timezone. */
@@ -93,6 +93,35 @@ describe('aggregateDayUsage', () => {
     const day = aggregateDayUsage([usageEvent(1, T(2026, 8, 21, 15, 0), { inputTokens: 5 })], dayKey(T(2026, 8, 21, 15)))
     expect(day.unknown.calls).toBe(1)
     expect(day.unknown.in).toBe(5)
+  })
+})
+
+describe('normalizeUsageMap', () => {
+  it('drops malformed days/rows and coerces counters instead of carrying them into folds', () => {
+    // JSON.parse keeps `__proto__` as an own key, which a plain object literal
+    // cannot express (it would set the prototype instead).
+    const raw = JSON.parse(`{
+      "2026-08-21": {
+        "deepseek-flash": { "in": 10, "out": "12", "cacheIn": -1, "cacheW": null, "reason": 3, "calls": 2, "peakIn": 4, "peakSplitKnown": false },
+        "broken": "not-a-row",
+        "__proto__": { "in": 99 }
+      },
+      "not-a-day": { "deepseek-flash": { "in": 1 } },
+      "2026-08-22": null
+    }`)
+    const usage = normalizeUsageMap(raw)
+    expect(Object.keys(usage)).toEqual(['2026-08-21'])
+    expect(usage['2026-08-21']['deepseek-flash']).toMatchObject({
+      in: 10, out: 0, cacheIn: 0, cacheW: 0, reason: 3, calls: 2, peakIn: 4, peakSplitKnown: false,
+    })
+    expect(usage['2026-08-21'].broken).toBeUndefined()
+    expect(Object.prototype.hasOwnProperty.call(usage['2026-08-21'], '__proto__')).toBe(false)
+  })
+
+  it('returns an empty ledger for non-object input', () => {
+    expect(normalizeUsageMap(null)).toEqual({})
+    expect(normalizeUsageMap([])).toEqual({})
+    expect(normalizeUsageMap('garbage')).toEqual({})
   })
 })
 

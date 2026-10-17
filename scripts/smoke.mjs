@@ -201,11 +201,10 @@ for (const localeFile of ['locale/en.json', 'locale/zh.json']) {
   }
 }
 
-// The runtime peer gate reads only `@deepseek-ai/dsh` / `@deepseek-ai/dsh-*`
-// peers and tests them with semver.satisfies(runtime, range, { includePrerelease:
-// true }). What this gate has to catch is a manifest claiming something other
-// than the release the bundle was type-checked against, so the check is
-// satisfaction — not the spelling of the range.
+// The runtime compatibility gate reads `engines.dsh` first on dsh 0.2.1-alpha.4+
+// and falls back to the @deepseek-ai/dsh-* peer ranges when it is absent. This
+// package declares both, so they must admit the same versions — otherwise the
+// two host lines disagree about what this release supports.
 const gateOpts = { includePrerelease: true }
 const dshPeers = Object.entries(manifest.peerDependencies ?? {}).filter(([name]) => name.startsWith('@deepseek-ai/dsh'))
 if (dshPeers.length === 0) {
@@ -230,21 +229,40 @@ for (const [name, range] of dshPeers) {
   }
 }
 
-// `engines.dsh` is not what the runtime gate reads — that only looks at the
-// @deepseek-ai/dsh-* peers — but it is what npm and the plugin manager show the
-// user, so the two must admit the same versions or the docs promise what the
-// gate does not enforce.
+// Every @deepseek-ai/dsh-* devDependency is the build-and-test cohort. A mixed
+// cohort type-checks against one release while running another, so require a
+// single exact version across all of them.
+{
+  const dshDevDeps = Object.entries(manifest.devDependencies ?? {}).filter(([name]) => name.startsWith('@deepseek-ai/dsh'))
+  const versions = [...new Set(dshDevDeps.map(([, version]) => String(version)))]
+  if (dshDevDeps.length === 0) {
+    bad('devDependencies: no @deepseek-ai/dsh-* package pins the build target')
+  } else if (versions.length !== 1) {
+    bad(`devDependencies: the @deepseek-ai/dsh-* cohort mixes ${versions.join(', ')} — one build target per release`)
+  } else {
+    ok(`devDependencies: the @deepseek-ai/dsh-* cohort is one exact version (${versions[0]})`)
+  }
+}
+
+// dsh 0.2.1-alpha.4+ reads `engines.dsh` first; older hosts read the peers.
+// Both are declared here, so they must admit the same versions or the supported
+// release line depends on which dsh version asks.
 {
   const declared = String(manifest.engines?.dsh ?? '')
   const peer = String(manifest.peerDependencies?.['@deepseek-ai/dsh-tools'] ?? '')
   if (declared === '') {
-    bad('engines.dsh: absent, so users are shown no supported dsh range')
+    bad('engines.dsh: absent, so dsh 0.2.1-alpha.4+ falls back to the peer range instead of the declared support line')
   } else if (peer === '') {
     bad('engines.dsh: cannot be cross-checked — no @deepseek-ai/dsh-tools peer is declared')
   } else {
     // Compare verdicts across the release history, not just at the floor: an
     // `||` clause can drift in either direction while the floor still looks right.
-    const probe = ['0.1.6', '0.1.7-rc.1', '0.1.7-rc.2', '0.1.8', '0.1.9', '0.2.0-rc.1', '0.2.0-rc.2', '0.2.0-rc.3', '0.2.0', '0.3.0']
+    const probe = [
+      '0.1.6', '0.1.7-rc.1', '0.1.7-rc.2', '0.1.8', '0.1.9',
+      '0.2.0-rc.1', '0.2.0-rc.2', '0.2.0-rc.3', '0.2.0',
+      '0.2.1-alpha.3', '0.2.1-alpha.5', '0.2.1-rc.1', '0.2.1-rc.2', '0.2.1-rc.3', '0.2.1',
+      '0.2.2-alpha.1', '0.2.2', '0.3.0',
+    ]
     const diverging = probe.filter(v => semver.satisfies(v, declared, gateOpts) !== semver.satisfies(v, peer, gateOpts))
     if (diverging.length > 0) {
       bad(`engines.dsh ${JSON.stringify(declared)} and the dsh-tools peer ${JSON.stringify(peer)} disagree on ${diverging.join(', ')}`)

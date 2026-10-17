@@ -27,9 +27,43 @@ export const USAGE_RETENTION_DAYS = 90
 interface CSTParts { year: number, month: number, day: number, hour: number, minute: number, weekday: number }
 
 const PEAK_COUNTER_KEYS = ['peakIn', 'peakCacheIn', 'peakCacheW', 'peakOut'] as const
+const COUNTER_KEYS = ['in', 'out', 'cacheIn', 'cacheW', 'reason', 'calls', ...PEAK_COUNTER_KEYS] as const
 
 function isCounter(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0
+}
+
+function counterOf(value: unknown): number {
+  return isCounter(value) ? value : 0
+}
+
+/**
+ * Rebuild a persisted usage ledger from untrusted JSON: keep day buckets and
+ * model rows that are objects, coerce every counter to a finite non-negative
+ * number, and drop prototype-polluting model keys. This is the load-side
+ * counterpart of the browser shape gates; without it a hand-edited or
+ * half-written document could make later folds throw (or concatenate a string
+ * into a counter) while every save kept succeeding.
+ */
+export function normalizeUsageMap(raw: unknown): UsageMap {
+  const out: UsageMap = {}
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return out
+  for (const [day, modelsRaw] of Object.entries(raw as Record<string, unknown>)) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) continue
+    if (modelsRaw === null || typeof modelsRaw !== 'object' || Array.isArray(modelsRaw)) continue
+    const clean: Record<string, UsageRow> = {}
+    for (const [model, rowRaw] of Object.entries(modelsRaw as Record<string, unknown>)) {
+      if (model === '__proto__' || model === 'constructor' || model === 'prototype') continue
+      if (rowRaw === null || typeof rowRaw !== 'object' || Array.isArray(rowRaw)) continue
+      const src = rowRaw as Record<string, unknown>
+      const row = createUsageRow()
+      for (const key of COUNTER_KEYS) (row as unknown as Record<string, number>)[key] = counterOf(src[key])
+      row.peakSplitKnown = src.peakSplitKnown !== false
+      clean[model] = row
+    }
+    if (Object.keys(clean).length > 0) out[day] = clean
+  }
+  return out
 }
 
 /** Create a row whose peak/off-peak split is exact from its first event. */

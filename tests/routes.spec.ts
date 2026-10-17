@@ -3,7 +3,7 @@ import { Readable } from 'node:stream'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { CustomPluginHost } from '../src/host-service.ts'
 import { defaultState } from '../src/state.ts'
-import { makeCustomPluginRoutes } from '../src/routes.ts'
+import { makeCustomPluginRoutes, STATE_BODY_LIMIT } from '../src/routes.ts'
 import { CUSTOM_PLUGIN_API_PREFIX, MERMAID_SCRIPT_PATH } from '../src/protocol.ts'
 import { BACKUP_BODY_LIMIT } from '../src/backup.ts'
 
@@ -25,16 +25,27 @@ function request(body: unknown, method = 'POST', path = '/search', headers: Reco
   }) as unknown as IncomingMessage
 }
 
-function response(): { res: ServerResponse; status: number; body: unknown } {
-  const result = { status: 0, body: undefined as unknown }
+function response(): { res: ServerResponse; status: number; body: unknown; headers: Record<string, string> } {
+  const result = { status: 0, body: undefined as unknown, headers: {} as Record<string, string> }
   const res = {
-    writeHead(status: number) { result.status = status },
-    end(value?: unknown) { result.body = value === undefined ? undefined : JSON.parse(String(value)) },
+    statusCode: 0,
+    writeHead(status: number, headers?: Record<string, string>) {
+      result.status = status
+      if (headers !== undefined) for (const [key, value] of Object.entries(headers)) result.headers[key.toLowerCase()] = String(value)
+    },
+    setHeader(name: string, value: unknown) { result.headers[name.toLowerCase()] = String(value) },
+    end(value?: unknown) {
+      if (result.status === 0) result.status = res.statusCode
+      if (value === undefined) { result.body = undefined; return }
+      const text = String(value)
+      try { result.body = JSON.parse(text) } catch { result.body = text }
+    },
   }
   return {
     res: res as unknown as ServerResponse,
     get status() { return result.status },
     get body() { return result.body },
+    get headers() { return result.headers },
   }
 }
 
@@ -160,6 +171,30 @@ describe('custom plugin route trust fence (guard)', () => {
     await route.handler(request({}, 'GET', '/x', { ...WEB_HEADERS, origin: 'http://evil.example' }), out.res)
     expect(out.status).toBe(403)
   })
+
+  it('revalidates the mermaid engine with an ETag instead of resending it', async () => {
+    const script = '/* engine */'
+    const host = { mermaidScript: () => script, mermaidEtag: () => 'engine-hash' } as unknown as CustomPluginHost
+    const route = makeCustomPluginRoutes(host).find((item) => item.path === MERMAID_SCRIPT_PATH)!
+    const mermaidRequest = (ifNoneMatch?: string): IncomingMessage => Object.assign(Readable.from([]), {
+      method: 'GET',
+      url: MERMAID_SCRIPT_PATH,
+      headers: { ...WEB_HEADERS, ...(ifNoneMatch === undefined ? {} : { 'if-none-match': ifNoneMatch }) },
+      socket: { remoteAddress: '127.0.0.1' },
+    }) as unknown as IncomingMessage
+
+    const first = response()
+    await route.handler(mermaidRequest(), first.res)
+    expect(first.status).toBe(200)
+    expect(first.body).toBe(script)
+    expect(first.headers.etag).toBe('"engine-hash"')
+    expect(first.headers['content-length']).toBe(String(Buffer.byteLength(script)))
+
+    const second = response()
+    await route.handler(mermaidRequest('"engine-hash"'), second.res)
+    expect(second.status).toBe(304)
+    expect(second.body).toBeUndefined()
+  })
 })
 
 describe('custom plugin routes error surface', () => {
@@ -206,12 +241,27 @@ describe('custom plugin routes error surface', () => {
     let called = 0
     const stateHost = { applyEdit: async () => { called++ } } as unknown as CustomPluginHost
     const stateRoute = makeCustomPluginRoutes(stateHost).find((item) => item.path === `${CUSTOM_PLUGIN_API_PREFIX}/state`)!
-    // One chunk already past the 256 KiB state limit: the rejection must come
-    // from the stream check, not the JSON envelope.
+    // One chunk already past the state limit: the rejection must come from the
+    // stream check, not the JSON envelope.
     const out = response()
-    await stateRoute.handler(rawRequest('x'.repeat(300 * 1024)), out.res)
+    await stateRoute.handler(rawRequest('x'.repeat(STATE_BODY_LIMIT + 1024)), out.res)
     expect(out.status).toBe(413)
     expect(called).toBe(0)
+  })
+
+  it('accepts a state edit larger than the old 256 KiB cap', async () => {
+    let textLength = 0
+    const stateHost = {
+      applyEdit: async (edit: { prompts?: Array<{ text: string }> }) => { textLength = edit.prompts?.[0]?.text.length ?? 0 },
+      persistWhenIdle: async () => {},
+      credentialStatus: async () => ({ apiKeyConfigured: true, credentialStorage: 'system' }),
+    } as unknown as CustomPluginHost
+    const stateRoute = makeCustomPluginRoutes(stateHost).find((item) => item.path === `${CUSTOM_PLUGIN_API_PREFIX}/state`)!
+    const text = 'x'.repeat(300 * 1024)
+    const out = response()
+    await stateRoute.handler(rawRequest(JSON.stringify({ prompts: [{ id: 'p', name: 'n', text }] })), out.res)
+    expect(out.status).toBe(200)
+    expect(textLength).toBe(text.length)
   })
 
   it('rejects timeline and export without a sessionId', async () => {

@@ -14,7 +14,7 @@ import { mkdir, open, readFile, rename, rm, stat, writeFile } from 'node:fs/prom
 import { dirname, join } from 'node:path'
 import { dshHome } from './dsh-home.ts'
 import { DEFAULT_CONFIG, type CustomPluginConfig, type CustomPluginState, type FolderNode, type PromptItem, type StarsMap, type UsageMap, type UsageRow } from './protocol.ts'
-import { createUsageRow, pruneUsage } from './usage.ts'
+import { createUsageRow, normalizeUsageMap, pruneUsage } from './usage.ts'
 
 /** State file name of this plugin. */
 export const STATE_FILE = 'custom-plugin-state.json'
@@ -82,11 +82,17 @@ export function mergeState(target: CustomPluginState, raw: unknown): void {
   if (raw === null || typeof raw !== 'object') return
   const src = raw as Record<string, unknown>
   if (src.cfg !== undefined) target.cfg = normalizeCfg(src.cfg)
-  if (Array.isArray(src.folders)) target.folders = src.folders as FolderNode[]
+  if (Array.isArray(src.folders)) {
+    const folders = normalizeFolders(src.folders)
+    if (folders !== null) target.folders = folders
+  }
   if (Array.isArray(src.prompts)) target.prompts = src.prompts.map(normalizePrompt).filter((item): item is PromptItem => item !== null)
-  if (src.stars !== null && typeof src.stars === 'object' && !Array.isArray(src.stars)) target.stars = src.stars as StarsMap
+  if (src.stars !== null && typeof src.stars === 'object' && !Array.isArray(src.stars)) {
+    const stars = normalizeStars(src.stars)
+    if (stars !== null) target.stars = stars
+  }
   if (typeof src.apiKey === 'string') target.apiKey = src.apiKey
-  if (src.usage !== null && typeof src.usage === 'object' && !Array.isArray(src.usage)) target.usage = src.usage as UsageMap
+  if (src.usage !== null && typeof src.usage === 'object' && !Array.isArray(src.usage)) target.usage = normalizeUsageMap(src.usage)
 }
 
 /** Rejection caps for browser-supplied documents. A shape beyond them is
@@ -172,6 +178,21 @@ export function normalizeStars(raw: unknown): StarsMap | null {
 const LOAD_RETRY_DELAYS = [1500, 3000, 6000]
 
 /**
+ * Reject a syntactically valid document whose collections cannot be persisted
+ * safely. Browser edits already pass the same gates; a hand-edited or
+ * half-written file must not bypass them, or one malformed tree makes every
+ * later `JSON.stringify` throw while the plugin keeps "loading" it.
+ * @returns a human-readable reason, or null when the shape is safe.
+ */
+function validateLoadedShape(raw: unknown): string | null {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return 'state document is not a JSON object'
+  const src = raw as Record<string, unknown>
+  if (src.folders !== undefined && normalizeFolders(src.folders) === null) return 'folders tree fails the shape gate'
+  if (src.stars !== undefined && normalizeStars(src.stars) === null) return 'stars map fails the shape gate'
+  return null
+}
+
+/**
  * Load and merge the persisted document into `state`.
  *
  * A missing file (ENOENT) is a fresh install and resolves with defaults. A
@@ -227,6 +248,18 @@ export async function loadStateFile(
     await quarantineStateFile(statePath, error)
     syncBaselines.set(statePath, null)
     raw = null
+  }
+  if (raw !== null) {
+    const shapeError = validateLoadedShape(raw)
+    if (shapeError !== null) {
+      // Syntactically valid but impossible to persist safely: a tree deeper
+      // than the serializer can handle, or a stars map that would poison
+      // future folds. Preserve the bytes aside exactly like a parse failure
+      // instead of adopting a document whose next save throws forever.
+      await quarantineStateFile(statePath, new Error(shapeError))
+      syncBaselines.set(statePath, null)
+      raw = null
+    }
   }
   if (raw !== null) {
     mergeState(state, raw)
@@ -389,8 +422,10 @@ function mergeUsageThreeWay(ours: UsageMap, base: UsageMap, theirsRaw: unknown):
   const theirs = theirsRaw !== null && typeof theirsRaw === 'object' && !Array.isArray(theirsRaw) ? theirsRaw as UsageMap : {}
   const merged: UsageMap = {}
   for (const day of new Set([...Object.keys(ours), ...Object.keys(theirs)])) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) continue
     const mergedDay: Record<string, UsageRow> = {}
     for (const model of new Set([...Object.keys(ours[day] ?? {}), ...Object.keys(theirs[day] ?? {})])) {
+      if (model === '__proto__' || model === 'constructor' || model === 'prototype') continue
       const om = ours[day]?.[model]
       const tm = theirs[day]?.[model]
       if (om === undefined && tm === undefined) continue

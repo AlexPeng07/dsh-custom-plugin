@@ -15,13 +15,15 @@ import type { UserConfig } from 'tsdown'
 /** Plugin id (package name), stamped into the __ModuleLoader__.load handoff. */
 const ID = '@alexpeng/dsh-custom-plugin'
 
-/** Browser platform modules the loader module table answers (mirrors the shell seed table). */
+/** Browser platform modules the loader module table answers (mirrors the 0.2.1 shell seed table). */
 const PLATFORM_MODULES = [
   'react',
   'react/jsx-runtime',
   'react-dom',
   'react-dom/client',
   '@deepseek-ai/cordis',
+  'zod',
+  '@tanstack/react-virtual',
   '@deepseek-ai/dsh-client-store',
   '@deepseek-ai/dsh-client-ui-slots',
   '@deepseek-ai/dsh-client-ui-primitives',

@@ -113,24 +113,29 @@ The `custom_plugin_status` tool reports appearance config, today's per-model usa
 
 | plugin release | dsh it was built and verified against | status |
 | --- | --- | --- |
-| 0.6.x | dsh 0.1.7-rc.2 and dsh 0.2.0-rc.2 (peer range names both; see Install) | this release |
+| 0.8.x | dsh 0.1.7-rc.2, dsh 0.2.0-rc.2 and dsh 0.2.1-rc.2 (both gates name all three; see Install) | this release |
+| 0.7.x | dsh 0.1.7-rc.2 and dsh 0.2.0-rc.2 | previous; refused on dsh 0.2.1-rc.2 |
+| 0.6.x | dsh 0.1.7-rc.2 and dsh 0.2.0-rc.2 | previous; refused on dsh 0.2.1-rc.2 |
 | 0.5.x | dsh 0.1.7-rc.2 (peer range `>=0.1.7-rc.2 <0.2.0-0`) | fine on 0.1.x; refused on any 0.2.x host, including dsh Desktop |
 | 0.4.2 | dsh 0.1.1-rc.1 … 0.1.6 era | superseded; do not expect it to work on 0.1.7+ |
 
 0.1.7 changed the plugin-facing contracts this suite depends on (session
 navigation moved to `ctx.uiWorkspace`, the session list stopped publishing the
 viewed session, and the message model dropped the `tool-result` content block),
-so neither release substitutes for the other. dsh 0.1.7+ validates a bundle's
-`@deepseek-ai/dsh-*` peer ranges against its own version at install and startup
-and skips a bundle that does not match. Runtimes predating that gate load the
-bundle anyway and degrade instead: on 0.1.1-rc.2, 7 of 8 slot registrations
-succeed, the turn-tail entry is rejected (that slot became a list slot back in
-0.1.6-alpha.2), and the open-session / branch / cross-session actions
-report their service as missing rather than throwing.
+so neither release substitutes for the other. dsh 0.2.1-alpha.4 changed the
+compatibility gate itself: it reads `engines.dsh` first and falls back to the
+`@deepseek-ai/dsh-*` peer ranges only when `engines.dsh` is absent. This package
+declares the same range in both places; older hosts read the peers, newer hosts
+read `engines.dsh`, and `pnpm smoke` fails if the two ever disagree. A bundle
+whose range does not match is skipped at install and startup. Runtimes
+predating that gate load the bundle anyway and degrade instead: on 0.1.1-rc.2,
+7 of 8 slot registrations succeed, the turn-tail entry is rejected (that slot
+became a list slot back in 0.1.6-alpha.2), and the open-session / branch /
+cross-session actions report their service as missing rather than throwing.
 
 ## Install
 
-Prerequisites: Node 22+, pnpm, and the `dsh` CLI (the official `@deepseek-ai/dsh` npm package; `npx @deepseek-ai/dsh` stands in for `dsh` when it is not installed globally). This release targets **dsh 0.1.7-rc.2 through the rest of 0.1.x, plus 0.2.0-rc.2** — dsh checks a bundle's `@deepseek-ai/dsh-*` peer ranges against its own version at install and startup, and skips a bundle that does not match, so `package.json` names only the releases this package was actually built and verified against. 0.7.0 keeps the build target 0.6.0 established (0.2.0-rc.2) and the same peer range; the 0.6.0 artifact ran the live host probes on both runtime lines (0.2.0-rc.2 boot graph of 66 module rows, 0.1.7-rc.2 of 65, 18 of 19 probes passing each, the skip needing a real session), and the 0.7.0 artifact additionally passed the desktop-shape live probe **on a real Desktop install** (see "On dsh Desktop" below). What stays unverified is what was always unverified: the per-turn chips (Mermaid render, LaTeX) need a real model reply, so a credential-free scratch home cannot reach them, and slot rendering still needs a browser pass. The range deliberately excludes 0.2.0-rc.1 (a superseded prerelease), 0.2.0-rc.3 and later prereleases nobody has looked at, and 0.2.0 stable until someone does. Range spelling matters here: `^0.1.7-rc.2` desugars to `>=0.1.7-rc.2 <0.2.0-0`, and every `0.2.0-rc.N` sorts *above* `0.2.0-0`, so a verified prerelease has to be named in its own clause — `pnpm smoke` checks that the build target actually satisfies the declared range and that `engines.dsh` admits the same versions. On an older dsh, install the matching older plugin release (`0.5.0` targets 0.1.7-rc.2) rather than granting a compatibility exemption.
+Prerequisites: Node 22+, pnpm, and the `dsh` CLI (the official `@deepseek-ai/dsh` npm package; `npx @deepseek-ai/dsh` stands in for `dsh` when it is not installed globally). This release targets **dsh 0.1.7-rc.2 through the rest of 0.1.x, plus 0.2.0-rc.2 and 0.2.1-rc.2** — dsh 0.2.1-alpha.4 and later check `engines.dsh` first and fall back to the `@deepseek-ai/dsh-*` peer ranges only when it is absent, while older hosts read the peers; this package declares the same range in both places and skips nothing it was not built for. 0.8.0 moves the build and test cohort to 0.2.1-rc.2. The artifact was installed with Desktop's own CLI into an isolated 0.2.1-rc.2 profile **with no compatibility exemption**, then booted for real: a 70-row boot graph, all five `dsh.client.inject` targets, the client bundle served at about 200 KB, the local Mermaid engine (3.57 MB), the state / usage / backup routes, a UTF-8 round trip and the desktop-forward trust shape all passed (16 live probes pass, 1 skip; the skip is timeline/export/search on a profile with no session, covered by unit tests and unchanged in 0.2.1 apart from an optional `formatStatus` field). The 0.6.0 artifact ran the live host probes on 0.2.0-rc.2 (66 rows) and 0.1.7-rc.2 (65 rows), 18 of 19 each, and 0.7.0 additionally passed the desktop-shape probe **on a real Desktop install** (see "On dsh Desktop" below). What stays unverified is what was always unverified: the per-turn chips (Mermaid render, LaTeX) need a real model reply, so a credential-free scratch home cannot reach them, and slot rendering still needs a browser pass. The range deliberately excludes 0.2.0-rc.1 (a superseded prerelease), 0.2.0-rc.3 and later prereleases nobody has looked at, and 0.2.0 stable; likewise 0.2.1-alpha.x, 0.2.1-rc.3 and later, and 0.2.1 stable. Range spelling matters here: `^0.1.7-rc.2` desugars to `>=0.1.7-rc.2 <0.2.0-0`, and every `0.2.0-rc.N` sorts *above* `0.2.0-0`, so a verified prerelease has to be named in its own clause — `pnpm smoke` checks that the build target actually satisfies the declared range and that `engines.dsh` admits exactly the same versions as the peer range. On an older dsh, install the matching older plugin release (`0.5.0` targets 0.1.7-rc.2) rather than granting a compatibility exemption.
 
 ### From npm
 
@@ -144,30 +149,30 @@ The registry tarball ships prebuilt output — no source build on the installing
 ### On dsh Desktop
 
 dsh Desktop is an Electron shell around the same Web application, and it bundles
-**exactly dsh 0.2.0-rc.2** — the desktop release line pins the shell and the
-runtime together, so a Desktop install is always a 0.2.x runtime. 0.7.0 names
-that version in its peer range and installs there with no compatibility
-exemption; 0.5.0 did not, and was refused with the same message a 0.2.x Web
-profile prints.
+**exactly dsh 0.2.1-rc.2** as of 2026-10-17 — the desktop release line pins the
+shell and the runtime together, so a Desktop install is always one exact 0.2.x
+runtime. 0.8.0 names that version in `engines.dsh` and in the peer range and
+installs there with no compatibility exemption; 0.7.1 and earlier are refused by
+the 0.2.1 gate with the same message a 0.2.x Web profile prints.
 
-Measured against 0.2.0-rc.2: the boot graph carries our row and all five inject
-targets, the Mermaid engine loads locally, and the host probes score the same
-there as on 0.1.7-rc.2. The access fence shares the platform fence's trust
-semantics: a loopback socket naming a loopback Host, a non-`cross-site` marker,
-and an Origin that is absent or matches the Host authority. The shell forwards
-renderer requests to its own Host after deleting `host`, `origin`,
-`sec-fetch-site` and `cookie`, then attaches its own credential — that unmarked
-shape is accepted outright (through 0.6.0 the fence additionally required a
-same-origin marker and rejected exactly this shape with `forbidden`; fixed in
-0.7.0 with fence-level unit tests). Foreign-origin and cross-site requests are
-still 403. **The 0.7.0 artifact has been probed route by route on a real
-Desktop install in the desktop forward shape** (upgraded to this build, Desktop
-restarted, `scripts/desktop-shape-probe.mjs` run): state / debug / backup /
-usage scan / the Mermaid engine preload and script routes all answer 200, and
-foreign-origin and cross-site probes still get 403; the timeline, the three
-export formats and search are re-checked by the same probe once the GUI has
-produced its first session. The visual pass inside the Desktop window (liquid
-glass look, panel layout, pattern removal) belongs to whoever installs it.
+Measured against 0.2.1-rc.2: the boot graph carries our row and all five inject
+targets (70 module rows), our client bundle is served at about 200 KB, the
+Mermaid engine loads locally, and the live host probes pass 16 / skip 1 (the
+session-path skip needs a real session). The access fence shares the platform
+fence's trust semantics: a loopback socket naming a loopback Host, a
+non-`cross-site` marker, and an Origin that is absent or matches the Host
+authority. The shell forwards renderer requests to its own Host after deleting
+`host`, `origin`, `sec-fetch-site` and `cookie`, then attaches its own
+credential — that unmarked shape is accepted outright (through 0.6.0 the fence
+additionally required a same-origin marker and rejected exactly this shape with
+`forbidden`; fixed in 0.7.0 with fence-level unit tests). Foreign-origin and
+cross-site requests are still 403. **The 0.7.0 artifact was probed route by
+route on a real Desktop install in the desktop forward shape** (state / debug /
+backup / usage scan / the Mermaid engine preload and script routes all 200;
+foreign-origin and cross-site probes still 403), and 0.8.0 repeats the same
+shape against a booted 0.2.1-rc.2 host. The visual pass inside the Desktop
+window (liquid glass look, panel layout, pattern removal) belongs to whoever
+installs it.
 
 Managing the desktop profile takes the `dsh` command that ships with Desktop, not
 the npm one — the public CLI refuses the reserved `desktop` profile:
@@ -273,14 +278,16 @@ CI has no harness to talk to, so run it whenever a dsh release lands; slot
 registration and rendering still need the browser pass described above.
 
 `scripts/desktop-shape-probe.mjs` is a third probe, aimed at a **running dsh
-Desktop** (its Host listens on `127.0.0.1:19387` by default, override with
-`DSH_PORT`): it probes state / debug / backup / usage scan / the Mermaid engine
-and script routes in the exact header shape the desktop shell forwards (loopback
-Host, no `origin`, no `sec-fetch-site`), then runs timeline, the three export
-formats and search against the first session the host has registered; the
-foreign-origin and cross-site probes must still come back 403. It is read-only
-against the real home; if the GUI has no session yet, send one message there and
-re-run.
+Desktop**. Desktop 0.2.1+ asks the OS for its port, so pass the port it printed
+(or is listening on) as `DSH_PORT` — older releases listened on 19387. It probes
+state / debug / backup / usage scan / the Mermaid engine and script routes in the
+exact header shape the desktop shell forwards (loopback Host, no `origin`, no
+`sec-fetch-site`), then runs timeline, the three export formats and search
+against the first session the host has registered; the foreign-origin and
+cross-site probes must still come back 403. The usage-scan probe rewrites
+today's usage ledger, so point `DSH_HOME` at a scratch home when that matters;
+the other probes are read-only. If the GUI has no session yet, send one message
+there and re-run.
 
 Checking a new dsh release takes four commands, and never touches your own
 harness home:
@@ -292,18 +299,19 @@ DSH_HOME=/tmp/dshnext-home node node_modules/@deepseek-ai/dsh/lib/bin.js --profi
 DSH_HOME=/tmp/dshnext-home DSH_PORT=13999 COOKIE_JAR=/tmp/dshnext/jar.txt bash scripts/live-dsh-check.sh
 ```
 
-If the release falls outside the declared peer range, the second command refuses
-and rolls the profile back; `dsh plugin --profile web allow-version <pkg>@<ver>
---dsh-version <version> --accept-risk` grants the exact-version exemption, so the
-probe can tell you *what* actually breaks instead of what the gate already
-refused.
+If the release falls outside the declared range (`engines.dsh` on dsh
+0.2.1-alpha.4 and later, the `@deepseek-ai/dsh-*` peers otherwise), the second
+command refuses and rolls the profile back; `dsh plugin --profile web
+allow-version <pkg>@<ver> --dsh-version <version> --accept-risk` grants the
+exact-version exemption, so the probe can tell you *what* actually breaks instead
+of what the gate already refused.
 
 For a **dsh Desktop** release, start one step earlier, because the repository
 cannot tell you what an installer runs: Desktop pins its shell and
 `@deepseek-ai/dsh` to one exact version and ships the whole runtime inside
 `resources/app.asar`. Read it off the installed app instead — the command is
-read-only, and it prints that version together with whether the peer range
-declared here admits it:
+read-only, and it prints that version together with whether the declared
+`engines.dsh` / peer range admits it (and which gate dsh will actually read):
 
 ```bash
 node scripts/desktop-runtime.mjs "D:/DSH"                    # the installation dir

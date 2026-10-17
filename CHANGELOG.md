@@ -4,6 +4,84 @@ All notable changes to this project are documented here. The format loosely
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions
 follow [Semantic Versioning](https://semver.org/).
 
+## 0.8.0 — 2026-10-17
+
+dsh 0.2.1-rc.2 兼容版：`engines.dsh` 取代 peer 范围成为 0.2.1-alpha.4+ 的首要兼容门，
+旧范围把 0.2.1 全线拒之门外；本版补上新运行时线，并按 0.2.1 的客户端 seed 表与输入
+动作签名完成适配。
+
+### Changed
+
+- **兼容范围新增 dsh 0.2.1-rc.2**：`engines.dsh` 与
+  `@deepseek-ai/dsh-tools` peer 范围同为
+  `>=0.1.7-rc.2 <0.2.0-0 || >=0.2.0-rc.2 <0.2.0-rc.3 || >=0.2.1-rc.2 <0.2.1-rc.3`。
+  旧范围止于 `<0.2.0-rc.3`，而 dsh 0.2.1-alpha.4 起插件管理器优先读
+  `engines.dsh`，因此桌面版升到 0.2.1-rc.2 后会把 0.7.1 判为不兼容并拒绝启用——
+  这正是本次报错的根因。范围仍只收实际构建并实测过的预发布版：0.2.1-alpha.x、
+  0.2.1-rc.3+ 与 0.2.1 正式版不在内。
+- **构建与测试队列整体切到 0.2.1-rc.2**：九个 `@deepseek-ai/dsh-*`
+  devDependency 与 `@deepseek-ai/cordis` 4.0.5 同步升级；`pnpm smoke` 新增
+  「队列必须恰好一个版本」检查，`tests/manifest.spec.ts` 固化范围必须同时放行
+  三条已验证运行时线、拒绝未验证版本。
+- **客户端平台模块表对齐 0.2.1 shell**：`PLATFORM_MODULES` 补入 seed 表新增的
+  `zod` 与 `@tanstack/react-virtual`；现有五个 inject 目标在 0.2.1 boot 图中
+  全部存在。
+- **输入动作类型对齐**：`setDraft(text)` 在 0.2.1 只接收文本（旧声明的可选
+  `editRange` 参数从未使用），本地最小接口同步收窄。
+- **兼容判定工具对齐新语义**：`scripts/desktop-runtime.mjs` 改为优先用
+  `engines.dsh` 判定（与 dsh 0.2.1-alpha.4+ 一致），回退 peer 范围时才用 peer，
+  两者判定不一致会单独告警；`scripts/smoke.mjs` 的说明与探测版本表同步更新。
+- **对 0.2.0-rc.2 → 0.2.1-rc.2 的插件可感 API 做逐项核对**：本插件使用的
+  `WebRoute`、`defineTool`、`AttachmentStore`、`SessionQueryEngine`、
+  `SessionLogSnapshot`、`SessionEvent`、`theme.overrideTokens`、slots 注册与
+  五个 inject 目标均无破坏性变化；0.2.1 的变更集中在新功能（session plugin
+  record、字体设置、PTC 模式收窄、远程 Web/TLS、新 model-label 槽位），不影响
+  本插件现有路径。
+
+### Optimized
+
+- **读档形状门**：`mergeState` 现在对 folders 走 `normalizeFolders`、对 stars 走
+  `normalizeStars`、对 usage 走新的 `normalizeUsageMap`。此前一份 JSON 合法但
+  文件夹深度超标（或 stars 形状错误）的文档会被直接采纳，随后每次保存的
+  `JSON.stringify` 都抛 `RangeError`，插件永久无法保存；现在这类文档在加载时按
+  「损坏」处理：原名改名 `.corrupt-<pid>` 保留现场，采用默认值并继续可写。
+  usage 的畸形日期/模型行/字符串计数会被丢弃或归零，避免后续 fold 把字符串拼进
+  计数器。
+- **保存回滚不再深拷贝整份台账**：`applyEdit` 与备份导入只捕获被替换的 section
+  引用做回滚点，不再 `JSON.parse(JSON.stringify(state))`。用量台账保留 90 天，
+  此前每次切换开关的保存都要复制整份台账；现在回滚成本与编辑量成正比。
+- **Mermaid 引擎一致性**：CDN 兜底不再硬编码 `mermaid@11.6.0`，改为读取实际安装
+  的 `mermaid/package.json` 版本；本地引擎改用异步读取（3.5 MB 同步读会卡住宿主
+  事件循环），字节数按 UTF-8 计。引擎脚本路由加 `ETag` + `Cache-Control:
+  no-cache`：页面重载命中 304，不再每次重传 3.5 MB。
+- **浏览器轮询与渲染热点**：流式期间的 timeline 轮询在页面隐藏时暂停、单次请求
+  在飞时不叠加；`reuseTimelineItems` 复用未变化的 turn 对象，只有真正变化的行
+  触发渲染。`TurnTailEntry`（每条消息一个）和 `FxCanvas` 改用
+  `useSSelector` 选择器订阅，余额/用量/toast 等无关写入不再重渲染最多 400 个
+  turn-tail。诊断节流表加上限，避免跨会话无限增长。
+- **卸载回收补全**：anti-scroll 的滚动行为与 `data-vx-anti` 属性、就地 Mermaid
+  包装节点、配置加载重试定时器、问候 toast 定时器都会在停用/卸载时还原；此前
+  这些页级副作用会留在 GUI 中。
+- **路由健壮性**：`POST /state` 上限从 256 KiB 提到 1 MiB（提示词库较大的用户
+  此前会在保存时收到 413），并拒绝非对象 JSON；balance / usage-scan / mermaid
+  的意外异常统一转成 JSON 错误包，而不是让 handler reject。
+- **测试**：新增 `tests/timeline-diff.spec.ts`、读档形状隔离用例、usage 归一化
+  用例、Mermaid 版本/UTF-8 计数用例、ETag 304 用例；总数 190 → 204。
+
+### Verified
+
+- 用桌面版自带 CLI 在隔离 profile 中安装本 tarball：**无兼容豁免、无
+  `incompatible` 提示**（这正是用户此前遇到的拒绝路径）。
+- 在同一 0.2.1-rc.2 运行时上冷启动真实 Host 并跑 `scripts/live-dsh-check.sh`：
+  boot 图 70 个模块行、五个 inject 目标齐全、插件 bundle 已服务（约 200 KB）、
+  Mermaid 本地引擎 3.57 MB、state/usage/backup 路由、UTF-8 往返、桌面转发形状与
+  异源/跨站围栏全部通过；时间线/导出/搜索因临时 profile 无会话而跳过（该路径由
+  单测覆盖，相关 API 在 0.2.1 仅新增可选 `formatStatus` 字段）。
+- Mermaid 脚本路由实测：首次 200 / 3,572,661 字节，带 `If-None-Match` 的第二次
+  请求 304 / 0 字节。
+- `pnpm check:readme`、`pnpm typecheck`、`pnpm test`（204 tests）、`pnpm build`、
+  `pnpm smoke` 全绿。
+
 ## 0.7.1 — 2026-10-03
 
 数据安全与健壮性加固版：封住两条不可恢复配置丢失路径与一条跨宿主丢更新路径，装上浏览器提交的形状门，补齐卸载回收与凭据状态缓存；测试从 143 增至 185。

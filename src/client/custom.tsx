@@ -36,6 +36,7 @@ import { archiveBatch, budgetState, fillPromptTemplate, isCommandPaletteShortcut
 import { MERMAID_SCRIPT_PATH } from '../protocol.ts'
 import { isGenericInfostring, isMermaidCode, normalizeMermaidText } from './mermaid-code.ts'
 import { mermaidLiveUrl } from './mermaid-url.ts'
+import { mermaidCodeKey, reuseTimelineItems } from './timeline-diff.ts'
 import { STATIC_CSS } from './styles.ts'
 
 /** Minimal input-state face the input dock owner provides. */
@@ -45,7 +46,7 @@ interface InputStateLike {
 
 /** Minimal input-actions face the framework injects into input-region slots. */
 interface InputActionsLike {
-  setDraft(text: string, editRange?: unknown): void
+  setDraft(text: string): void
 }
 
 /** Minimal workspace row face (official WorkspaceView carries workspaceId). */
@@ -300,6 +301,48 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     }, [])
     return S
   }
+  /** Shallow object equality for selector results. */
+  function shallowEqual<T extends object>(a: T, b: T): boolean {
+    if (a === b) return true
+    const aKeys = Object.keys(a)
+    if (aKeys.length !== Object.keys(b).length) return false
+    for (const key of aKeys) {
+      if (!Object.is((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key])) return false
+    }
+    return true
+  }
+  /**
+   * Subscribe to a slice of the store. The store fan-out is intentionally
+   * simple (one listener set), but per-turn entries are the hot path: a
+   * balance tick or a toast must not re-render 400 turn-tail rows. The
+   * selector runs on every store write; only an unequal result forces a
+   * render.
+   */
+  function useSSelector<T>(selector: (state: Store) => T, equal: (a: T, b: T) => boolean = Object.is): T {
+    const [, force] = React.useReducer((x: number) => x + 1, 0)
+    const selectorRef = React.useRef(selector)
+    selectorRef.current = selector
+    const equalRef = React.useRef(equal)
+    equalRef.current = equal
+    const current = selector(S)
+    const currentRef = React.useRef(current)
+    currentRef.current = current
+    React.useEffect(() => {
+      const listener = (): void => {
+        const next = selectorRef.current(S)
+        if (!equalRef.current(currentRef.current, next)) {
+          currentRef.current = next
+          force()
+        }
+      }
+      listeners.push(listener)
+      // A store write can land between this render and effect registration;
+      // compare once so that update is not lost.
+      listener()
+      return () => { listeners = listeners.filter((l) => l !== listener) }
+    }, [])
+    return current
+  }
   function useSessionsSafe(props: { useSessions: OverlayProps['useSessions'] }): SessionListLike | null {
     try { return props.useSessions(st => st) } catch { return null }
   }
@@ -514,11 +557,19 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
   // would PERSIST — factory defaults over the user's stored configuration.
   const LOAD_RETRY_DELAYS = [1500, 3000, 6000]
   let loadCfgAttempt = 0
+  let loadRetryTimer: ReturnType<typeof setTimeout> | null = null
+  let greetTimer: ReturnType<typeof setTimeout> | null = null
+  let disposed = false
   // Whether a state read has ever succeeded. A save built on unloaded
   // defaults would replace stored folders/prompts/stars with factory
   // empties, so saveCfg refuses to POST until this is true.
   let cfgLoaded = false
   async function loadCfg(): Promise<void> {
+    if (disposed) return
+    if (loadRetryTimer !== null) {
+      clearTimeout(loadRetryTimer)
+      loadRetryTimer = null
+    }
     let failure: string | null = null
     try {
       const result = await apiStateGet()
@@ -558,21 +609,32 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       if (loadCfgAttempt < LOAD_RETRY_DELAYS.length) {
         const delay = LOAD_RETRY_DELAYS[loadCfgAttempt]
         loadCfgAttempt++
-        setTimeout(() => { void loadCfg() }, delay)
+        if (loadRetryTimer !== null) clearTimeout(loadRetryTimer)
+        loadRetryTimer = setTimeout(() => {
+          loadRetryTimer = null
+          void loadCfg()
+        }, delay)
       } else if (S.booted) {
         // Retries exhausted: now it is a real, user-visible failure.
         toast('配置读取失败：' + failure, 'error')
       }
     }
+    if (disposed) return
     S.booted = true
     setS({})
     if (!S.greeted) {
       S.greeted = true
-      void new Promise<void>((resolve) => setTimeout(resolve, 1200)).then(() => toast(failure !== null ? 'Custom 便利套件加载失败：' + failure : 'Custom 便利套件已就绪', failure !== null ? 'error' : 'info')).catch(() => {})
+      if (greetTimer !== null) clearTimeout(greetTimer)
+      greetTimer = setTimeout(() => {
+        greetTimer = null
+        if (disposed) return
+        toast(failure !== null ? 'Custom 便利套件加载失败：' + failure : 'Custom 便利套件已就绪', failure !== null ? 'error' : 'info')
+      }, 1200)
     }
   }
 
   function saveCfg(): void {
+    if (disposed) return
     if (!cfgLoaded) {
       // The host can come up after the retry ladder has exhausted; saving
       // the factory snapshot then would wipe everything stored. Reload
@@ -833,12 +895,15 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     }
   }
   function FxCanvas(): React.ReactElement {
-    const s = useS()
+    const { weather, dark } = useSSelector(
+      (state) => ({ weather: state.cfg.weather ?? 'none', dark: state.dark === true }),
+      shallowEqual,
+    )
     const ref = React.useRef<HTMLCanvasElement | null>(null)
     /** 粒子配色跟随背景亮度：浅色主题需要更深的粒子颜色才可辨识。
      * ref 让 RAF 循环每帧读到最新值，主题/背景切换时无需重建粒子场。 */
-    const lightRef = React.useRef(!(s.dark === true))
-    React.useEffect(() => { lightRef.current = !(s.dark === true) }, [s.dark])
+    const lightRef = React.useRef(!dark)
+    React.useEffect(() => { lightRef.current = !dark }, [dark])
     React.useEffect(() => {
       const cvs = ref.current
       if (cvs === null) return
@@ -846,11 +911,10 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       if (g === null) return
       const w = cvs.clientWidth || 0
       const h = cvs.clientHeight || 0
-      initFx(s.cfg.weather ?? 'none', w, h)
+      initFx(weather, w, h)
       let raf = 0
       const t0 = Date.now()
       const loop = (): void => {
-        const weather = s.cfg.weather ?? 'none'
         if (weather === 'none') {
           // Baseline behaviour: switching to "off" wipes the last painted frame
           // instead of leaving it frozen on the canvas.
@@ -862,7 +926,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       }
       loop()
       return () => { try { cancelAnimationFrame(raf) } catch { /* already cancelled */ } }
-    }, [s.cfg.weather])
+    }, [weather])
     return React.createElement('canvas', { ref, className: 'vx-fx' })
   }
 
@@ -879,6 +943,9 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     const now = Date.now()
     const at = diagAtByKey.get(key)
     if (at !== undefined && now - at < 5000) return
+    // Session-scoped keys make this map grow with every session viewed; a
+    // bounded ring is enough for a throttle table.
+    if (diagAtByKey.size > 200) diagAtByKey.clear()
     diagAtByKey.set(key, now)
     reportDiag(message)
   }
@@ -890,14 +957,18 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       // onto the newly opened one's rows.
       // The serial also protects the same session from an older polling result
       // arriving after a newer one.
-      if (sessionId !== S.sessionId || requestSerial !== turnsRequestSerial) return
+      if (sessionId !== S.sessionId || requestSerial !== turnsRequestSerial || disposed) return
       if (result.ok === true) {
         const items = result.items ?? []
-        const bySeq = new Map<number, TimelineItem>()
-        for (const item of items) bySeq.set(item.seq, item)
-        S.turns = { sessionId, items }
-        S.turnsBySeq = bySeq
-        setS({ turns: S.turns, turnsBySeq: bySeq })
+        const previous = S.turns !== null && S.turns.sessionId === sessionId ? S.turns : null
+        // Reuse unchanged item objects: every turn-tail row subscribes to its
+        // own item, so a poll that only appends one turn must not re-render
+        // the other 399.
+        const diff = reuseTimelineItems(previous?.items ?? null, previous !== null ? S.turnsBySeq : null, items)
+        if (!diff.changed) return
+        S.turns = { sessionId, items: diff.items }
+        S.turnsBySeq = diff.bySeq
+        setS({ turns: S.turns, turnsBySeq: diff.bySeq })
         diagThrottled('timeline ' + items.length + ' items ' + sessionId.slice(0, 24))
       } else {
         diagThrottled('timeline failed: ' + String(result.error ?? 'unknown'))
@@ -1067,10 +1138,20 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
           const script = d.createElement('script')
           script.src = MERMAID_SCRIPT_PATH
           script.onload = () => resolve()
-          script.onerror = () => reject(new Error('script load failed'))
+          script.onerror = () => {
+            // Drop the failed tag so a retry does not accumulate dead scripts.
+            script.remove()
+            reject(new Error('script load failed'))
+          }
           d.head.appendChild(script)
         })
         mermaidState = { status: 'ready' }
+        // Blocks that failed while the engine was unavailable carry a fail
+        // marker; now that it is ready, let them render on the next scan.
+        if (d0 !== null) {
+          for (const el of Array.from(d0.querySelectorAll<HTMLElement>('[data-vx-mmd-fail]'))) delete el.dataset.vxMmdFail
+          if (S.cfg.mermaid === true) void scanMermaidBlocks(S.dark)
+        }
         return true
       }
       mermaidState = { status: 'failed', error: result.error ?? 'unknown' }
@@ -1135,20 +1216,23 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
    * GUI-owned nodes — React keeps reconciling its tree; the block is only
    * visually swapped with the diagram stage via display. */
   async function renderInPlace(block: HTMLElement, code: string, dark: boolean): Promise<void> {
-    if (block.dataset.vxMmd === code) return
+    const key = mermaidCodeKey(code)
+    const existingWrap = block.previousElementSibling
+    if (block.dataset.vxMmd === key && existingWrap !== null && existingWrap.classList.contains('vx-mmd-wrap')) return
     const ready = await ensureMermaid()
     if (!ready) {
-      // Engine unreachable: keep the code visible; retry only when the code
-      // itself changes (a later scan after engine recovery re-renders).
-      block.dataset.vxMmdFail = code
+      // Engine unreachable: keep the code visible; a later scan retries once
+      // the engine becomes ready (ensureMermaid clears the fail marker then).
+      block.dataset.vxMmdFail = key
       return
     }
     const r = await renderMermaid(code, dark)
-    if (!r.ok) { block.dataset.vxMmdFail = code; return }
+    if (!r.ok) { block.dataset.vxMmdFail = key; return }
     delete block.dataset.vxMmdFail
-    block.dataset.vxMmd = code
     const d = typeof document !== 'undefined' ? document : null
     if (d === null) return
+    // Re-read the sibling after the awaits: React may have re-rendered the
+    // conversation and detached the wrapper observed before ensureMermaid.
     let wrap = block.previousElementSibling as HTMLElement | null
     if (wrap === null || !wrap.classList.contains('vx-mmd-wrap')) {
       wrap = d.createElement('div')
@@ -1191,7 +1275,9 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       showDiagram()
     }
     const stage = wrap.querySelector('.vx-mmd-stage')
-    if (stage !== null) stage.innerHTML = r.svg
+    if (stage === null) return
+    stage.innerHTML = r.svg
+    block.dataset.vxMmd = key
   }
 
   /** Scan every chat code block and render the mermaid ones in place. */
@@ -1209,6 +1295,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       if (codeRaw === null) continue
       const code = normalizeMermaidText(codeRaw).trim()
       if (code === '') continue
+      const key = mermaidCodeKey(code)
       const info = blockInfostring(block)
       const definite = info !== null && info.trim().toLowerCase() === 'mermaid'
       if (definite) {
@@ -1221,7 +1308,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
         if (!isGenericInfostring(info)) continue
         if (!isMermaidCode(codeRaw)) continue
       }
-      if (block.dataset.vxMmd === code || block.dataset.vxMmdFail === code) continue
+      if (block.dataset.vxMmd === key || block.dataset.vxMmdFail === key) continue
       mmdInflight.add(block)
       try {
         await renderInPlace(block, code, dark)
@@ -1785,15 +1872,20 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     useViewedSession(props)
     const seq = typeof props.seq === 'number' ? props.seq : null
     const turn = props.turn
-    const s = useS()
+    const { item, formula, mermaid } = useSSelector((state) => ({
+      item: seq !== null && state.turns !== null && state.turns.sessionId === state.sessionId
+        ? state.turnsBySeq?.get(seq) ?? null
+        : null,
+      formula: state.cfg.formula === true,
+      mermaid: state.cfg.mermaid === true,
+    }), shallowEqual)
     let registered: HTMLElement | null = null
-    const item = (seq !== null && s.turns !== null && s.turns.sessionId === S.sessionId) ? s.turnsBySeq?.get(seq) ?? null : null
     const btns: React.ReactElement[] = []
-    if (item !== null && s.cfg.formula === true) {
+    if (item !== null && formula) {
       if (item.hasLatex === true) btns.push(React.createElement('button', { key: 'lx', className: 'vx-chip', title: '复制 LaTeX 公式', onClick: () => void copyLatexOf(item) }, React.createElement(Icon, { n: 'copy', size: 11 }), ' LaTeX'))
       if (item.hasMathml === true) btns.push(React.createElement('button', { key: 'mm', className: 'vx-chip', title: '复制 MathML（可粘贴到 Word）', onClick: () => void copyMathmlOf(item) }, React.createElement(Icon, { n: 'copy', size: 11 }), ' MathML'))
     }
-    if (item !== null && s.cfg.mermaid === true && item.hasMermaid === true) {
+    if (item !== null && mermaid && item.hasMermaid === true) {
       btns.push(React.createElement('button', { key: 'md', className: 'vx-chip', title: '渲染 Mermaid 图表', onClick: () => openMermaidOf(item) }, React.createElement(Icon, { n: 'gitBranch', size: 11 }), ' Mermaid'))
     }
     return React.createElement('span', {
@@ -2736,7 +2828,13 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       return () => d.removeEventListener('keydown', onKey)
     }, [])
     React.useEffect(() => { if (s.booted) applyAppearance() }, [s.booted, s.cfg.bg, s.cfg.glass, s.cfg.glassMode, s.cfg.globalGlass, s.dark])
-    React.useEffect(() => { syncAntiScroll(s.cfg.antiScroll === true) }, [s.cfg.antiScroll])
+    React.useEffect(() => {
+      syncAntiScroll(s.cfg.antiScroll === true)
+      // Unmount/disable must restore scroll-behavior on every element this
+      // page-global effect touched; otherwise the GUI keeps the forced
+      // `auto` behavior after the plugin is gone.
+      return () => { syncAntiScroll(false) }
+    }, [s.cfg.antiScroll])
     React.useEffect(() => {
       const w = typeof window !== 'undefined' ? window : null
       const d = typeof document !== 'undefined' ? document : null
@@ -2798,10 +2896,37 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     const sessions = useSessionsSafe(props)
     const summary = sessions !== null && s.sessionId !== null ? sessions.byId[s.sessionId] : null
     React.useEffect(() => {
-      if (S.sessionId === null) return
+      const watchedId = S.sessionId
+      if (watchedId === null) return
       const running = summary?.running === true
-      const handle = setInterval(() => { if (running && S.sessionId !== null) void fetchTurns(S.sessionId) }, 3000)
-      return () => clearInterval(handle)
+      if (!running) return
+      let inFlight = false
+      const tick = (): void => {
+        if (inFlight) return
+        const d = typeof document !== 'undefined' ? document : null
+        // Background tabs do not need a full log replay every 3 seconds; the
+        // visibility handler catches up immediately on return.
+        if (d !== null && d.hidden) return
+        const id = S.sessionId
+        if (id === null) return
+        inFlight = true
+        void fetchTurns(id).finally(() => { inFlight = false })
+      }
+      const handle = setInterval(tick, 3000)
+      const onVisibility = (): void => {
+        const d = typeof document !== 'undefined' ? document : null
+        if (d === null || !d.hidden) tick()
+      }
+      if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisibility)
+      return () => {
+        clearInterval(handle)
+        if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisibility)
+        // The run just ended (or the effect re-ran): take one final snapshot
+        // so the last streamed turn's chips land without a manual session
+        // switch. A session switch is handled by useViewedSession, so only
+        // fetch when the watched session is still the selected one.
+        if (!disposed && S.sessionId === watchedId) void fetchTurns(watchedId)
+      }
     }, [s.sessionId, summary?.running])
     const children: React.ReactElement[] = [React.createElement(FxCanvas, { key: 'fx' })]
     children.push(React.createElement(MermaidInPlace, { key: 'mmd' }))
@@ -2870,8 +2995,17 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
   // `register` lines this one follows.
   reportDiag(`client installed: ${injectedCount} injection requests / ${injectedKeys.size} slots`)
   return () => {
+    disposed = true
     for (const unregister of unregisterAll.splice(0)) {
       try { unregister() } catch { /* already unregistered */ }
+    }
+    if (loadRetryTimer !== null) {
+      clearTimeout(loadRetryTimer)
+      loadRetryTimer = null
+    }
+    if (greetTimer !== null) {
+      clearTimeout(greetTimer)
+      greetTimer = null
     }
     // Slot teardown unmounts only the React surfaces; the appearance
     // painter's page-global side effects — theme token overrides, root
@@ -2886,6 +3020,12 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       clearTimeout(balanceRetryTimer)
       balanceRetryTimer = null
     }
+    // Both settle DOM the plugin owns rather than styles: the anti-scroll
+    // attributes and the in-place Mermaid wrappers would otherwise outlive
+    // the plugin (the React effect cleanup does not run for entries the host
+    // unmounts after this disposer).
+    try { syncAntiScroll(false) } catch { /* best effort */ }
+    try { restoreMermaidBlocks() } catch { /* best effort */ }
     const d = typeof document !== 'undefined' ? document : null
     if (d !== null) {
       for (const cls of ['vx-liquid', 'vx-dark', 'vx-light']) {

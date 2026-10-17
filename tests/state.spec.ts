@@ -177,6 +177,43 @@ describe('loadStateFile failure handling', () => {
     }
   })
 
+  it('quarantines a syntactically valid document whose folder tree fails the shape gate', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'custom-plugin-shape-'))
+    try {
+      const statePath = join(home, STATE_FILE)
+      // This is exactly the document that used to load and then make every
+      // save throw: JSON is valid, but the depth exceeds MAX_FOLDER_DEPTH.
+      let node: Record<string, unknown> = { id: 'leaf', name: 'leaf', children: [], sessionIds: [], workspaceIds: [], prompts: [] }
+      for (let i = 0; i < 40; i++) {
+        node = { id: `f${i}`, name: `f${i}`, children: [node], sessionIds: [], workspaceIds: [], prompts: [] }
+      }
+      const document = JSON.stringify({ cfg: { bg: '雾蓝' }, folders: [node] })
+      await writeFile(statePath, document, 'utf8')
+      const state = defaultState()
+      expect(await loadStateFile(state, home, [])).toBe(statePath)
+      expect(state.cfg).toEqual(DEFAULT_CONFIG)
+      expect(state.folders).toEqual([])
+      expect(await readFile(`${statePath}.corrupt-${process.pid}`, 'utf8')).toBe(document)
+    } finally {
+      await rm(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+    }
+  })
+
+  it('quarantines a syntactically valid document whose stars map fails the shape gate', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'custom-plugin-stars-'))
+    try {
+      const statePath = join(home, STATE_FILE)
+      const document = JSON.stringify({ stars: ['not', 'a', 'map'] })
+      await writeFile(statePath, document, 'utf8')
+      const state = defaultState()
+      expect(await loadStateFile(state, home, [])).toBe(statePath)
+      expect(state.stars).toEqual({})
+      expect(await readFile(`${statePath}.corrupt-${process.pid}`, 'utf8')).toBe(document)
+    } finally {
+      await rm(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+    }
+  })
+
   it('retries a transient read failure and merges once the file recovers', async () => {
     const home = await mkdtemp(join(tmpdir(), 'custom-plugin-transient-'))
     try {

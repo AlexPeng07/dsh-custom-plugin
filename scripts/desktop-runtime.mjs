@@ -1,14 +1,15 @@
 #!/usr/bin/env node
 /**
  * Read the dsh version an INSTALLED dsh Desktop carries, and say whether this
- * package's peer range admits it.
+ * package's declared range admits it.
  *
  * Desktop pins its shell and `@deepseek-ai/dsh` to one exact version and ships
  * the whole runtime inside `resources/app.asar`, so the only authority on "which
  * dsh does this Desktop run" is that archive — the repository's `master` branch
- * can be ahead of, or behind, whatever a user installed. dsh's compatibility gate
- * then decides activation from `peerDependencies` alone, and prerelease ordering
- * is not intuitive (`^0.1.7-rc.2` desugars to `<0.2.0-0`, which every `0.2.0-rc.N`
+ * can be ahead of, or behind, whatever a user installed. dsh 0.2.1-alpha.4 and
+ * later decide activation from `engines.dsh` first and fall back to the
+ * `@deepseek-ai/dsh-*` peer ranges when it is absent; prerelease ordering is not
+ * intuitive (`^0.1.7-rc.2` desugars to `<0.2.0-0`, which every `0.2.0-rc.N`
  * sorts above), so the verdict is printed here rather than reasoned out.
  *
  *   node scripts/desktop-runtime.mjs <path to app.asar or the installation dir>
@@ -124,6 +125,8 @@ const runtime = JSON.parse(runtimeJson.toString('utf8'))
 const manifestText = await readFile(join(root, 'package.json'), 'utf8')
 const plugin = JSON.parse(manifestText)
 const peer = plugin.peerDependencies?.['@deepseek-ai/dsh-tools'] ?? ''
+const engines = String(plugin.engines?.dsh ?? '')
+const declared = engines !== '' ? engines : peer
 
 console.log(`asar:                       ${asar}`)
 console.log(`Desktop release:            ${runtime.release?.version} (host protocol ${runtime.release?.hostProtocolVersion}, node ${runtime.release?.nodeVersion}, pnpm ${runtime.release?.pnpmVersion})`)
@@ -134,12 +137,20 @@ for (const name of WATCHED) {
 }
 
 const dshTools = runtime.sharedPackages?.find((pkg) => pkg.name === '@deepseek-ai/dsh-tools')?.version
-if (dshTools === undefined || peer === '') {
-  console.log('verdict:                    UNKNOWN — no @deepseek-ai/dsh-tools in the archive, or no such peer declared')
+if (dshTools === undefined || declared === '') {
+  console.log('verdict:                    UNKNOWN — no @deepseek-ai/dsh-tools in the archive, or no declared range')
   process.exit(1)
 }
-const admitted = semver.satisfies(dshTools, peer, { includePrerelease: true })
+const gate = { includePrerelease: true }
+const admitted = semver.satisfies(dshTools, declared, gate)
+const peerAdmitted = peer === '' ? undefined : semver.satisfies(dshTools, peer, gate)
+const enginesAdmitted = engines === '' ? undefined : semver.satisfies(dshTools, engines, gate)
+console.log(`engines.dsh:                ${engines === '' ? '(absent — the peer range is the gate)' : engines}`)
 console.log(`peer (@deepseek-ai/dsh-tools): ${peer}`)
+if (enginesAdmitted !== undefined && peerAdmitted !== undefined && enginesAdmitted !== peerAdmitted) {
+  console.log(`warning:                    engines.dsh and the peer range disagree on ${dshTools}; dsh 0.2.1-alpha.4+ reads engines.dsh first`)
+}
+console.log(`gate:                       ${engines !== '' ? 'engines.dsh (dsh 0.2.1-alpha.4+ precedence)' : '@deepseek-ai/dsh-tools peer range (fallback)'}`)
 console.log(`verdict:                    ${admitted ? `ADMITTED — Desktop can install ${plugin.name}@${plugin.version} with no exemption`
   : `REFUSED — Desktop would need an exact-version exemption for ${plugin.name}@${plugin.version} on dsh ${dshTools}`}`)
 if (!admitted) {

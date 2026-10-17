@@ -6,10 +6,15 @@
 
 import { afterAll, describe, expect, it, vi } from 'vitest'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { readFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { CustomPluginHost, defaultLocalMermaidPath } from '../src/host-service.ts'
 import { defaultState } from '../src/state.ts'
+
+const require = createRequire(import.meta.url)
+const MERMAID_VERSION = (JSON.parse(readFileSync(require.resolve('mermaid/package.json'), 'utf8')) as { version: string }).version
 
 function makeHost(localMermaidPath?: () => string | null): CustomPluginHost {
   return new CustomPluginHost({
@@ -44,17 +49,32 @@ describe('mermaidFetch local-first', () => {
     }
   })
 
-  it('reads a custom local path and reports its byte count', async () => {
+  it('reads a custom local path and reports its UTF-8 byte count', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'vx-mmd-'))
     try {
       const file = join(dir, 'mermaid.min.js')
-      await writeFile(file, 'x'.repeat(2048), 'utf8')
+      const content = '// ' + 'é'.repeat(1024)
+      await writeFile(file, content, 'utf8')
       const host = makeHost(() => file)
       const result = await host.mermaidFetch()
-      expect(result).toEqual({ ok: true, bytes: 2048 })
+      expect(result).toEqual({ ok: true, bytes: Buffer.byteLength(content, 'utf8') })
       expect(host.mermaidLoadedSource()).toBe('local')
+      expect(host.mermaidBytes()).toBe(Buffer.byteLength(content, 'utf8'))
     } finally {
       await rm(dir, { force: true, recursive: true, maxRetries: 10, retryDelay: 50 })
+    }
+  })
+
+  it('uses the installed mermaid version for the CDN mirrors', async () => {
+    const fetchSpy = vi.fn(async (_url: string) => new Response(STUB, { status: 200 }))
+    vi.stubGlobal('fetch', fetchSpy)
+    try {
+      const host = makeHost(() => null)
+      await host.mermaidFetch()
+      const url = String(fetchSpy.mock.calls[0]?.[0] ?? '')
+      expect(url).toContain(`mermaid@${MERMAID_VERSION}/`)
+    } finally {
+      vi.unstubAllGlobals()
     }
   })
 

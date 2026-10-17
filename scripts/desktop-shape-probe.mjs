@@ -1,19 +1,25 @@
 #!/usr/bin/env node
 /**
- * Desktop-port probe: hit the dsh Desktop Host (127.0.0.1:19387) with the
- * exact header shape the Electron shell produces when forwarding renderer
- * requests — loopback Host, no `origin`, no `sec-fetch-site` — and assert the
- * plugin routes answer. No /state POSTs, but the usage-scan probe below DOES
- * rebuild today's ledger and persist `$DSH_HOME/custom-plugin-state.json` —
- * point DSH_HOME at a scratch home when that matters. Negative probes
- * (foreign Origin / cross-site) must still be 403.
+ * Desktop-port probe: hit a running dsh Desktop Host with the exact header
+ * shape the Electron shell produces when forwarding renderer requests —
+ * loopback Host, no `origin`, no `sec-fetch-site` — and assert the plugin
+ * routes answer. Since dsh 0.2.1-alpha.1 Desktop asks the OS for its listening
+ * port, so pass it explicitly (DSH_PORT); there is no fixed default to name.
+ * No /state POSTs, but the usage-scan probe below DOES rebuild today's ledger
+ * and persist `$DSH_HOME/custom-plugin-state.json` — point DSH_HOME at a
+ * scratch home when that matters. Negative probes (foreign Origin / cross-site)
+ * must still be 403.
  * @module dsh-custom-plugin/scripts/desktop-shape-probe
  */
 import { readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 
-const PORT = process.env.DSH_PORT ?? '19387'
+const PORT = process.env.DSH_PORT
+if (PORT === undefined || PORT === '') {
+  console.error('usage: DSH_PORT=<the port dsh Desktop printed or is listening on> node scripts/desktop-shape-probe.mjs')
+  process.exit(1)
+}
 const BASE = `http://127.0.0.1:${PORT}`
 
 let pass = 0

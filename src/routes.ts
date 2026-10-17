@@ -15,7 +15,7 @@ import { isLoopbackRequest } from './loopback.ts'
 import { CUSTOM_PLUGIN_API_PREFIX, MERMAID_SCRIPT_PATH } from './protocol.ts'
 import { BACKUP_BODY_LIMIT } from './backup.ts'
 
-const BODY_LIMIT = 256 * 1024
+export const STATE_BODY_LIMIT = 1024 * 1024
 const TIMELINE_LIMIT = 64 * 1024
 // The request envelope contains JSON keys around the document. Keep a small
 // reserve so a document at the documented 5 MiB limit is not rejected solely
@@ -79,7 +79,12 @@ export function makeCustomPluginRoutes(host: CustomPluginHost, ready: Promise<vo
         return
       }
       try {
-        const body = (await readBody(req, BODY_LIMIT)) as Record<string, unknown>
+        const rawBody = await readBody(req, STATE_BODY_LIMIT)
+        if (rawBody === null || typeof rawBody !== 'object' || Array.isArray(rawBody)) {
+          json(res, 400, { ok: false, error: '状态请求结构无效' })
+          return
+        }
+        const body = rawBody as Record<string, unknown>
         await host.applyEdit({
           cfg: body.cfg as never,
           folders: Array.isArray(body.folders) ? (body.folders as never) : undefined,
@@ -220,10 +225,14 @@ export function makeCustomPluginRoutes(host: CustomPluginHost, ready: Promise<vo
       if (!guard(req, res)) return
       await ready
       if (!isMethod(req, 'GET', res)) return
-      const result = await host.balanceGet()
-      // 200 either way: the { ok, error } envelope carries the failure detail
-      // (e.g. "key not configured") the panel renders.
-      json(res, 200, result)
+      try {
+        const result = await host.balanceGet()
+        // 200 either way: the { ok, error } envelope carries the failure detail
+        // (e.g. "key not configured") the panel renders.
+        json(res, 200, result)
+      } catch (error) {
+        json(res, 500, { ok: false, keyConfigured: false, error: String((error as Error)?.message ?? error) })
+      }
     },
   }
 
@@ -234,8 +243,12 @@ export function makeCustomPluginRoutes(host: CustomPluginHost, ready: Promise<vo
       if (!guard(req, res)) return
       await ready
       if (!isMethod(req, 'POST', res)) return
-      const result = await host.usageScan()
-      json(res, result.ok ? 200 : 500, result)
+      try {
+        const result = await host.usageScan()
+        json(res, result.ok ? 200 : 500, result)
+      } catch (error) {
+        json(res, 500, { ok: false, error: String((error as Error)?.message ?? error) })
+      }
     },
   }
 
@@ -245,8 +258,12 @@ export function makeCustomPluginRoutes(host: CustomPluginHost, ready: Promise<vo
     handler: async (req, res): Promise<void> => {
       if (!guard(req, res)) return
       if (!isMethod(req, 'POST', res)) return
-      const result = await host.mermaidFetch()
-      json(res, result.ok ? 200 : 502, result)
+      try {
+        const result = await host.mermaidFetch()
+        json(res, result.ok ? 200 : 502, result)
+      } catch (error) {
+        json(res, 502, { ok: false, error: String((error as Error)?.message ?? error) })
+      }
     },
   }
 
@@ -264,9 +281,20 @@ export function makeCustomPluginRoutes(host: CustomPluginHost, ready: Promise<vo
         res.end('mermaid bundle not ready')
         return
       }
+      const etag = `"${host.mermaidEtag()}"`
+      res.setHeader('ETag', etag)
+      res.setHeader('Cache-Control', 'no-cache')
+      const ifNoneMatch = req.headers['if-none-match']
+      if (typeof ifNoneMatch === 'string' && ifNoneMatch.split(',').some((value) => value.trim() === etag)) {
+        // Reloads revalidate instead of re-transferring the 3.5 MB engine;
+        // the hash changes only when the engine content does.
+        res.statusCode = 304
+        res.end()
+        return
+      }
       res.statusCode = 200
       res.setHeader('Content-Type', 'text/javascript; charset=utf-8')
-      res.setHeader('Cache-Control', 'no-store')
+      res.setHeader('Content-Length', String(Buffer.byteLength(script, 'utf8')))
       res.end(script)
     },
   }
