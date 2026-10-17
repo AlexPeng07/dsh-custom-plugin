@@ -297,8 +297,12 @@ describe('saveStateFile cross-host sync', () => {
       await writeFile(statePath, JSON.stringify({ usage: { '2026-09-20': { 'deepseek-chat': fullRow({ in: 10, calls: 2 }) } } }), 'utf8')
       const state = defaultState()
       await loadStateFile(state, home, [])
-      // The other host folded +5 in / +1 call since the base.
-      await writeFile(statePath, JSON.stringify({ usage: { '2026-09-20': { 'deepseek-chat': fullRow({ in: 15, calls: 3 }) } } }), 'utf8')
+      // The other host folded +5 in / +1 call since the base. The extra
+      // top-level field changes the file size: the save path's mtime+size
+      // fast path intentionally skips same-size, same-instant rewrites (that
+      // narrow window is documented on mergeExternalChanges), and a test must
+      // not depend on two filesystem writes landing in different milliseconds.
+      await writeFile(statePath, JSON.stringify({ usage: { '2026-09-20': { 'deepseek-chat': fullRow({ in: 15, calls: 3 }) } }, marker: 'external' }), 'utf8')
       // This host folded +3 in / +1 call since the base.
       const row = state.usage['2026-09-20']['deepseek-chat']
       row.in = 13
