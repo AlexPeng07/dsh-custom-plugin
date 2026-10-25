@@ -15,6 +15,14 @@ follow [Semantic Versioning](https://semver.org/).
   旧版本遗留的同名节点。失败代码块按既有设计回退为原始代码，不再出现
   “Syntax error in text / mermaid version …” 卡片。
 
+### Verified
+
+- 无头 Edge 复现旧行为（`body > div#dvx-mmd-*` 残留 + “Syntax error in text”），
+  并验证 `suppressErrorRendering` 与 `finally` 清理两条路径都能清除；合法
+  flowchart 仍正常渲染。
+- `pnpm check:readme`、`pnpm typecheck`、`pnpm test`（205）、`pnpm build`、
+  `pnpm smoke` 全绿。
+
 ## 0.9.0 — 2026-10-25
 
 兼容策略改为开放式下限：宿主不再因为 dsh 更新而把插件判为“不支持”。
