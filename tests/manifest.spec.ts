@@ -1,9 +1,11 @@
 /**
  * Manifest compatibility contract: dsh 0.2.1-alpha.4+ reads `engines.dsh`
  * first and falls back to the @deepseek-ai/dsh-* peers only when it is absent.
- * The two declarations are edited by hand in different places, so a release
- * that widens one and not the other would make the support line depend on
- * which dsh version asks.
+ * Both declarations are one open lower bound: every release at or above the
+ * measured floor is admitted, so the host never gates users out while they wait
+ * for a plugin release. The two declarations are edited by hand in different
+ * places, so a release that widens one and not the other would make the support
+ * line depend on which dsh version asks.
  * @module @alexpeng/dsh-custom-plugin/tests/manifest
  */
 
@@ -38,22 +40,22 @@ describe('manifest compatibility range', () => {
   })
 
   it('admits every release line this package was built and verified against', () => {
-    for (const version of ['0.1.7-rc.2', '0.2.0-rc.2', '0.2.1-rc.2']) {
+    for (const version of ['0.1.7-rc.2', '0.2.0-rc.2', '0.2.1-rc.2', '0.2.1-rc.3']) {
       expect(semver.satisfies(version, declared, gate), version).toBe(true)
     }
   })
 
-  it('refuses releases that were never verified', () => {
+  it('admits releases that were never verified, because the support line is open', () => {
     for (const version of [
-      '0.1.7-rc.1', // below the 0.1.7 floor
-      '0.2.0-rc.1', // superseded 0.2.0 prerelease
-      '0.2.0', // 0.2.0 stable was never probed
-      '0.2.1-alpha.5', // prerelease before the verified rc
-      '0.2.1-rc.3', // later prereleases are not covered by the measured rc
-      '0.2.1', // stable 0.2.1 is a separate verification round
-      '0.2.2-alpha.1',
-      '0.3.0',
+      '0.1.7', '0.1.8', '0.2.0-rc.1', '0.2.0', '0.2.1-alpha.5',
+      '0.2.1', '0.2.2-alpha.1', '0.3.0', '1.0.0', '99.0.0',
     ]) {
+      expect(semver.satisfies(version, declared, gate), version).toBe(true)
+    }
+  })
+
+  it('refuses releases below the measured floor', () => {
+    for (const version of ['0.1.7-rc.1', '0.1.6', '0.1.0', '0.0.9']) {
       expect(semver.satisfies(version, declared, gate), version).toBe(false)
     }
   })

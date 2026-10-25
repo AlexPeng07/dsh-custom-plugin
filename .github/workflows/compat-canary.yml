@@ -1,0 +1,61 @@
+name: Compatibility canary
+
+on:
+  schedule:
+    # Once a day, after the usual upstream release window.
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+    inputs:
+      dsh-version:
+        description: 'dsh version or dist-tag (empty = newest of npm latest/next)'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: compat-canary
+  cancel-in-progress: false
+
+jobs:
+  canary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11.28.5
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Run compatibility canary
+        env:
+          DSH_VERSION: ${{ inputs.dsh-version }}
+        run: |
+          set -o pipefail
+          node scripts/compat-canary.mjs ${DSH_VERSION:+"$DSH_VERSION"} 2>&1 | tee canary.log
+      - name: Upload canary log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compat-canary-log
+          path: canary.log
+      - name: Open or update an issue on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version=$(grep -o 'CANARY dsh=[^ ]*' canary.log | head -1 | cut -d= -f2)
+          title="compat-canary: dsh ${version:-unknown} failed"
+          existing=$(gh issue list --state open --limit 100 --json number,title \
+            --jq ".[] | select(.title == \"$title\") | .number" | head -1)
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body-file canary.log
+          else
+            gh issue create --title "$title" --body-file canary.log
+          fi

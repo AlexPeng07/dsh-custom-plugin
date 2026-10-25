@@ -73,23 +73,24 @@ daily token usage.
   `@deepseek-ai/dsh` or `@deepseek-ai/dsh-*` only when `engines.dsh` is absent,
   testing the range with
   `semver.satisfies(v, range, {includePrerelease: true})`. This package declares
-  both and they must name the same versions — hosts before 0.2.1-alpha.4 read
-  the peers, later hosts read `engines.dsh`, so widening one without the other
-  makes the support line depend on the host. `pnpm smoke` asserts the installed
-  build target satisfies the range, that `engines.dsh` and the peer range agree
-  across the release history, and that every `@deepseek-ai/dsh-*` devDependency
-  is one exact version; `tests/manifest.spec.ts` pins the admitted/refused
-  version list.
-- Range spelling matters: `^0.1.7-rc.2` desugars to `>=0.1.7-rc.2 <0.2.0-0`, and
-  **every `0.2.0-rc.N` sorts above `0.2.0-0`**, so no prerelease of 0.2.0 is
-  admitted by it — a measured version must be named explicitly. Conversely
-  `<0.2.0-0` cannot be used as an upper bound to "allow the 0.2 prereleases"
-  (that admits nothing); the verified prerelease needs its own clause. The same
-  applies to 0.2.1: the verified clause is
-  `>=0.2.1-rc.2 <0.2.1-rc.3`, which refuses 0.2.1-alpha.x, 0.2.1-rc.3+ and
-  0.2.1 stable until each is measured.
+  **one open lower bound, `>=0.1.7-rc.2`, in both places**: hosts before
+  0.2.1-alpha.4 read the peers, later hosts read `engines.dsh`, and every release
+  above the floor is admitted on purpose. The gate is binary — refusing an
+  unmeasured version makes its users wait for a plugin release — so the product
+  decision is to admit first and detect breakage automatically. Measured versions
+  are evidence in README/CHANGELOG, never a gate. `pnpm smoke` asserts the floor
+  (`0.1.7-rc.1` refused), the open upper bound (`99.0.0` admitted), that the
+  installed build target satisfies the range, that `engines.dsh` and the peer
+  range agree across the release history, and that every `@deepseek-ai/dsh-*`
+  devDependency is one exact cohort; `tests/manifest.spec.ts` pins the
+  admitted/refused list.
+- Do not reintroduce an upper bound to express "not measured yet". The scheduled
+  `.github/workflows/compat-canary.yml` (daily, newest of npm `latest`/`next`)
+  installs the published plugin into a scratch profile, boots it, and runs
+  `scripts/live-dsh-check.sh`; it opens an issue on failure. Fixes ship in the
+  next release; users are not blocked in the meantime.
 - dsh Desktop is an Electron shell around the same Web half. It pins the shell
-  and `@deepseek-ai/dsh` to one version (0.2.1-rc.2 as of 2026-10-17), owns
+  and `@deepseek-ai/dsh` to one version (0.2.1-rc.3 as of 2026-10-23), owns
   `$DSH_HOME/profiles/desktop`, and only the `dsh` command shipped with Desktop
   may manage that profile. Since 0.2.1-alpha.1 Desktop asks the OS for its port
   instead of defaulting to a fixed one, so nothing here may hardcode a port or a

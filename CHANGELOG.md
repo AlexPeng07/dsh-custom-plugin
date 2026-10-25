@@ -4,6 +4,39 @@ All notable changes to this project are documented here. The format loosely
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions
 follow [Semantic Versioning](https://semver.org/).
 
+## 0.9.0 — 2026-10-25
+
+兼容策略改为开放式下限：宿主不再因为 dsh 更新而把插件判为“不支持”。
+
+### Changed
+
+- **兼容范围改为 `>=0.1.7-rc.2`（无上界）**：`engines.dsh` 与
+  `@deepseek-ai/dsh-tools` peer 同步放宽。dsh 0.2.1-alpha.4+ 优先读
+  `engines.dsh`，旧宿主读 peer；两者都放行所有高于下限的版本，因此未来任何
+  dsh 发版（包括 0.2.1-rc.3、0.2.1 正式版、0.3、1.0）都不必先等插件发版才能
+  加载。实测过的版本改为证据记录（README 兼容表 / 本文件），不再是闸门。宿主
+  的兼容门只有“放行/拒绝”两态、没有“仅警告”，这是不再把未实测版本挡在门外
+  的唯一实现方式。
+- **构建与测试队列切到 dsh 0.2.1-rc.3**：九个 `@deepseek-ai/dsh-*`
+  devDependency 从 rc.2 升到 rc.3，锁文件同步。`pnpm smoke` 的兼容断言改为
+  “下限必须拒绝 0.1.7-rc.1、无上界必须放行 99.0.0、`engines.dsh` 与 peer
+  判定一致”，`tests/manifest.spec.ts` 的放行/拒绝清单同步改写。
+- **新增定时兼容 canary**：`scripts/compat-canary.mjs` +
+  `.github/workflows/compat-canary.yml`，每天取 npm `latest`/`next` 中较高的
+  dsh，在临时 `DSH_HOME` 里安装**已发布**插件、冷启动并跑
+  `scripts/live-dsh-check.sh`；失败时自动开 issue。可用 `pnpm canary` 或
+  `node scripts/compat-canary.mjs <版本> --plugin <tgz>` 本地跑。
+
+### Verified
+
+- 0.9.0 产物在隔离的 dsh 0.2.1-rc.3 profile 中安装（无兼容豁免）并冷启动：
+  boot 图 71 行、五个 inject 目标齐全、客户端 bundle 200,371 字节、Mermaid
+  本地引擎 3,572,661 字节、state / usage / backup 路由、UTF-8 往返与三种信任
+  围栏形状全部通过；活体探针 16 通过 / 1 跳过（无会话）。
+- `node scripts/compat-canary.mjs 0.2.1-rc.3 --plugin <0.9.0 tgz>` 端到端通过。
+- `pnpm check:readme`、`pnpm typecheck`、`pnpm test`（205 tests）、`pnpm build`、
+  `pnpm smoke` 全绿。
+
 ## 0.8.0 — 2026-10-17
 
 dsh 0.2.1-rc.2 兼容版：`engines.dsh` 取代 peer 范围成为 0.2.1-alpha.4+ 的首要兼容门，

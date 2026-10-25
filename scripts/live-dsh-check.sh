@@ -2,10 +2,11 @@
 #
 # Live compatibility check against a RUNNING isolated dsh profile.
 #
-# This is an opt-in manual probe, not part of CI: it needs a booted dsh web
-# server and its own DSH_HOME, which CI has neither reason nor room to create.
-# It answers the question `pnpm smoke` cannot — does the built bundle actually
-# mount and answer inside a real harness at the version we target?
+# The main CI job does not run this probe (it has no booted harness); the
+# scheduled compat-canary workflow does, against the newest dsh from npm.
+# Run it by hand when you want detail on one release. It answers the question
+# `pnpm smoke` cannot — does the built bundle actually mount and answer inside a
+# real harness at the version we target?
 #
 #   DSH_HOME=F:/tmp/dshlive-home DSH_PORT=13587 pnpm build && pnpm pack ...
 #   bash scripts/live-dsh-check.sh

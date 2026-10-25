@@ -113,7 +113,8 @@ The `custom_plugin_status` tool reports appearance config, today's per-model usa
 
 | plugin release | dsh it was built and verified against | status |
 | --- | --- | --- |
-| 0.8.x | dsh 0.1.7-rc.2, dsh 0.2.0-rc.2 and dsh 0.2.1-rc.2 (both gates name all three; see Install) | this release |
+| 0.9.x | any dsh at or above 0.1.7-rc.2 (open-ended; verified on 0.1.7-rc.2, 0.2.0-rc.2, 0.2.1-rc.2 and 0.2.1-rc.3) | this release |
+| 0.8.x | dsh 0.1.7-rc.2, dsh 0.2.0-rc.2 and dsh 0.2.1-rc.2 (measured window) | previous; refused on dsh 0.2.1-rc.3 and later |
 | 0.7.x | dsh 0.1.7-rc.2 and dsh 0.2.0-rc.2 | previous; refused on dsh 0.2.1-rc.2 |
 | 0.6.x | dsh 0.1.7-rc.2 and dsh 0.2.0-rc.2 | previous; refused on dsh 0.2.1-rc.2 |
 | 0.5.x | dsh 0.1.7-rc.2 (peer range `>=0.1.7-rc.2 <0.2.0-0`) | fine on 0.1.x; refused on any 0.2.x host, including dsh Desktop |
@@ -125,9 +126,13 @@ viewed session, and the message model dropped the `tool-result` content block),
 so neither release substitutes for the other. dsh 0.2.1-alpha.4 changed the
 compatibility gate itself: it reads `engines.dsh` first and falls back to the
 `@deepseek-ai/dsh-*` peer ranges only when `engines.dsh` is absent. This package
-declares the same range in both places; older hosts read the peers, newer hosts
-read `engines.dsh`, and `pnpm smoke` fails if the two ever disagree. A bundle
-whose range does not match is skipped at install and startup. Runtimes
+declares the same **open lower bound** (`>=0.1.7-rc.2`) in both places, so every
+newer dsh release is admitted without waiting for a plugin release; older hosts
+read the peers, newer hosts read `engines.dsh`, and `pnpm smoke` fails if the
+two ever disagree. Verified versions are evidence, not a gate: see the table and
+CHANGELOG. A scheduled canary installs the published plugin into the newest dsh
+from npm `latest`/`next`, boots it, and runs the live probes, so an actual API
+break shows up as an issue instead of a user-visible refusal. Runtimes
 predating that gate load the bundle anyway and degrade instead: on 0.1.1-rc.2,
 7 of 8 slot registrations succeed, the turn-tail entry is rejected (that slot
 became a list slot back in 0.1.6-alpha.2), and the open-session / branch /
@@ -135,7 +140,7 @@ cross-session actions report their service as missing rather than throwing.
 
 ## Install
 
-Prerequisites: Node 22+, pnpm, and the `dsh` CLI (the official `@deepseek-ai/dsh` npm package; `npx @deepseek-ai/dsh` stands in for `dsh` when it is not installed globally). This release targets **dsh 0.1.7-rc.2 through the rest of 0.1.x, plus 0.2.0-rc.2 and 0.2.1-rc.2** — dsh 0.2.1-alpha.4 and later check `engines.dsh` first and fall back to the `@deepseek-ai/dsh-*` peer ranges only when it is absent, while older hosts read the peers; this package declares the same range in both places and skips nothing it was not built for. 0.8.0 moves the build and test cohort to 0.2.1-rc.2. The artifact was installed with Desktop's own CLI into an isolated 0.2.1-rc.2 profile **with no compatibility exemption**, then booted for real: a 70-row boot graph, all five `dsh.client.inject` targets, the client bundle served at about 200 KB, the local Mermaid engine (3.57 MB), the state / usage / backup routes, a UTF-8 round trip and the desktop-forward trust shape all passed (16 live probes pass, 1 skip; the skip is timeline/export/search on a profile with no session, covered by unit tests and unchanged in 0.2.1 apart from an optional `formatStatus` field). The 0.6.0 artifact ran the live host probes on 0.2.0-rc.2 (66 rows) and 0.1.7-rc.2 (65 rows), 18 of 19 each, and 0.7.0 additionally passed the desktop-shape probe **on a real Desktop install** (see "On dsh Desktop" below). What stays unverified is what was always unverified: the per-turn chips (Mermaid render, LaTeX) need a real model reply, so a credential-free scratch home cannot reach them, and slot rendering still needs a browser pass. The range deliberately excludes 0.2.0-rc.1 (a superseded prerelease), 0.2.0-rc.3 and later prereleases nobody has looked at, and 0.2.0 stable; likewise 0.2.1-alpha.x, 0.2.1-rc.3 and later, and 0.2.1 stable. Range spelling matters here: `^0.1.7-rc.2` desugars to `>=0.1.7-rc.2 <0.2.0-0`, and every `0.2.0-rc.N` sorts *above* `0.2.0-0`, so a verified prerelease has to be named in its own clause — `pnpm smoke` checks that the build target actually satisfies the declared range and that `engines.dsh` admits exactly the same versions as the peer range. On an older dsh, install the matching older plugin release (`0.5.0` targets 0.1.7-rc.2) rather than granting a compatibility exemption.
+Prerequisites: Node 22+, pnpm, and the `dsh` CLI (the official `@deepseek-ai/dsh` npm package; `npx @deepseek-ai/dsh` stands in for `dsh` when it is not installed globally). This release admits **every dsh release at or above 0.1.7-rc.2**: `engines.dsh` and the `@deepseek-ai/dsh-tools` peer are both an open lower bound, so dsh 0.2.1-alpha.4 and later (which read `engines.dsh` first) and older hosts (which read the peers) agree that no newer release is refused. 0.9.0 was built and tested on 0.2.1-rc.3. Its artifact was installed with Desktop's own CLI into an isolated 0.2.1-rc.3 profile **with no compatibility exemption**, then booted for real: a 71-row boot graph, all five `dsh.client.inject` targets, the client bundle served at 200,371 bytes, the local Mermaid engine (3,572,661 bytes), the state / usage / backup routes, a UTF-8 round trip and the desktop-forward trust shape all passed (16 live probes pass, 1 skip; the skip is timeline/export/search on a profile with no session, covered by unit tests). 0.8.0 ran the same probes on 0.2.1-rc.2 (70 rows); 0.6.0 ran them on 0.2.0-rc.2 (66 rows) and 0.1.7-rc.2 (65 rows), 18 of 19 each; 0.7.0 additionally passed the desktop-shape probe **on a real Desktop install** (see "On dsh Desktop" below). What stays unverified is what was always unverified: the per-turn chips (Mermaid render, LaTeX) need a real model reply, so a credential-free scratch home cannot reach them, and slot rendering still needs a browser pass. The host gate cannot distinguish "verified" from "unverified", so an explicit upper bound would refuse users on every dsh release until this package published again; the open range plus the scheduled canary replace that waiting with automatic detection. If a host below the floor is ever needed, install the matching older plugin release (`0.5.0` targets 0.1.7-rc.2).
 
 ### From npm
 
@@ -149,14 +154,14 @@ The registry tarball ships prebuilt output — no source build on the installing
 ### On dsh Desktop
 
 dsh Desktop is an Electron shell around the same Web application, and it bundles
-**exactly dsh 0.2.1-rc.2** as of 2026-10-17 — the desktop release line pins the
+**exactly dsh 0.2.1-rc.3** as of 2026-10-23 — the desktop release line pins the
 shell and the runtime together, so a Desktop install is always one exact 0.2.x
-runtime. 0.8.0 names that version in `engines.dsh` and in the peer range and
-installs there with no compatibility exemption; 0.7.1 and earlier are refused by
-the 0.2.1 gate with the same message a 0.2.x Web profile prints.
+runtime. 0.9.0's open range admits rc.3 and every later Desktop build, with no
+compatibility exemption; 0.8.0 and earlier used a measured window and are refused
+on rc.3 by the same gate a 0.2.x Web profile prints.
 
-Measured against 0.2.1-rc.2: the boot graph carries our row and all five inject
-targets (70 module rows), our client bundle is served at about 200 KB, the
+Measured against 0.2.1-rc.3: the boot graph carries our row and all five inject
+targets (71 module rows), our client bundle is served at 200,371 bytes, the
 Mermaid engine loads locally, and the live host probes pass 16 / skip 1 (the
 session-path skip needs a real session). The access fence shares the platform
 fence's trust semantics: a loopback socket naming a loopback Host, a
@@ -169,8 +174,8 @@ additionally required a same-origin marker and rejected exactly this shape with
 cross-site requests are still 403. **The 0.7.0 artifact was probed route by
 route on a real Desktop install in the desktop forward shape** (state / debug /
 backup / usage scan / the Mermaid engine preload and script routes all 200;
-foreign-origin and cross-site probes still 403), and 0.8.0 repeats the same
-shape against a booted 0.2.1-rc.2 host. The visual pass inside the Desktop
+foreign-origin and cross-site probes still 403), 0.8.0 repeated the same shape
+against a booted 0.2.1-rc.2 host, and 0.9.0 repeats it on rc.3. The visual pass inside the Desktop
 window (liquid glass look, panel layout, pattern removal) belongs to whoever
 installs it.
 
@@ -262,6 +267,8 @@ pnpm build          # build the node ESM library and the browser bundle into lib
 pnpm check:readme   # bilingual README hash consistency
 pnpm smoke          # post-build contract checks: loader handshake, manifest
                     # fields dsh reads, patch row, local Mermaid engine
+pnpm canary         # published plugin against the newest dsh from npm latest/next
+                    # (needs npm, bash and curl; --plugin <tgz> tests a local build)
 ```
 
 `scripts/live-dsh-check.sh` is a separate, manual probe against a **running**
@@ -274,8 +281,10 @@ loopback request passes, a foreign Origin and a cross-site marker are
 rejected). It refuses to run against a
 real `~/.dsh` unless you set `ALLOW_REAL_DSH_HOME=1`, reports `PASS`/`FAIL` per
 probe, counts and names anything it `SKIP`s, and exits non-zero on any failure.
-CI has no harness to talk to, so run it whenever a dsh release lands; slot
-registration and rendering still need the browser pass described above.
+The main CI job has no harness to talk to; the scheduled `compat-canary`
+workflow runs this probe against the newest dsh from npm `latest`/`next` and
+opens an issue on failure. Run it manually when you want detail on a release;
+slot registration and rendering still need the browser pass described above.
 
 `scripts/desktop-shape-probe.mjs` is a third probe, aimed at a **running dsh
 Desktop**. Desktop 0.2.1+ asks the OS for its port, so pass the port it printed
@@ -299,12 +308,11 @@ DSH_HOME=/tmp/dshnext-home node node_modules/@deepseek-ai/dsh/lib/bin.js --profi
 DSH_HOME=/tmp/dshnext-home DSH_PORT=13999 COOKIE_JAR=/tmp/dshnext/jar.txt bash scripts/live-dsh-check.sh
 ```
 
-If the release falls outside the declared range (`engines.dsh` on dsh
-0.2.1-alpha.4 and later, the `@deepseek-ai/dsh-*` peers otherwise), the second
-command refuses and rolls the profile back; `dsh plugin --profile web
-allow-version <pkg>@<ver> --dsh-version <version> --accept-risk` grants the
-exact-version exemption, so the probe can tell you *what* actually breaks instead
-of what the gate already refused.
+The range is an open lower bound, so the second command accepts any release at
+or above `0.1.7-rc.2`; no compatibility exemption is needed. The scheduled canary
+runs these same steps against the newest of npm `latest`/`next`; to test a local
+build before releasing, run
+`node scripts/compat-canary.mjs <version> --plugin <packed.tgz>`.
 
 For a **dsh Desktop** release, start one step earlier, because the repository
 cannot tell you what an installer runs: Desktop pins its shell and

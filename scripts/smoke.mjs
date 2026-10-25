@@ -202,9 +202,11 @@ for (const localeFile of ['locale/en.json', 'locale/zh.json']) {
 }
 
 // The runtime compatibility gate reads `engines.dsh` first on dsh 0.2.1-alpha.4+
-// and falls back to the @deepseek-ai/dsh-* peer ranges when it is absent. This
-// package declares both, so they must admit the same versions — otherwise the
-// two host lines disagree about what this release supports.
+// and falls back to the @deepseek-ai/dsh-* peer ranges when it is absent. Both
+// declarations are one open lower bound: every dsh release at or above the
+// measured floor is admitted, so a user never waits for a plugin release before
+// a new host may load it. Smoke enforces the floor, the open upper bound, and
+// lockstep between the two hosts' gate.
 const gateOpts = { includePrerelease: true }
 const dshPeers = Object.entries(manifest.peerDependencies ?? {}).filter(([name]) => name.startsWith('@deepseek-ai/dsh'))
 if (dshPeers.length === 0) {
@@ -222,10 +224,12 @@ for (const [name, range] of dshPeers) {
     bad(`peerDependencies: ${name} range ${JSON.stringify(range)} is not a valid semver range — dsh reads that as incompatible and skips the bundle`)
   } else if (!semver.satisfies(installed, String(range), gateOpts)) {
     bad(`peerDependencies: the ${installed} build target this bundle was type-checked against does not satisfy the declared range ${JSON.stringify(range)} — dsh would refuse the very release this was built for`)
-  } else if (semver.satisfies('99.0.0', String(range), gateOpts)) {
-    bad(`peerDependencies: ${name} range ${JSON.stringify(range)} admits every version, so it states no supported release at all`)
+  } else if (!semver.satisfies('99.0.0', String(range), gateOpts)) {
+    bad(`peerDependencies: ${name} range ${JSON.stringify(range)} has an upper bound, so a future dsh release would be refused — this package's support line is an open lower bound`)
+  } else if (semver.satisfies('0.1.7-rc.1', String(range), gateOpts)) {
+    bad(`peerDependencies: ${name} range ${JSON.stringify(range)} admits 0.1.7-rc.1, which is below the measured floor 0.1.7-rc.2`)
   } else {
-    ok(`peerDependencies: the installed ${installed} build target satisfies ${range}`)
+    ok(`peerDependencies: the installed ${installed} build target satisfies the open range ${range}`)
   }
 }
 
@@ -245,8 +249,8 @@ for (const [name, range] of dshPeers) {
 }
 
 // dsh 0.2.1-alpha.4+ reads `engines.dsh` first; older hosts read the peers.
-// Both are declared here, so they must admit the same versions or the supported
-// release line depends on which dsh version asks.
+// Both are open lower bounds, and they must admit the same versions or the
+// support line depends on which dsh version asks.
 {
   const declared = String(manifest.engines?.dsh ?? '')
   const peer = String(manifest.peerDependencies?.['@deepseek-ai/dsh-tools'] ?? '')
@@ -261,7 +265,7 @@ for (const [name, range] of dshPeers) {
       '0.1.6', '0.1.7-rc.1', '0.1.7-rc.2', '0.1.8', '0.1.9',
       '0.2.0-rc.1', '0.2.0-rc.2', '0.2.0-rc.3', '0.2.0',
       '0.2.1-alpha.3', '0.2.1-alpha.5', '0.2.1-rc.1', '0.2.1-rc.2', '0.2.1-rc.3', '0.2.1',
-      '0.2.2-alpha.1', '0.2.2', '0.3.0',
+      '0.2.2-alpha.1', '0.2.2', '0.3.0', '1.0.0', '99.0.0',
     ]
     const diverging = probe.filter(v => semver.satisfies(v, declared, gateOpts) !== semver.satisfies(v, peer, gateOpts))
     if (diverging.length > 0) {
