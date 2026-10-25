@@ -4,6 +4,17 @@ All notable changes to this project are documented here. The format loosely
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions
 follow [Semantic Versioning](https://semver.org/).
 
+## 0.9.1 — 2026-10-25
+
+### Fixed
+
+- **Mermaid 解析失败不再在页面底部留下错误图**：Mermaid 默认会在
+  `render()` 抛错前把一个全宽炸弹图追加到 `<body>`（`div#dvx-mmd-*`）并留在
+  那里。现在 `mermaid.initialize` 打开 `suppressErrorRendering`，并在
+  `finally` 中清理 `#id` / `#d<id>` / `#i<id>` 三个临时节点；扫描时也会移除
+  旧版本遗留的同名节点。失败代码块按既有设计回退为原始代码，不再出现
+  “Syntax error in text / mermaid version …” 卡片。
+
 ## 0.9.0 — 2026-10-25
 
 兼容策略改为开放式下限：宿主不再因为 dsh 更新而把插件判为“不支持”。

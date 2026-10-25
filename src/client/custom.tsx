@@ -1164,18 +1164,28 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     }
   }
   async function renderMermaid(code: string, dark = false): Promise<{ ok: true; svg: string } | { ok: false; error: string }> {
+    const d = typeof document !== 'undefined' ? document : null
+    const w = typeof window !== 'undefined' ? window : null
+    const mermaid = (w as unknown as { mermaid?: { initialize(opts: Record<string, unknown>): void; render(id: string, code: string): Promise<string | { svg: string }> } }).mermaid
+    if (mermaid === undefined) return { ok: false, error: '引擎未就绪' }
+    const id = 'vx-mmd-' + Date.now() + Math.floor(Math.random() * 9999)
     try {
-      const w = typeof window !== 'undefined' ? window : null
-      const mermaid = (w as unknown as { mermaid?: { initialize(opts: Record<string, unknown>): void; render(id: string, code: string): Promise<string | { svg: string }> } }).mermaid
-      if (mermaid === undefined) return { ok: false, error: '引擎未就绪' }
-      mermaid.initialize({ startOnLoad: false, theme: dark ? 'dark' : 'default', securityLevel: 'strict' })
-      const id = 'vx-mmd-' + Date.now() + Math.floor(Math.random() * 9999)
+      // Mermaid's default error UI appends a full-width bomb diagram to <body>
+      // and leaves it there when render() rejects (parse errors throw before
+      // its own removeTempElements() call). Suppress it, and remove the three
+      // scratch nodes unconditionally: a failed block must fall back to its
+      // raw code, never leave a page-level error card behind.
+      mermaid.initialize({ startOnLoad: false, theme: dark ? 'dark' : 'default', securityLevel: 'strict', suppressErrorRendering: true })
       const out = await mermaid.render(id, code)
       const svg = typeof out === 'string' ? out : (out?.svg ?? '')
       if (svg === '') return { ok: false, error: '引擎未返回 SVG' }
       return { ok: true, svg }
     } catch (error) {
       return { ok: false, error: String((error as Error)?.message ?? error) }
+    } finally {
+      if (d !== null) {
+        for (const scratch of [id, 'd' + id, 'i' + id]) d.getElementById(scratch)?.remove()
+      }
     }
   }
   function extractMermaid(text: string): string[] {
@@ -1284,6 +1294,9 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
   async function scanMermaidBlocks(dark: boolean): Promise<void> {
     const d = typeof document !== 'undefined' ? document : null
     if (d === null) return
+    // Remove the error diagrams left by older builds: Mermaid appends
+    // div#dvx-mmd-* to <body> before a failed render throws.
+    for (const leftover of Array.from(d.querySelectorAll<HTMLElement>('body > div[id^="dvx-mmd-"]'))) leftover.remove()
     // Drop wrappers whose code block left the DOM (history switch / unmount).
     for (const wrap of Array.from(d.querySelectorAll<HTMLElement>('.vx-mmd-wrap'))) {
       const next = wrap.nextElementSibling
