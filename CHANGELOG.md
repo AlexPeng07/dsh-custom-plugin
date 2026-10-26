@@ -6,6 +6,16 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Changed
+
+- **无障碍与电池**：天气特效尊重 `prefers-reduced-motion`（减少动态时不启动
+ 动画帧），装饰画布加 `aria-hidden`；余额 60 秒轮询在页面隐藏时暂停、回到前台
+  立即刷新；6 个浮层补齐 `role="dialog"` / `aria-modal`、焦点进入、Tab 陷阱、
+  Escape 关闭与关闭后的焦点恢复；余额入口改为可键盘操作的 `role="button"` 并带
+  `aria-expanded` / `aria-haspopup`，关键图标按钮补 `aria-label`。
+- **顶栏重渲染**：`HeaderBalance` 从整店订阅改为只选余额、今日用量行与面板开关，
+  并对今日次数/费用做 `useMemo`；流式回合的 store 写入不再重渲染顶栏或重算台账。
+
 ### Tests
 
 - Mermaid 渲染从 `src/client/custom.tsx` 抽到独立的 `src/client/mermaid-render.ts`；

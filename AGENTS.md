@@ -62,7 +62,15 @@ daily token usage.
   unrelated balance/toast write does not re-render every turn-tail row.
   `fetchTurns` must reuse unchanged items (`reuseTimelineItems`), skip the
   store write when nothing changed, pause while `document.hidden`, and never
-  stack a second poll on an in-flight request.
+  stack a second poll on an in-flight request. `HeaderBalance` also selects
+  only its three fields (`balance`, today's usage row, `balanceOpen`) so a
+  streaming turn cannot re-render the header or recompute the ledger.
+- Accessibility contracts: weather FX honors `prefers-reduced-motion` (no
+  animation frame when reduced) and its decorative canvas carries
+  `aria-hidden`; the 60 s balance poll pauses while `document.hidden` and
+  refreshes on return; every overlay uses `useDialogFocus` for
+  `role="dialog"` / `aria-modal`, focus entry, a Tab trap, Escape and focus
+  restore; icon-only buttons need `aria-label`.
 - The only agent-facing surface is the `custom_plugin_status` tool; the
   plugin never injects system-prompt announcements.
 

@@ -345,6 +345,77 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     }, [])
     return current
   }
+  /** Follow the OS "reduce motion" preference; weather FX is decorative. */
+  function useReducedMotion(): boolean {
+    const query = (): MediaQueryList | null => {
+      if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return null
+      return window.matchMedia('(prefers-reduced-motion: reduce)')
+    }
+    const [reduced, setReduced] = React.useState(() => query()?.matches === true)
+    React.useEffect(() => {
+      const mq = query()
+      if (mq === null) return
+      const onChange = (): void => setReduced(mq.matches)
+      setReduced(mq.matches)
+      mq.addEventListener?.('change', onChange)
+      return () => { mq.removeEventListener?.('change', onChange) }
+    }, [])
+    return reduced
+  }
+  const DIALOG_FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+  /**
+   * Modal semantics for the six overlays: focus enters the panel, Tab wraps,
+   * Escape closes, and closing restores the element that opened it.
+   */
+  function useDialogFocus(onClose: () => void): React.RefObject<HTMLDivElement> {
+    const ref = React.useRef<HTMLDivElement>(null)
+    const closeRef = React.useRef(onClose)
+    closeRef.current = onClose
+    React.useEffect(() => {
+      const node = ref.current
+      if (node === null) return
+      const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null
+      const focusables = (): HTMLElement[] => Array.from(node.querySelectorAll<HTMLElement>(DIALOG_FOCUSABLE))
+        .filter((el) => el.getClientRects().length > 0)
+      if (!node.contains(document.activeElement)) {
+        const first = focusables()[0]
+        ;(first ?? node).focus()
+      }
+      const onKeyDown = (event: KeyboardEvent): void => {
+        if (event.key === 'Escape') {
+          event.preventDefault()
+          event.stopPropagation()
+          closeRef.current()
+          return
+        }
+        if (event.key !== 'Tab') return
+        const items = focusables()
+        if (items.length === 0) {
+          event.preventDefault()
+          node.focus()
+          return
+        }
+        const first = items[0]
+        const last = items[items.length - 1]
+        const active = document.activeElement
+        if (event.shiftKey && (active === first || active === node)) {
+          event.preventDefault()
+          last.focus()
+        } else if (!event.shiftKey && active === last) {
+          event.preventDefault()
+          first.focus()
+        }
+      }
+      node.addEventListener('keydown', onKeyDown)
+      return () => {
+        node.removeEventListener('keydown', onKeyDown)
+        if (previous !== null && previous.isConnected) {
+          try { previous.focus() } catch { /* opener is gone */ }
+        }
+      }
+    }, [])
+    return ref
+  }
   function useSessionsSafe(props: { useSessions: OverlayProps['useSessions'] }): SessionListLike | null {
     try { return props.useSessions(st => st) } catch { return null }
   }
@@ -901,6 +972,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       (state) => ({ weather: state.cfg.weather ?? 'none', dark: state.dark === true }),
       shallowEqual,
     )
+    const reduced = useReducedMotion()
     const ref = React.useRef<HTMLCanvasElement | null>(null)
     /** 粒子配色跟随背景亮度：浅色主题需要更深的粒子颜色才可辨识。
      * ref 让 RAF 循环每帧读到最新值，主题/背景切换时无需重建粒子场。 */
@@ -913,23 +985,23 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       if (g === null) return
       const w = cvs.clientWidth || 0
       const h = cvs.clientHeight || 0
-      initFx(weather, w, h)
+      if (!reduced) initFx(weather, w, h)
       let raf = 0
       const t0 = Date.now()
       const loop = (): void => {
-        if (weather === 'none') {
-          // Baseline behaviour: switching to "off" wipes the last painted frame
-          // instead of leaving it frozen on the canvas.
+        if (weather === 'none' || reduced) {
+          // Off and reduce-motion both wipe the last painted frame instead of
+          // leaving it frozen; neither schedules another frame.
           try { g.clearRect(0, 0, cvs.width, cvs.height) } catch { /* context lost */ }
-          return // no particles scheduled: stay idle
+          return
         }
         raf = requestAnimationFrame(loop)
         fxFrame(g, cvs, weather, Date.now() - t0, lightRef.current)
       }
       loop()
       return () => { try { cancelAnimationFrame(raf) } catch { /* already cancelled */ } }
-    }, [weather])
-    return React.createElement('canvas', { ref, className: 'vx-fx' })
+    }, [weather, reduced])
+    return React.createElement('canvas', { ref, className: 'vx-fx', 'aria-hidden': true })
   }
 
   // ================= timeline data (turn chips + search reveal) =================
@@ -1393,7 +1465,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     return React.createElement('div', { className: 'vx-glass vx-prompt-pop', style: { left: p.x, top: p.y } },
       React.createElement('div', { className: 'vx-pop-head' },
         React.createElement('span', null, '提示词库'),
-        React.createElement('button', { className: 'vx-chip', title: '关闭', onClick: () => setS({ promptOpen: null }) }, React.createElement(Icon, { n: 'x', size: 12 })),
+        React.createElement('button', { className: 'vx-chip', title: '关闭', 'aria-label': '关闭提示词面板', onClick: () => setS({ promptOpen: null }) }, React.createElement(Icon, { n: 'x', size: 12 })),
       ),
       React.createElement('div', { className: 'vx-row vx-pad-sm' },
         React.createElement(Icon, { n: 'search', size: 13 }),
@@ -1416,18 +1488,38 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
 
   function HeaderBalance(props: SessionScopedProps): React.ReactElement {
     useViewedSession(props)
-    const s = useS()
-    const b = s.balance
-    // Initial fetch plus a refresh every minute, so the balance figure and the
-    // today-usage badge stay current without pressing 刷新.
+    // Only the balance pill's own fields: a streaming turn writes turns/toasts
+    // continuously and must not re-render this header or recompute the ledger.
+    const { balance: b, usageRow, balanceOpen: open } = useSSelector(
+      (state) => ({
+        balance: state.balance,
+        usageRow: state.usage[dayKey()] ?? null,
+        balanceOpen: state.balanceOpen === true,
+      }),
+      shallowEqual,
+    )
+    // Initial fetch plus a refresh every minute while visible, so the balance
+    // figure and the today-usage badge stay current without pressing 刷新.
     React.useEffect(() => {
       if (S.balance === null) void refreshBalance()
-      const timer = setInterval(() => { void refreshBalance() }, 60_000)
-      return () => { clearInterval(timer) }
+      const tick = (): void => {
+        if (typeof document !== 'undefined' && document.hidden) return
+        void refreshBalance()
+      }
+      const timer = setInterval(tick, 60_000)
+      const onVisibility = (): void => {
+        if (typeof document === 'undefined' || document.hidden) return
+        void refreshBalance()
+      }
+      if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisibility)
+      return () => {
+        clearInterval(timer)
+        if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisibility)
+      }
     }, [])
-    const usageToday = s.usage[dayKey()] ?? {}
-    const calls = Object.keys(usageToday).reduce((n, k) => n + (usageToday[k].calls ?? 0), 0)
-    const estimate = Object.entries(usageToday).reduce((sum, [model, row]) => sum + estimateUsageCostCny(row, model), 0)
+    const usageToday: Record<string, UsageRow> = usageRow ?? {}
+    const calls = React.useMemo(() => Object.keys(usageToday).reduce((n, k) => n + (usageToday[k].calls ?? 0), 0), [usageToday])
+    const estimate = React.useMemo(() => Object.entries(usageToday).reduce((sum, [model, row]) => sum + estimateUsageCostCny(row, model), 0), [usageToday])
     const bal = (b?.ok === true && b.balance !== null && b.balance !== undefined)
       ? b.balance as { currency?: string, total?: string }
       : null
@@ -1447,19 +1539,29 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       : estimateTitle
     // Same contract as the other header surfaces: click toggles, hover does
     // nothing, and opening this closes the others.
-    const open = s.balanceOpen === true
+    const togglePanel = (): void => setS({ balanceOpen: !open, panelOpen: false, promptOpen: null, foldersOpen: false })
     return React.createElement('span', { className: 'vx-balance-wrap' },
       React.createElement('span', {
         className: 'vx-balance-text' + (open ? ' vx-balance-open' : ''),
+        role: 'button',
+        tabIndex: 0,
+        'aria-expanded': open,
+        'aria-haspopup': 'dialog',
         title: open ? '再次点击收起面板' : '点击打开面板',
-        onClick: () => setS({ balanceOpen: !open, panelOpen: false, promptOpen: null, foldersOpen: false }),
+        onClick: togglePanel,
+        onKeyDown: (e: React.KeyboardEvent) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            togglePanel()
+          }
+        },
       },
         React.createElement(Icon, { n: 'wallet', size: 13 }),
         React.createElement('span', { title: pillTitle }, balance),
         calls > 0 ? React.createElement('span', { className: 'vx-balance-today' }, `今日 ${calls} 次`) : null,
       ),
       open
-        ? React.createElement('div', { className: 'vx-glass vx-balance-hover' },
+        ? React.createElement('div', { className: 'vx-glass vx-balance-hover', role: 'dialog', 'aria-label': '额度面板' },
           React.createElement(BalancePanelContent, null),
         )
         : null,
@@ -2261,6 +2363,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     const s = useS()
     const [val, setVal] = React.useState('')
     React.useEffect(() => { if (s.ask !== null) setVal(s.ask.value ?? '') }, [s.ask?.title])
+    const dialogRef = useDialogFocus(() => setS({ ask: null }))
     const ask = s.ask
     if (ask === null) return null
     const submit = (): void => {
@@ -2269,7 +2372,16 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       if (ask.allowEmpty === true || val.trim() !== '') cb(ask.allowEmpty === true ? val : val.trim())
     }
     return React.createElement('div', { className: 'vx-modal-mask', onClick: () => setS({ ask: null }) },
-      React.createElement('div', { className: 'vx-glass vx-modal', style: { width: 'min(360px, 92vw)' }, onClick: (e: React.MouseEvent) => e.stopPropagation() },
+      React.createElement('div', {
+        className: 'vx-glass vx-modal',
+        style: { width: 'min(360px, 92vw)' },
+        role: 'dialog',
+        'aria-modal': true,
+        'aria-label': ask.title,
+        tabIndex: -1,
+        ref: dialogRef,
+        onClick: (e: React.MouseEvent) => e.stopPropagation(),
+      },
         React.createElement('div', { className: 'vx-pop-head' }, React.createElement('span', null, ask.title)),
         React.createElement('input', { className: 'vx-input', value: val, autoFocus: true, onChange: (e: React.ChangeEvent<HTMLInputElement>) => setVal(e.target.value), onKeyDown: (e: React.KeyboardEvent) => { if (e.key === 'Enter') submit() } }),
         React.createElement('div', { className: 'vx-row vx-pad-sm' },
@@ -2282,19 +2394,30 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
 
   function ConfirmModal(): React.ReactElement | null {
     const s = useS()
-    if (s.confirmAsk === null) return null
     const c = s.confirmAsk
     const answer = (ok: boolean): void => {
+      if (c === null) return
       const cb = c.cb
       setS({ confirmAsk: null })
       cb(ok)
     }
+    const dialogRef = useDialogFocus(() => answer(false))
+    if (c === null) return null
     return React.createElement('div', { className: 'vx-modal-mask', onClick: () => answer(false) },
-      React.createElement('div', { className: 'vx-glass vx-modal', style: { width: 'min(380px, 92vw)' }, onClick: (e: React.MouseEvent) => e.stopPropagation() },
+      React.createElement('div', {
+        className: 'vx-glass vx-modal',
+        style: { width: 'min(380px, 92vw)' },
+        role: 'dialog',
+        'aria-modal': true,
+        'aria-label': '确认操作',
+        tabIndex: -1,
+        ref: dialogRef,
+        onClick: (e: React.MouseEvent) => e.stopPropagation(),
+      },
         React.createElement('div', { className: 'vx-pad' }, c.message),
         React.createElement('div', { className: 'vx-row vx-pad-sm' },
           React.createElement('button', { className: 'vx-btn vx-btn-danger', onClick: () => answer(true) }, '确定'),
-          React.createElement('button', { className: 'vx-btn', onClick: () => answer(false) }, '取消'),
+          React.createElement('button', { className: 'vx-btn', autoFocus: true, onClick: () => answer(false) }, '取消'),
         ),
       ),
     )
@@ -2303,6 +2426,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
   function TemplateModal(): React.ReactElement | null {
     const s = useS()
     const prompt = s.templatePrompt
+    const dialogRef = useDialogFocus(() => setS({ templatePrompt: null, templateValues: {} }))
     if (prompt === null) return null
     const names = promptVariables(prompt.text)
     const submit = (): void => {
@@ -2314,7 +2438,16 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       setS({ prompts: S.prompts, templatePrompt: null, templateValues: {} }); saveCfg(); toast('已插入提示词: ' + prompt.name, 'info')
     }
     return React.createElement('div', { className: 'vx-modal-mask', onClick: () => setS({ templatePrompt: null, templateValues: {} }) },
-      React.createElement('div', { className: 'vx-glass vx-modal', style: { width: 'min(440px, 92vw)' }, onClick: (e: React.MouseEvent) => e.stopPropagation() },
+      React.createElement('div', {
+        className: 'vx-glass vx-modal',
+        style: { width: 'min(440px, 92vw)' },
+        role: 'dialog',
+        'aria-modal': true,
+        'aria-label': `填写变量 · ${prompt.name}`,
+        tabIndex: -1,
+        ref: dialogRef,
+        onClick: (e: React.MouseEvent) => e.stopPropagation(),
+      },
         React.createElement('div', { className: 'vx-pop-head' }, React.createElement('span', null, `填写变量 · ${prompt.name}`)),
         names.map((name) => React.createElement('label', { key: name, className: 'vx-col' }, React.createElement('span', { className: 'vx-muted' }, name), React.createElement('input', { className: 'vx-input', value: s.templateValues[name] ?? '', onChange: (e: React.ChangeEvent<HTMLInputElement>) => setS({ templateValues: { ...S.templateValues, [name]: e.target.value } }) }))),
         React.createElement('div', { className: 'vx-row vx-pad-sm' }, React.createElement('button', { className: 'vx-btn', onClick: submit }, '插入'), React.createElement('button', { className: 'vx-btn', onClick: () => setS({ templatePrompt: null, templateValues: {} }) }, '取消')),
@@ -2363,6 +2496,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     const [err, setErr] = React.useState<string | null>(null)
     const [loading, setLoading] = React.useState(false)
     const [liveUrl, setLiveUrl] = React.useState('#')
+    const dialogRef = useDialogFocus(() => setS({ mermaidModal: null }))
     React.useEffect(() => {
       if (mm === null) return
       let alive = true
@@ -2386,14 +2520,22 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     }, [mm])
     if (mm === null) return null
     return React.createElement('div', { className: 'vx-modal-mask', onClick: () => setS({ mermaidModal: null }) },
-      React.createElement('div', { className: 'vx-glass vx-modal', onClick: (e: React.MouseEvent) => e.stopPropagation() },
+      React.createElement('div', {
+        className: 'vx-glass vx-modal',
+        role: 'dialog',
+        'aria-modal': true,
+        'aria-label': 'Mermaid 图表',
+        tabIndex: -1,
+        ref: dialogRef,
+        onClick: (e: React.MouseEvent) => e.stopPropagation(),
+      },
         React.createElement('div', { className: 'vx-pop-head' },
           React.createElement('span', null, `${mm.title} (${mm.index + 1}/${mm.codes.length})`),
           React.createElement('span', { className: 'vx-row' },
-            mm.codes.length > 1 ? React.createElement('button', { className: 'vx-chip', title: '上一个', onClick: () => setS({ mermaidModal: { ...mm, index: (mm.index + mm.codes.length - 1) % mm.codes.length } }) }, React.createElement(Icon, { n: 'chevronRight', size: 12, style: { transform: 'rotate(180deg)' } })) : null,
-            mm.codes.length > 1 ? React.createElement('button', { className: 'vx-chip', title: '下一个', onClick: () => setS({ mermaidModal: { ...mm, index: (mm.index + 1) % mm.codes.length } }) }, React.createElement(Icon, { n: 'chevronRight', size: 12 })) : null,
+            mm.codes.length > 1 ? React.createElement('button', { className: 'vx-chip', title: '上一个', 'aria-label': '上一个图表', onClick: () => setS({ mermaidModal: { ...mm, index: (mm.index + mm.codes.length - 1) % mm.codes.length } }) }, React.createElement(Icon, { n: 'chevronRight', size: 12, style: { transform: 'rotate(180deg)' } })) : null,
+            mm.codes.length > 1 ? React.createElement('button', { className: 'vx-chip', title: '下一个', 'aria-label': '下一个图表', onClick: () => setS({ mermaidModal: { ...mm, index: (mm.index + 1) % mm.codes.length } }) }, React.createElement(Icon, { n: 'chevronRight', size: 12 })) : null,
             React.createElement('a', { className: 'vx-chip vx-link', href: liveUrl, target: '_blank', rel: 'noopener noreferrer' }, '在 mermaid.live 打开'),
-            React.createElement('button', { className: 'vx-chip', title: '关闭', onClick: () => setS({ mermaidModal: null }) }, React.createElement(Icon, { n: 'x', size: 12 })),
+            React.createElement('button', { className: 'vx-chip', title: '关闭', 'aria-label': '关闭图表', onClick: () => setS({ mermaidModal: null }) }, React.createElement(Icon, { n: 'x', size: 12 })),
           ),
         ),
         loading ? React.createElement('div', { className: 'vx-muted vx-pad' }, '渲染中…') : null,
@@ -2416,6 +2558,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     const [index, setIndex] = React.useState(0)
     const [remote, setRemote] = React.useState<Array<{ sessionId: string; snippet: string }>>([])
     const [remoteStatus, setRemoteStatus] = React.useState('')
+    const dialogRef = useDialogFocus(() => setS({ commandOpen: false }))
     React.useEffect(() => {
       if (!s.commandOpen || query.trim().length < 2) { setRemote([]); setRemoteStatus(''); return }
       const controller = new AbortController()
@@ -2455,7 +2598,16 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     const visible = commands.filter((item) => q === '' || item.label.toLowerCase().includes(q) || item.detail.toLowerCase().includes(q)).slice(0, 50)
     const chosen = Math.max(0, Math.min(index, visible.length - 1))
     return React.createElement('div', { className: 'vx-modal-mask', onClick: () => setS({ commandOpen: false }) },
-      React.createElement('div', { className: 'vx-glass vx-modal', style: { width: 'min(620px, 94vw)' }, onClick: (e: React.MouseEvent) => e.stopPropagation() },
+      React.createElement('div', {
+        className: 'vx-glass vx-modal',
+        style: { width: 'min(620px, 94vw)' },
+        role: 'dialog',
+        'aria-modal': true,
+        'aria-label': '命令面板',
+        tabIndex: -1,
+        ref: dialogRef,
+        onClick: (e: React.MouseEvent) => e.stopPropagation(),
+      },
         React.createElement('input', { className: 'vx-input', autoFocus: true, placeholder: '搜索会话、工作区、提示词或功能…', value: query, onChange: (e: React.ChangeEvent<HTMLInputElement>) => { setQuery(e.target.value); setIndex(0) }, onKeyDown: (e: React.KeyboardEvent) => { if (e.key === 'ArrowDown') { e.preventDefault(); setIndex(Math.min(visible.length - 1, chosen + 1)) } else if (e.key === 'ArrowUp') { e.preventDefault(); setIndex(Math.max(0, chosen - 1)) } else if (e.key === 'Enter') { e.preventDefault(); const command = visible[chosen]; if (command !== undefined && command.disabled !== true) command.run() } else if (e.key === 'Escape') setS({ commandOpen: false }) } }),
         React.createElement('div', { className: 'vx-list' }, visible.map((command, itemIndex) => React.createElement('button', { key: command.key, className: 'vx-list-item' + (itemIndex === chosen ? ' on' : ''), disabled: command.disabled === true, onMouseEnter: () => setIndex(itemIndex), onClick: command.run }, React.createElement('span', null, command.label), React.createElement('span', { className: 'vx-muted' }, command.detail)))),
         remoteStatus !== '' ? React.createElement('div', { className: 'vx-muted vx-pad-sm' }, remoteStatus) : null,
@@ -2468,6 +2620,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     const s = useS()
     const [sel, setSel] = React.useState<Record<string, boolean>>({})
     const [q, setQ] = React.useState('')
+    const dialogRef = useDialogFocus(() => setS({ batchModal: false }))
     const sessions = useSessionsSafe(props)
     const ids = sessions !== null ? (sessions.ids ?? []) : []
     const byId = sessions !== null ? (sessions.byId as unknown as Record<string, { displayTitle?: string; title?: string; running?: boolean }>) : {}
@@ -2494,10 +2647,19 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       }
     }
     return React.createElement('div', { className: 'vx-modal-mask', onClick: () => setS({ batchModal: false }) },
-      React.createElement('div', { className: 'vx-glass vx-modal', style: { width: 'min(560px, 92vw)' }, onClick: (e: React.MouseEvent) => e.stopPropagation() },
+      React.createElement('div', {
+        className: 'vx-glass vx-modal',
+        style: { width: 'min(560px, 92vw)' },
+        role: 'dialog',
+        'aria-modal': true,
+        'aria-label': '批量归档会话',
+        tabIndex: -1,
+        ref: dialogRef,
+        onClick: (e: React.MouseEvent) => e.stopPropagation(),
+      },
         React.createElement('div', { className: 'vx-pop-head' },
           React.createElement('span', null, '批量归档会话'),
-          React.createElement('button', { className: 'vx-chip', title: '关闭', onClick: () => setS({ batchModal: false }) }, React.createElement(Icon, { n: 'x', size: 12 })),
+          React.createElement('button', { className: 'vx-chip', title: '关闭', 'aria-label': '关闭批量归档', onClick: () => setS({ batchModal: false }) }, React.createElement(Icon, { n: 'x', size: 12 })),
         ),
         React.createElement('div', { className: 'vx-muted vx-pad-sm' }, '将选中的会话归档；运行中的会话不可选。DSH 当前未公开恢复接口，本插件不提供恢复入口。'),
         React.createElement('div', { className: 'vx-row vx-pad-sm' },
@@ -2579,7 +2741,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
         React.createElement('span', { className: 'vx-panel-title' }, '个性化中心'),
         React.createElement('span', { className: 'vx-panel-sub' }, '外观 · 效率 · 额度'),
         React.createElement('span', { className: 'vx-flex1' }),
-        React.createElement('button', { className: 'vx-chip', title: '关闭', onClick: () => setS({ panelOpen: false }) }, React.createElement(Icon, { n: 'x', size: 12 })),
+        React.createElement('button', { className: 'vx-chip', title: '关闭', 'aria-label': '关闭个性化面板', onClick: () => setS({ panelOpen: false }) }, React.createElement(Icon, { n: 'x', size: 12 })),
       ),
       React.createElement('div', { className: 'vx-tabs' },
         TABS.map((t) => React.createElement('button', { key: t[0], className: 'vx-tab' + (s.panelTab === t[0] ? ' on' : ''), onClick: () => setS({ panelTab: t[0] }) },
@@ -2605,7 +2767,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
           setS({ folders: S.folders })
           saveCfg()
         }) }, React.createElement(Icon, { n: 'folderPlus', size: 12 })),
-        React.createElement('button', { className: 'vx-chip', title: '关闭', onClick: () => setS({ foldersOpen: false }) }, React.createElement(Icon, { n: 'x', size: 12 })),
+        React.createElement('button', { className: 'vx-chip', title: '关闭', 'aria-label': '关闭项目文件夹', onClick: () => setS({ foldersOpen: false }) }, React.createElement(Icon, { n: 'x', size: 12 })),
       ),
       React.createElement('div', { className: 'vx-folders-body' },
         S.folders.length === 0 ? React.createElement('div', { className: 'vx-muted vx-pad-sm' }, '暂无文件夹。在个性化中心可管理，或点击右上角新建。') : null,
