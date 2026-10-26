@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format loosely
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions
 follow [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## 0.9.2 — 2026-10-26
 
 ### Changed
 
@@ -30,6 +30,13 @@ follow [Semantic Versioning](https://semver.org/).
   切换 / 主题翻转 / restore 断言；新增 `pnpm bench:mermaid` 合成长回合基准。
   结论：1000 块时 warm p95 ≈2.8 ms，扫描收窄收益可忽略；真实 Mermaid ≈10 ms/图，
   懒渲染只在单回合大量图时有意义，暂不引入。
+
+### Verified
+
+- 0.9.2 tarball 装进隔离的 dsh 0.2.1-rc.3 profile（无兼容豁免）并冷启动；活体探针
+  全部通过，1 项因无会话跳过（时间线/导出/搜索，由单测覆盖）。
+- `pnpm check:readme`、`pnpm typecheck`、`pnpm test`（214）、`pnpm build`、`pnpm smoke`
+  全绿。
 
 ## 0.9.1 — 2026-10-25
 
