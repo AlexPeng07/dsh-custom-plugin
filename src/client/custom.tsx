@@ -1725,7 +1725,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
 
   function QuoteDock(props: QuoteDockProps): React.ReactElement | null {
     useViewedSession(props)
-    const s = useS()
+    const quoteEnabled = useSSelector((state) => state.cfg.quote === true)
     const inputRef = React.useRef(props.input)
     inputRef.current = props.input
     const actionsRef = React.useRef(props.inputActions)
@@ -1746,7 +1746,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       return () => { S.insertDraft = null }
     }, [])
     React.useEffect(() => {
-      if (s.cfg.quote !== true) {
+      if (!quoteEnabled) {
         if (S.quoteSel !== null) setS({ quoteSel: null })
         return
       }
@@ -1789,14 +1789,14 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       }
       d.addEventListener('selectionchange', onSel)
       return () => d.removeEventListener('selectionchange', onSel)
-    }, [s.cfg.quote])
+    }, [quoteEnabled])
     return null
   }
 
   function QuoteButton(): React.ReactElement | null {
-    const s = useS()
-    if (s.quoteSel === null) return null
-    const q = s.quoteSel
+    const quoteSel = useSSelector((state) => state.quoteSel)
+    if (quoteSel === null) return null
+    const q = quoteSel
     const fmt = q.text.split('\n').map((l) => '> ' + l).join('\n')
     return React.createElement('button', {
       className: 'vx-quote-btn',
@@ -2456,9 +2456,10 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
   }
 
   function MermaidInPlace(): React.ReactElement | null {
-    const s = useS()
-    const enabled = s.cfg.mermaid === true
-    const dark = s.dark
+    const { enabled, dark } = useSSelector(
+      (state) => ({ enabled: state.cfg.mermaid === true, dark: state.dark === true }),
+      shallowEqual,
+    )
     React.useEffect(() => {
       if (!enabled) {
         mermaidScanner.restore()
@@ -2786,9 +2787,9 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
   }
 
   function Toasts(): React.ReactElement {
-    const s = useS()
+    const toasts = useSSelector((state) => state.toasts)
     return React.createElement('div', { className: 'vx-toasts' },
-      s.toasts.map((t) => React.createElement('div', { key: t.id, className: 'vx-toast' + (t.kind === 'error' ? ' err' : '') },
+      toasts.map((t) => React.createElement('div', { key: t.id, className: 'vx-toast' + (t.kind === 'error' ? ' err' : '') },
         React.createElement(Icon, { n: t.kind === 'error' ? 'x' : (t.kind === 'success' ? 'check' : 'info'), size: 13 }),
         React.createElement('span', null, t.text),
         t.action !== null ? React.createElement('button', { className: 'vx-chip', onClick: () => { try { t.action?.run() } catch { /* action failed */ } } }, t.action.label) : null,

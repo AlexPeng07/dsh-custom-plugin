@@ -15,6 +15,9 @@ follow [Semantic Versioning](https://semver.org/).
   `aria-expanded` / `aria-haspopup`，关键图标按钮补 `aria-label`。
 - **顶栏重渲染**：`HeaderBalance` 从整店订阅改为只选余额、今日用量行与面板开关，
   并对今日次数/费用做 `useMemo`；流式回合的 store 写入不再重渲染顶栏或重算台账。
+- **常驻组件订阅收窄**：`MermaidInPlace`、`QuoteDock`、`QuoteButton`、`Toasts`
+  同样改为 `useSSelector`；它们大多时候渲染 null 或很小，不再被流式/用量写入唤醒。
+  剩余 19 个 `useS()` 多为打开时才挂载的面板，待逐项 profile。
 
 ### Tests
 
