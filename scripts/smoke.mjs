@@ -342,13 +342,28 @@ if (staticOnly) {
   bad('no msedge.exe/chrome.exe found — set SMOKE_BROWSER to a Chromium-family executable')
 } else {
   const { default: puppeteer } = await import('puppeteer-core')
-  // The Mermaid DOM check imports the extracted module directly. It stays
-  // dependency-free so transpile-only is enough to load it in the page.
-  const mermaidEngineJs = await readFile(require.resolve('mermaid/dist/mermaid.min.js'), 'utf8')
-  const mermaidRenderJs = ts.transpileModule(
-    await readFile(join(root, 'src/client/mermaid-render.ts'), 'utf8'),
+  // The Mermaid DOM checks import the extracted modules directly. They stay
+  // dependency-free so transpile-only is enough; relative `.ts` specifiers are
+  // rewritten to the served `.js` names.
+  const transpileClientModule = async (name) => ts.transpileModule(
+    await readFile(join(root, 'src/client', `${name}.ts`), 'utf8'),
     { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } },
-  ).outputText
+  ).outputText.replace(/from ['"](\.\/[a-z0-9-]+)\.ts['"]/g, "from '$1.js'")
+  const [mermaidRenderJs, mermaidScanJs, mermaidCodeJs, timelineDiffJs, mermaidUrlJs] = await Promise.all([
+    transpileClientModule('mermaid-render'),
+    transpileClientModule('mermaid-scan'),
+    transpileClientModule('mermaid-code'),
+    transpileClientModule('timeline-diff'),
+    transpileClientModule('mermaid-url'),
+  ])
+  const mermaidEngineJs = await readFile(require.resolve('mermaid/dist/mermaid.min.js'), 'utf8')
+  const clientModules = {
+    '/mermaid-render.js': mermaidRenderJs,
+    '/mermaid-scan.js': mermaidScanJs,
+    '/mermaid-code.js': mermaidCodeJs,
+    '/timeline-diff.js': timelineDiffJs,
+    '/mermaid-url.js': mermaidUrlJs,
+  }
   const server = createServer(async (request, response) => {
     if (request.url === '/client.js') {
       response.writeHead(200, { 'content-type': 'application/javascript' })
@@ -356,12 +371,15 @@ if (staticOnly) {
     } else if (request.url === '/mermaid.js') {
       response.writeHead(200, { 'content-type': 'application/javascript' })
       response.end(mermaidEngineJs)
-    } else if (request.url === '/mermaid-render.js') {
+    } else if (request.url !== undefined && Object.hasOwn(clientModules, request.url)) {
       response.writeHead(200, { 'content-type': 'application/javascript' })
-      response.end(mermaidRenderJs)
+      response.end(clientModules[request.url])
     } else if (request.url === '/mermaid-test.html') {
       response.writeHead(200, { 'content-type': 'text/html' })
       response.end('<!doctype html><html><body><script src="/mermaid.js"></script></body></html>')
+    } else if (request.url === '/scan-test.html') {
+      response.writeHead(200, { 'content-type': 'text/html' })
+      response.end('<!doctype html><html><body><div id="chat"></div></body></html>')
     } else {
       response.writeHead(404)
       response.end('not found')
@@ -459,6 +477,104 @@ window.__ModuleLoader__ = {
       bad(`Mermaid DOM page errors: ${mermaidErrors.join(' | ').slice(0, 300)}`)
     }
     await mermaidPage.close()
+
+    // In-place scan behaviour (extracted module): one valid block gets a
+    // wrapper and hides the fence, an invalid block keeps its fence with a
+    // retry marker, a python block is untouched, the code/diagram toggle works,
+    // a theme flip re-renders without duplicating wrappers, and restore() puts
+    // the DOM back.
+    const scanPage = await browser.newPage()
+    const scanErrors = []
+    scanPage.on('pageerror', (error) => { scanErrors.push(String(error)) })
+    await scanPage.goto(`http://127.0.0.1:${port}/scan-test.html`, { waitUntil: 'networkidle0' })
+    const scanResult = await scanPage.evaluate(async () => {
+      const { createMermaidScanner } = await import('/mermaid-scan.js')
+      const chat = document.getElementById('chat')
+      const makeBlock = (lang, code) => {
+        const block = document.createElement('div')
+        block.className = 'md-code-block'
+        const banner = document.createElement('div')
+        const row = document.createElement('div')
+        const info = document.createElement('div')
+        info.textContent = lang
+        row.append(info)
+        banner.append(row)
+        block.append(banner)
+        const pre = document.createElement('pre')
+        const codeEl = document.createElement('code')
+        codeEl.textContent = code
+        pre.append(codeEl)
+        block.append(pre)
+        chat.append(block)
+        return block
+      }
+      const valid = makeBlock('mermaid', 'flowchart LR\n A-->B')
+      const invalid = makeBlock('mermaid', 'not a diagram\nstill not')
+      const python = makeBlock('python', 'print(1)')
+      let renders = 0
+      const scanner = createMermaidScanner({
+        ensureMermaid: async () => true,
+        renderMermaid: async (code) => {
+          renders++
+          return code.startsWith('flowchart')
+            ? { ok: true, svg: '<svg xmlns="http://www.w3.org/2000/svg"><text>ok</text></svg>' }
+            : { ok: false, error: 'bad' }
+        },
+      })
+      await scanner.scan(false)
+      const validWrap = valid.previousElementSibling
+      const invalidWrap = invalid.previousElementSibling
+      const pythonWrap = python.previousElementSibling
+      const after = {
+        wraps: chat.querySelectorAll('.vx-mmd-wrap').length,
+        validHidden: valid.style.display === 'none',
+        invalidFail: invalid.dataset.vxMmdFail !== undefined,
+        invalidNoWrap: invalidWrap === null || !invalidWrap.classList.contains('vx-mmd-wrap'),
+        pythonNoWrap: pythonWrap === null || !pythonWrap.classList.contains('vx-mmd-wrap'),
+        renders,
+      }
+      const buttons = validWrap.querySelectorAll('.vx-mmd-btn')
+      buttons[1].click()
+      const toggled = valid.style.display === '' && validWrap.querySelector('.vx-mmd-stage').style.display === 'none'
+      buttons[0].click()
+      const toggledBack = valid.style.display === 'none' && validWrap.querySelector('.vx-mmd-stage').style.display === ''
+      await scanner.scan(true)
+      const flipped = { wraps: chat.querySelectorAll('.vx-mmd-wrap').length, renders }
+      scanner.restore()
+      const restored = {
+        wraps: chat.querySelectorAll('.vx-mmd-wrap').length,
+        validVisible: valid.style.display === '',
+        validMark: valid.dataset.vxMmd === undefined,
+      }
+      return { after, toggled, toggledBack, flipped, restored }
+    })
+    if (scanResult.after.wraps === 1 && scanResult.after.validHidden && scanResult.after.invalidFail
+      && scanResult.after.invalidNoWrap && scanResult.after.pythonNoWrap && scanResult.after.renders === 2) {
+      ok('Mermaid scan: valid block wrapped, invalid keeps fence+retry, python untouched')
+    } else {
+      bad(`Mermaid scan: initial state ${JSON.stringify(scanResult.after)}`)
+    }
+    if (scanResult.toggled && scanResult.toggledBack) {
+      ok('Mermaid scan: diagram/code toggle works')
+    } else {
+      bad(`Mermaid scan: toggle state ${JSON.stringify(scanResult)}`)
+    }
+    if (scanResult.flipped.wraps === 1 && scanResult.flipped.renders > scanResult.after.renders) {
+      ok('Mermaid scan: theme flip re-renders without duplicating wrappers')
+    } else {
+      bad(`Mermaid scan: theme flip ${JSON.stringify(scanResult.flipped)}`)
+    }
+    if (scanResult.restored.wraps === 0 && scanResult.restored.validVisible && scanResult.restored.validMark) {
+      ok('Mermaid scan: restore removes wrappers, unhides code, clears markers')
+    } else {
+      bad(`Mermaid scan: restore ${JSON.stringify(scanResult.restored)}`)
+    }
+    if (scanErrors.length === 0) {
+      ok('Mermaid scan: no page errors')
+    } else {
+      bad(`Mermaid scan page errors: ${scanErrors.join(' | ').slice(0, 300)}`)
+    }
+    await scanPage.close()
   } catch (error) {
     bad(`headless browser stage failed: ${String(error instanceof Error ? error.message : error)}`)
   } finally {

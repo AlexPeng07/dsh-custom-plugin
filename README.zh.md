@@ -254,6 +254,7 @@ pnpm smoke          # 构建后契约自检：加载器握手、dsh 会读的清
                     # patch 行、本地 Mermaid 引擎与真实引擎的失败路径 DOM 回归
 pnpm canary         # 已发布插件对 npm latest/next 里最新的 dsh（需要 npm、bash、
                     # curl；--plugin <tgz> 可测本地构建）
+pnpm bench:mermaid  # 合成长回合的 Mermaid 扫描/渲染基准（无头 Edge）
 ```
 
 `scripts/live-dsh-check.sh` 是另一条**手动**探针，对着一个正在运行的隔离 dsh profile

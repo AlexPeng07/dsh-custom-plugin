@@ -270,6 +270,7 @@ pnpm smoke          # post-build contract checks: loader handshake, manifest
                     # real-engine Mermaid error-path DOM regression
 pnpm canary         # published plugin against the newest dsh from npm latest/next
                     # (needs npm, bash and curl; --plugin <tgz> tests a local build)
+pnpm bench:mermaid  # synthetic long-turn Mermaid scan/render benchmark (headless Edge)
 ```
 
 `scripts/live-dsh-check.sh` is a separate, manual probe against a **running**

@@ -13,6 +13,10 @@ follow [Semantic Versioning](https://semver.org/).
   `body > div#dvx-mmd-*`、有效图渲染、旧错误卡清理、引擎缺失干净失败），并新增
   `tests/mermaid-render.spec.ts` 9 个单测。反证：撤掉 `suppressErrorRendering` 与
   清理后 smoke 恰好红 2 项，还原后全绿。
+- 扫描逻辑抽到 `src/client/mermaid-scan.ts`，smoke 增加 5 项 wrapper / 失败回退 /
+  切换 / 主题翻转 / restore 断言；新增 `pnpm bench:mermaid` 合成长回合基准。
+  结论：1000 块时 warm p95 ≈2.8 ms，扫描收窄收益可忽略；真实 Mermaid ≈10 ms/图，
+  懒渲染只在单回合大量图时有意义，暂不引入。
 
 ## 0.9.1 — 2026-10-25
 

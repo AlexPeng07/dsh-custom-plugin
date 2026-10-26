@@ -37,7 +37,8 @@ import { MERMAID_SCRIPT_PATH } from '../protocol.ts'
 import { isGenericInfostring, isMermaidCode, normalizeMermaidText } from './mermaid-code.ts'
 import { mermaidLiveUrl } from './mermaid-url.ts'
 import { mermaidCodeKey, reuseTimelineItems } from './timeline-diff.ts'
-import { removeLegacyMermaidErrors, renderMermaid } from './mermaid-render.ts'
+import { renderMermaid } from './mermaid-render.ts'
+import { createMermaidScanner } from './mermaid-scan.ts'
 import { STATIC_CSS } from './styles.ts'
 
 /** Minimal input-state face the input dock owner provides. */
@@ -1151,7 +1152,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
         // marker; now that it is ready, let them render on the next scan.
         if (d0 !== null) {
           for (const el of Array.from(d0.querySelectorAll<HTMLElement>('[data-vx-mmd-fail]'))) delete el.dataset.vxMmdFail
-          if (S.cfg.mermaid === true) void scanMermaidBlocks(S.dark)
+          if (S.cfg.mermaid === true) void mermaidScanner.scan(S.dark)
         }
         return true
       }
@@ -1164,6 +1165,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       clearTimeout(watchdog)
     }
   }
+  const mermaidScanner = createMermaidScanner({ ensureMermaid, renderMermaid })
   function extractMermaid(text: string): string[] {
     const out: string[] = []
     const re = /```mermaid\s*\n([\s\S]*?)```/gi
@@ -1175,150 +1177,6 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     const codes = extractMermaid(item.text)
     if (codes.length === 0) { toast('未找到 Mermaid 代码块', 'error'); return }
     setS({ mermaidModal: { title: item.text.slice(0, 40), codes, index: 0 } })
-  }
-
-  // ================= mermaid in-place (chat DOM) =================
-  /** Blocks with a render already in flight (WeakSet: dead blocks drop out). */
-  const mmdInflight = new WeakSet<HTMLElement>()
-  /** Previous scan theme; a flip invalidates rendered-SVG memoization. */
-  let mmdLastDark: boolean | null = null
-
-  /** The banner's language label: `.md-code-block > bannerWrap > banner >
-   * infostring` is the GUI CodeBlock's stable shape (its CSS classes are
-   * hashed, the structure is not). */
-  function blockInfostring(block: HTMLElement): string | null {
-    const info = block.querySelector(':scope > div:first-child > div:first-child > div:first-child')
-    return info !== null ? info.textContent ?? '' : null
-  }
-
-  /** Raw fence text: the GUI keeps unknown languages (mermaid among them) on
-   * the plain `<pre><code>` path, so `pre` always carries the source. */
-  function blockCodeText(block: HTMLElement): string | null {
-    const pre = block.querySelector('pre')
-    return pre !== null ? pre.textContent ?? '' : null
-  }
-
-  /** Insert/refresh the diagram wrapper before one code block. Never moves
-   * GUI-owned nodes — React keeps reconciling its tree; the block is only
-   * visually swapped with the diagram stage via display. */
-  async function renderInPlace(block: HTMLElement, code: string, dark: boolean): Promise<void> {
-    const key = mermaidCodeKey(code)
-    const existingWrap = block.previousElementSibling
-    if (block.dataset.vxMmd === key && existingWrap !== null && existingWrap.classList.contains('vx-mmd-wrap')) return
-    const ready = await ensureMermaid()
-    if (!ready) {
-      // Engine unreachable: keep the code visible; a later scan retries once
-      // the engine becomes ready (ensureMermaid clears the fail marker then).
-      block.dataset.vxMmdFail = key
-      return
-    }
-    const r = await renderMermaid(code, dark)
-    if (!r.ok) { block.dataset.vxMmdFail = key; return }
-    delete block.dataset.vxMmdFail
-    const d = typeof document !== 'undefined' ? document : null
-    if (d === null) return
-    // Re-read the sibling after the awaits: React may have re-rendered the
-    // conversation and detached the wrapper observed before ensureMermaid.
-    let wrap = block.previousElementSibling as HTMLElement | null
-    if (wrap === null || !wrap.classList.contains('vx-mmd-wrap')) {
-      wrap = d.createElement('div')
-      wrap.className = 'vx-mmd-wrap'
-      block.parentElement?.insertBefore(wrap, block)
-      const bar = d.createElement('div')
-      bar.className = 'vx-mmd-bar'
-      const diagramBtn = d.createElement('button')
-      diagramBtn.type = 'button'
-      diagramBtn.className = 'vx-mmd-btn active'
-      diagramBtn.textContent = '图表'
-      const codeBtn = d.createElement('button')
-      codeBtn.type = 'button'
-      codeBtn.className = 'vx-mmd-btn'
-      codeBtn.textContent = '代码'
-      const live = d.createElement('a')
-      live.className = 'vx-mmd-live'
-      live.target = '_blank'
-      live.rel = 'noopener noreferrer'
-      live.textContent = 'mermaid.live'
-      void mermaidLiveUrl(code).then((url) => { live.href = url }).catch(() => {})
-      bar.append(diagramBtn, codeBtn, live)
-      const stage = d.createElement('div')
-      stage.className = 'vx-mmd-stage'
-      wrap.append(bar, stage)
-      const showDiagram = (): void => {
-        stage.style.display = ''
-        block.style.display = 'none'
-        diagramBtn.classList.add('active')
-        codeBtn.classList.remove('active')
-      }
-      const showCode = (): void => {
-        stage.style.display = 'none'
-        block.style.display = ''
-        diagramBtn.classList.remove('active')
-        codeBtn.classList.add('active')
-      }
-      diagramBtn.addEventListener('click', showDiagram)
-      codeBtn.addEventListener('click', showCode)
-      showDiagram()
-    }
-    const stage = wrap.querySelector('.vx-mmd-stage')
-    if (stage === null) return
-    stage.innerHTML = r.svg
-    block.dataset.vxMmd = key
-  }
-
-  /** Scan every chat code block and render the mermaid ones in place. */
-  async function scanMermaidBlocks(dark: boolean): Promise<void> {
-    const d = typeof document !== 'undefined' ? document : null
-    if (d === null) return
-    removeLegacyMermaidErrors(d)
-    // Drop wrappers whose code block left the DOM (history switch / unmount).
-    for (const wrap of Array.from(d.querySelectorAll<HTMLElement>('.vx-mmd-wrap'))) {
-      const next = wrap.nextElementSibling
-      if (next === null || !next.classList.contains('md-code-block')) wrap.remove()
-    }
-    for (const block of Array.from(d.querySelectorAll<HTMLElement>('.md-code-block'))) {
-      if (mmdInflight.has(block)) continue
-      const codeRaw = blockCodeText(block)
-      if (codeRaw === null) continue
-      const code = normalizeMermaidText(codeRaw).trim()
-      if (code === '') continue
-      const key = mermaidCodeKey(code)
-      const info = blockInfostring(block)
-      const definite = info !== null && info.trim().toLowerCase() === 'mermaid'
-      if (definite) {
-        // Settled ```mermaid fence: only guard against a lone keyword line.
-        if (code.split('\n').filter((l) => l.trim() !== '').length < 2) continue
-      } else {
-        // Blank (streaming) or generic banner: content heuristics decide, so a
-        // streaming mindmap previews as soon as it is complete enough and a
-        // named foreign language (python etc.) is never touched.
-        if (!isGenericInfostring(info)) continue
-        if (!isMermaidCode(codeRaw)) continue
-      }
-      if (block.dataset.vxMmd === key || block.dataset.vxMmdFail === key) continue
-      mmdInflight.add(block)
-      try {
-        await renderInPlace(block, code, dark)
-      } finally {
-        mmdInflight.delete(block)
-      }
-    }
-  }
-
-  /** Undo in-place rendering (feature toggled off): remove wrappers, unhide
-   * code blocks. Diagram DOM is plugin-owned, so removal is safe. */
-  function restoreMermaidBlocks(): void {
-    const d = typeof document !== 'undefined' ? document : null
-    if (d === null) return
-    for (const wrap of Array.from(d.querySelectorAll<HTMLElement>('.vx-mmd-wrap'))) {
-      const next = wrap.nextElementSibling as HTMLElement | null
-      if (next !== null && next.classList.contains('md-code-block')) next.style.display = ''
-      wrap.remove()
-    }
-    for (const block of Array.from(d.querySelectorAll<HTMLElement>('.md-code-block'))) {
-      delete block.dataset.vxMmd
-      delete block.dataset.vxMmdFail
-    }
   }
 
   // The host's outbound balance call shares the machine's network path with
@@ -2470,7 +2328,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     const dark = s.dark
     React.useEffect(() => {
       if (!enabled) {
-        restoreMermaidBlocks()
+        mermaidScanner.restore()
         return
       }
       const d = typeof document !== 'undefined' ? document : null
@@ -2478,16 +2336,11 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       if (d === null || d.body === null || w === null || w.MutationObserver === undefined) return
       let timer: ReturnType<typeof setTimeout> | null = null
       let stopped = false
-      const scan = (): void => { if (!stopped) void scanMermaidBlocks(dark) }
+      const scan = (): void => { if (!stopped) void mermaidScanner.scan(dark) }
       const schedule = (): void => {
         if (timer !== null) clearTimeout(timer)
         timer = setTimeout(scan, 400)
       }
-      if (mmdLastDark !== null && mmdLastDark !== dark) {
-        // Theme flipped: drop the memo so existing diagrams re-render.
-        for (const block of Array.from(d.querySelectorAll<HTMLElement>('.md-code-block'))) delete block.dataset.vxMmd
-      }
-      mmdLastDark = dark
       scan()
       // Chat history loads, streaming fences and re-renders all mutate the
       // conversation subtree; one debounced body-wide observer covers them.
@@ -3012,7 +2865,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     // the plugin (the React effect cleanup does not run for entries the host
     // unmounts after this disposer).
     try { syncAntiScroll(false) } catch { /* best effort */ }
-    try { restoreMermaidBlocks() } catch { /* best effort */ }
+    try { mermaidScanner.restore() } catch { /* best effort */ }
     const d = typeof document !== 'undefined' ? document : null
     if (d !== null) {
       for (const cls of ['vx-liquid', 'vx-dark', 'vx-light']) {

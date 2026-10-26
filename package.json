@@ -58,6 +58,7 @@
     "check:readme": "node scripts/check-readme-i18n.mjs",
     "smoke": "node scripts/smoke.mjs",
     "canary": "node scripts/compat-canary.mjs",
+    "bench:mermaid": "node scripts/mermaid-scan-bench.mjs",
     "prepare": "npm run build",
     "prepublishOnly": "tsc --noEmit && vitest run"
   },

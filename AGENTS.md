@@ -128,6 +128,12 @@ daily token usage.
   engine against valid and invalid blocks (no `body > div#dvx-mmd-*`, no
   "Syntax error" text), sweeps a legacy card, and checks the missing-engine
   path; `tests/mermaid-render.spec.ts` covers the cleanup at unit level.
+- In-place scanning lives in `src/client/mermaid-scan.ts`; keep the wrapper /
+  toggle / restore behaviour and the 400 ms body observer. `pnpm bench:mermaid`
+  builds a synthetic long turn in headless Edge: at 1000 blocks the warm scan
+  p95 is ~2.8 ms, while real Mermaid rendering is ~10 ms/diagram. Scan narrowing
+  is not worth the complexity; viewport laziness only pays off for turns with
+  many diagrams, so measure before changing either.
 - The client bundle resolves its modules against the web shell's frozen seed
   table; `tsdown.config.ts` `PLATFORM_MODULES` mirrors it (0.2.1 added `zod` and
   `@tanstack/react-virtual` to the table), and any extra runtime `require()`
