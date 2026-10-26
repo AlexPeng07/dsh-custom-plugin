@@ -31,6 +31,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 // The same library dsh's own peer gate uses, so this gate cannot disagree with
 // the runtime about what a range admits (prerelease semantics included).
 import semver from 'semver'
+import ts from 'typescript'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const ID = '@alexpeng/dsh-custom-plugin'
@@ -341,10 +342,26 @@ if (staticOnly) {
   bad('no msedge.exe/chrome.exe found — set SMOKE_BROWSER to a Chromium-family executable')
 } else {
   const { default: puppeteer } = await import('puppeteer-core')
+  // The Mermaid DOM check imports the extracted module directly. It stays
+  // dependency-free so transpile-only is enough to load it in the page.
+  const mermaidEngineJs = await readFile(require.resolve('mermaid/dist/mermaid.min.js'), 'utf8')
+  const mermaidRenderJs = ts.transpileModule(
+    await readFile(join(root, 'src/client/mermaid-render.ts'), 'utf8'),
+    { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } },
+  ).outputText
   const server = createServer(async (request, response) => {
     if (request.url === '/client.js') {
       response.writeHead(200, { 'content-type': 'application/javascript' })
       response.end(clientJs)
+    } else if (request.url === '/mermaid.js') {
+      response.writeHead(200, { 'content-type': 'application/javascript' })
+      response.end(mermaidEngineJs)
+    } else if (request.url === '/mermaid-render.js') {
+      response.writeHead(200, { 'content-type': 'application/javascript' })
+      response.end(mermaidRenderJs)
+    } else if (request.url === '/mermaid-test.html') {
+      response.writeHead(200, { 'content-type': 'text/html' })
+      response.end('<!doctype html><html><body><script src="/mermaid.js"></script></body></html>')
     } else {
       response.writeHead(404)
       response.end('not found')
@@ -382,6 +399,66 @@ window.__ModuleLoader__ = {
     } else {
       bad(`page errors: ${pageErrors.join(' | ').slice(0, 300)}`)
     }
+
+    // Mermaid error path, with the real engine: an invalid block must fail
+    // silently (raw code stays in the chat), a valid one must render, and
+    // neither may leave Mermaid's <body> scratch/error nodes behind.
+    const mermaidPage = await browser.newPage()
+    const mermaidErrors = []
+    mermaidPage.on('pageerror', (error) => { mermaidErrors.push(String(error)) })
+    await mermaidPage.goto(`http://127.0.0.1:${port}/mermaid-test.html`, { waitUntil: 'networkidle0' })
+    const mermaidResult = await mermaidPage.evaluate(async () => {
+      const api = await import('/mermaid-render.js')
+      const invalid = await api.renderMermaid('this is definitely not a mermaid diagram', false)
+      const invalidState = {
+        ok: invalid.ok,
+        leftovers: [...document.querySelectorAll('body > div[id^="dvx-mmd-"]')].map((el) => el.id),
+        syntax: document.body.innerText.includes('Syntax error in text'),
+      }
+      const valid = await api.renderMermaid('flowchart LR\nA-->B', false)
+      const validState = {
+        ok: valid.ok,
+        svgLength: valid.ok ? valid.svg.length : 0,
+        leftovers: document.querySelectorAll('body > div[id^="dvx-mmd-"]').length,
+      }
+      const legacy = document.createElement('div')
+      legacy.id = 'dvx-mmd-legacy'
+      legacy.textContent = 'Syntax error in text'
+      document.body.appendChild(legacy)
+      api.removeLegacyMermaidErrors(document)
+      const legacyGone = document.getElementById('dvx-mmd-legacy') === null
+      const saved = window.mermaid
+      window.mermaid = undefined
+      const missing = await api.renderMermaid('flowchart LR\nA-->B', false)
+      window.mermaid = saved
+      return { invalidState, validState, legacyGone, missingOk: missing.ok, missingError: missing.ok ? '' : missing.error }
+    })
+    if (mermaidResult.invalidState.ok === false && mermaidResult.invalidState.leftovers.length === 0 && !mermaidResult.invalidState.syntax) {
+      ok('Mermaid DOM: invalid code fails silently and leaves no error card in <body>')
+    } else {
+      bad(`Mermaid DOM: invalid code leaked state: ${JSON.stringify(mermaidResult.invalidState)}`)
+    }
+    if (mermaidResult.validState.ok && mermaidResult.validState.svgLength > 100 && mermaidResult.validState.leftovers === 0) {
+      ok(`Mermaid DOM: valid diagram renders (${mermaidResult.validState.svgLength} B SVG) and cleans its scratch node`)
+    } else {
+      bad(`Mermaid DOM: valid diagram state: ${JSON.stringify(mermaidResult.validState)}`)
+    }
+    if (mermaidResult.legacyGone === true) {
+      ok('Mermaid DOM: legacy error cards are swept on scan')
+    } else {
+      bad('Mermaid DOM: legacy error-card sweep did not remove the node')
+    }
+    if (mermaidResult.missingOk === false && mermaidResult.missingError === '引擎未就绪') {
+      ok('Mermaid DOM: missing engine returns a clean error')
+    } else {
+      bad(`Mermaid DOM: missing engine returned ${JSON.stringify(mermaidResult)}`)
+    }
+    if (mermaidErrors.length === 0) {
+      ok('Mermaid DOM: no page errors')
+    } else {
+      bad(`Mermaid DOM page errors: ${mermaidErrors.join(' | ').slice(0, 300)}`)
+    }
+    await mermaidPage.close()
   } catch (error) {
     bad(`headless browser stage failed: ${String(error instanceof Error ? error.message : error)}`)
   } finally {

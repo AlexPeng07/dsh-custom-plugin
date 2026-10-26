@@ -266,7 +266,8 @@ pnpm test           # vitest unit tests
 pnpm build          # build the node ESM library and the browser bundle into lib/
 pnpm check:readme   # bilingual README hash consistency
 pnpm smoke          # post-build contract checks: loader handshake, manifest
-                    # fields dsh reads, patch row, local Mermaid engine
+                    # fields dsh reads, patch row, local Mermaid engine,
+                    # real-engine Mermaid error-path DOM regression
 pnpm canary         # published plugin against the newest dsh from npm latest/next
                     # (needs npm, bash and curl; --plugin <tgz> tests a local build)
 ```

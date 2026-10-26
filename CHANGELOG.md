@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format loosely
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions
 follow [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Tests
+
+- Mermaid 渲染从 `src/client/custom.tsx` 抽到独立的 `src/client/mermaid-render.ts`；
+  `pnpm smoke` 现在用真实 Mermaid 引擎在无头 Edge 中覆盖失败路径（无效代码不残留
+  `body > div#dvx-mmd-*`、有效图渲染、旧错误卡清理、引擎缺失干净失败），并新增
+  `tests/mermaid-render.spec.ts` 9 个单测。反证：撤掉 `suppressErrorRendering` 与
+  清理后 smoke 恰好红 2 项，还原后全绿。
+
 ## 0.9.1 — 2026-10-25
 
 ### Fixed

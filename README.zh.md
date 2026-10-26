@@ -251,7 +251,7 @@ pnpm test           # vitest 单元测试
 pnpm build          # 构建 node ESM 库与浏览器 bundle 到 lib/
 pnpm check:readme   # 双语 README 哈希一致性
 pnpm smoke          # 构建后契约自检：加载器握手、dsh 会读的清单字段、
-                    # patch 行、本地 Mermaid 引擎
+                    # patch 行、本地 Mermaid 引擎与真实引擎的失败路径 DOM 回归
 pnpm canary         # 已发布插件对 npm latest/next 里最新的 dsh（需要 npm、bash、
                     # curl；--plugin <tgz> 可测本地构建）
 ```

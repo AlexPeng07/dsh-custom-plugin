@@ -120,6 +120,14 @@ daily token usage.
   matching `If-None-Match`) so a page reload does not re-transfer ~3.5 MB.
   A failed in-place render stores only `mermaidCodeKey(code)` in the DOM, and
   engine recovery clears those markers and triggers a rescan.
+- Mermaid rendering lives in `src/client/mermaid-render.ts` (dependency-free;
+  `scripts/smoke.mjs` transpiles it into the headless page). Keep
+  `suppressErrorRendering: true` and the `finally` scratch cleanup: Mermaid
+  appends `div#d<id>` to `<body>` before a rejected render throws, so a
+  catch-only caller leaves its error card behind. `pnpm smoke` drives the real
+  engine against valid and invalid blocks (no `body > div#dvx-mmd-*`, no
+  "Syntax error" text), sweeps a legacy card, and checks the missing-engine
+  path; `tests/mermaid-render.spec.ts` covers the cleanup at unit level.
 - The client bundle resolves its modules against the web shell's frozen seed
   table; `tsdown.config.ts` `PLATFORM_MODULES` mirrors it (0.2.1 added `zod` and
   `@tanstack/react-virtual` to the table), and any extra runtime `require()`
