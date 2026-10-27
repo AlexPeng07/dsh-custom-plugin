@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format loosely
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions
 follow [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## 0.9.3 — 2026-10-26
 
 ### Changed
 
@@ -12,6 +12,13 @@ follow [Semantic Versioning](https://semver.org/).
   theme/session），`FolderNode` 只选 `folderAdd` / `folderWsPick` / `dropHint`；
   整店 `useS()` 从 19 降到 17。流式/用量/toast 写入不再重渲染整个浮层树或每个文件夹
   节点。
+
+### Verified
+
+- 0.9.3 tarball 装进隔离的 dsh 0.2.1-rc.3 profile（无兼容豁免）并冷启动；活体探针
+  全部通过，1 项因无会话跳过（时间线/导出/搜索，由单测覆盖）。
+- `pnpm check:readme`、`pnpm typecheck`、`pnpm test`（214）、`pnpm build`、`pnpm smoke`
+  全绿。
 
 ## 0.9.2 — 2026-10-26
 
