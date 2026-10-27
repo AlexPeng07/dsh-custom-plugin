@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format loosely
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions
 follow [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Changed
+
+- **浮层/文件夹节点订阅收窄**：`OverlayRoot` 只选它渲染的 14 个字段（overlay/config/
+  theme/session），`FolderNode` 只选 `folderAdd` / `folderWsPick` / `dropHint`；
+  整店 `useS()` 从 19 降到 17。流式/用量/toast 写入不再重渲染整个浮层树或每个文件夹
+  节点。
+
 ## 0.9.2 — 2026-10-26
 
 ### Changed

@@ -66,8 +66,10 @@ daily token usage.
   only its three fields (`balance`, today's usage row, `balanceOpen`) so a
   streaming turn cannot re-render the header or recompute the ledger; the
   always-mounted `MermaidInPlace`, `QuoteDock`, `QuoteButton` and `Toasts`
-  components select only their own fields too. Components that render null
-  most of the time must not subscribe to the whole store.
+  components select only their own fields too. `OverlayRoot` selects the
+  overlay/config/theme/session fields it renders, and each `FolderNode` selects
+  only its add/pick/drop state. Components that render null most of the time
+  must not subscribe to the whole store.
 - Accessibility contracts: weather FX honors `prefers-reduced-motion` (no
   animation frame when reduced) and its decorative canvas carries
   `aria-hidden`; the 60 s balance poll pauses while `document.hidden` and

@@ -1902,7 +1902,10 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
   }
 
   function FolderNode(props: { node: FolderNode; useSessions: OverlayProps['useSessions']; useWorkspaces: OverlayProps['useWorkspaces'] }): React.ReactElement {
-    const s = useS()
+    const { folderAdd, folderWsPick, dropHint } = useSSelector(
+      (state) => ({ folderAdd: state.folderAdd, folderWsPick: state.folderWsPick, dropHint: state.dropHint }),
+      shallowEqual,
+    )
     const node = props.node
     const [open, setOpen] = React.useState(true)
     const sessions = useSessionsSafe(props)
@@ -1997,9 +2000,9 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       if (S.dropHint === null || S.dropHint.id !== node.id || S.dropHint.zone !== zone) setS({ dropHint: { id: node.id, zone } })
     }
     const rowLeave = (): void => { if (S.dropHint !== null && S.dropHint.id === node.id) setS({ dropHint: null }) }
-    const adding = s.folderAdd === node.id
-    const pickingWs = s.folderWsPick === node.id
-    const hintZone = s.dropHint !== null && s.dropHint.id === node.id ? s.dropHint.zone : null
+    const adding = folderAdd === node.id
+    const pickingWs = folderWsPick === node.id
+    const hintZone = dropHint !== null && dropHint.id === node.id ? dropHint.zone : null
     const children = node.children ?? []
     const sessIds = node.sessionIds ?? []
     const wsIds = node.workspaceIds ?? []
@@ -2798,7 +2801,31 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
   }
 
   function OverlayRoot(props: OverlayProps): React.ReactElement {
-    const s = useS()
+    // The overlay tree is always mounted; subscribe only to the fields it
+    // renders (overlays/config/theme/session), not to turns/toasts/usage.
+    const {
+      cfg, dark, booted, sessionId,
+      panelOpen, foldersOpen, promptOpen, mermaidModal, batchModal, commandOpen,
+      quoteSel, ask, confirmAsk, templatePrompt,
+    } = useSSelector(
+      (state) => ({
+        cfg: state.cfg,
+        dark: state.dark,
+        booted: state.booted,
+        sessionId: state.sessionId,
+        panelOpen: state.panelOpen,
+        foldersOpen: state.foldersOpen,
+        promptOpen: state.promptOpen,
+        mermaidModal: state.mermaidModal,
+        batchModal: state.batchModal,
+        commandOpen: state.commandOpen,
+        quoteSel: state.quoteSel,
+        ask: state.ask,
+        confirmAsk: state.confirmAsk,
+        templatePrompt: state.templatePrompt,
+      }),
+      shallowEqual,
+    )
     /** 当前 GUI 实际配色。主题服务已解析的快照最权威（覆盖 GUI 内全局深色
      * 切换，与 OS 偏好无关）；其次 body 上呈现器维护的 data-ds-dark-theme；
      * 最后兜底操作系统 prefers-color-scheme。 */
@@ -2830,22 +2857,22 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       d.addEventListener('keydown', onKey)
       return () => d.removeEventListener('keydown', onKey)
     }, [])
-    React.useEffect(() => { if (s.booted) applyAppearance() }, [s.booted, s.cfg.bg, s.cfg.glass, s.cfg.glassMode, s.cfg.globalGlass, s.dark])
+    React.useEffect(() => { if (booted) applyAppearance() }, [booted, cfg.bg, cfg.glass, cfg.glassMode, cfg.globalGlass, dark])
     React.useEffect(() => {
-      syncAntiScroll(s.cfg.antiScroll === true)
+      syncAntiScroll(cfg.antiScroll === true)
       // Unmount/disable must restore scroll-behavior on every element this
       // page-global effect touched; otherwise the GUI keeps the forced
       // `auto` behavior after the plugin is gone.
       return () => { syncAntiScroll(false) }
-    }, [s.cfg.antiScroll])
+    }, [cfg.antiScroll])
     React.useEffect(() => {
       const w = typeof window !== 'undefined' ? window : null
       const d = typeof document !== 'undefined' ? document : null
-      const applyDark = (dark: boolean): void => {
+      const applyDark = (nextDark: boolean): void => {
         // Palette backgrounds follow the theme now (dark variants are
         // derived), so a flip only needs to re-render and re-paint.
-        S.dark = dark
-        setS({ dark })
+        S.dark = nextDark
+        setS({ dark: nextDark })
       }
       applyDark(readDark())
       // GUI 全局主题切换（权威：主题服务事件，覆盖浅/深/system 偏好）
@@ -2882,7 +2909,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       const dark = readDark()
       S.dark = dark
       setS({ dark })
-    }, [s.booted])
+    }, [booted])
     // Mirror the resolved GUI theme onto <html>: the glass fill rules are
     // theme-scoped at :root so they reach every surface with one selector —
     // including ones mounted outside .vx-root (the balance hover), which the
@@ -2890,14 +2917,14 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     React.useEffect(() => {
       const d = typeof document !== 'undefined' ? document : null
       if (d === null) return
-      d.documentElement.classList.toggle('vx-dark', s.dark === true)
-      d.documentElement.classList.toggle('vx-light', s.dark !== true)
-    }, [s.dark])
+      d.documentElement.classList.toggle('vx-dark', dark === true)
+      d.documentElement.classList.toggle('vx-light', dark !== true)
+    }, [dark])
     // Refresh the turns data while the session is streaming: the turn-tail
     // chips (LaTeX / MathML / Mermaid) appear as soon as the next fetch lands,
     // without waiting for a session switch to trigger one.
     const sessions = useSessionsSafe(props)
-    const summary = sessions !== null && s.sessionId !== null ? sessions.byId[s.sessionId] : null
+    const summary = sessions !== null && sessionId !== null ? sessions.byId[sessionId] : null
     React.useEffect(() => {
       const watchedId = S.sessionId
       if (watchedId === null) return
@@ -2930,21 +2957,21 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
         // fetch when the watched session is still the selected one.
         if (!disposed && S.sessionId === watchedId) void fetchTurns(watchedId)
       }
-    }, [s.sessionId, summary?.running])
+    }, [sessionId, summary?.running])
     const children: React.ReactElement[] = [React.createElement(FxCanvas, { key: 'fx' })]
     children.push(React.createElement(MermaidInPlace, { key: 'mmd' }))
-    if (s.panelOpen === true) children.push(React.createElement(PersonalizePanel, { key: 'panel', useSessions: props.useSessions, useWorkspaces: props.useWorkspaces }))
-    if (s.foldersOpen === true) children.push(React.createElement(SidebarFoldersPanel, { key: 'folders', useSessions: props.useSessions, useWorkspaces: props.useWorkspaces }))
-    if (s.promptOpen !== null) children.push(React.createElement(PromptPopover, { key: 'prompt' }))
-    if (s.mermaidModal !== null) children.push(React.createElement(MermaidModal, { key: 'mermaid' }))
-    if (s.batchModal === true) children.push(React.createElement(BatchModal, { key: 'batch', useSessions: props.useSessions }))
-    if (s.commandOpen === true) children.push(React.createElement(CommandPalette, { key: 'command', useSessions: props.useSessions, useWorkspaces: props.useWorkspaces }))
-    if (s.quoteSel !== null && s.cfg.quote === true) children.push(React.createElement(QuoteButton, { key: 'quote' }))
-    if (s.ask !== null) children.push(React.createElement(AskModal, { key: 'ask' }))
-    if (s.confirmAsk !== null) children.push(React.createElement(ConfirmModal, { key: 'confirm' }))
-    if (s.templatePrompt !== null) children.push(React.createElement(TemplateModal, { key: 'template' }))
+    if (panelOpen === true) children.push(React.createElement(PersonalizePanel, { key: 'panel', useSessions: props.useSessions, useWorkspaces: props.useWorkspaces }))
+    if (foldersOpen === true) children.push(React.createElement(SidebarFoldersPanel, { key: 'folders', useSessions: props.useSessions, useWorkspaces: props.useWorkspaces }))
+    if (promptOpen !== null) children.push(React.createElement(PromptPopover, { key: 'prompt' }))
+    if (mermaidModal !== null) children.push(React.createElement(MermaidModal, { key: 'mermaid' }))
+    if (batchModal === true) children.push(React.createElement(BatchModal, { key: 'batch', useSessions: props.useSessions }))
+    if (commandOpen === true) children.push(React.createElement(CommandPalette, { key: 'command', useSessions: props.useSessions, useWorkspaces: props.useWorkspaces }))
+    if (quoteSel !== null && cfg.quote === true) children.push(React.createElement(QuoteButton, { key: 'quote' }))
+    if (ask !== null) children.push(React.createElement(AskModal, { key: 'ask' }))
+    if (confirmAsk !== null) children.push(React.createElement(ConfirmModal, { key: 'confirm' }))
+    if (templatePrompt !== null) children.push(React.createElement(TemplateModal, { key: 'template' }))
     children.push(React.createElement(Toasts, { key: 'toasts' }))
-    return React.createElement('div', { className: `vx-root ${s.dark ? 'vx-dark' : 'vx-light'}` }, children)
+    return React.createElement('div', { className: `vx-root ${dark ? 'vx-dark' : 'vx-light'}` }, children)
   }
 
   // ================= install =================
