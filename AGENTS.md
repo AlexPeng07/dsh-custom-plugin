@@ -91,8 +91,11 @@ daily token usage.
   above the floor is admitted on purpose. The gate is binary — refusing an
   unmeasured version makes its users wait for a plugin release — so the product
   decision is to admit first and detect breakage automatically. Measured versions
-  are evidence in README/CHANGELOG, never a gate. `pnpm smoke` asserts the floor
-  (`0.1.7-rc.1` refused), the open upper bound (`99.0.0` admitted), that the
+  are evidence in README/CHANGELOG, never a gate. The build-and-test cohort moved
+  to 0.2.1-rc.5 on 2026-10-30; the 11-entry client seed table is unchanged, and
+  the published 0.9.3 artifact was re-verified on rc.4/rc.5 (canary) and on a
+  live Desktop rc.5 host (desktop-shape probe 11 / 0). `pnpm smoke` asserts the
+  floor (`0.1.7-rc.1` refused), the open upper bound (`99.0.0` admitted), that the
   installed build target satisfies the range, that `engines.dsh` and the peer
   range agree across the release history, and that every `@deepseek-ai/dsh-*`
   devDependency is one exact cohort; `tests/manifest.spec.ts` pins the
@@ -103,7 +106,7 @@ daily token usage.
   `scripts/live-dsh-check.sh`; it opens an issue on failure. Fixes ship in the
   next release; users are not blocked in the meantime.
 - dsh Desktop is an Electron shell around the same Web half. It pins the shell
-  and `@deepseek-ai/dsh` to one version (0.2.1-rc.3 as of 2026-10-23), owns
+  and `@deepseek-ai/dsh` to one version (0.2.1-rc.5 as of 2026-10-29), owns
   `$DSH_HOME/profiles/desktop`, and only the `dsh` command shipped with Desktop
   may manage that profile. Since 0.2.1-alpha.1 Desktop asks the OS for its port
   instead of defaulting to a fixed one, so nothing here may hardcode a port or a

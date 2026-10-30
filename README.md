@@ -113,7 +113,7 @@ The `custom_plugin_status` tool reports appearance config, today's per-model usa
 
 | plugin release | dsh it was built and verified against | status |
 | --- | --- | --- |
-| 0.9.x | any dsh at or above 0.1.7-rc.2 (open-ended; verified on 0.1.7-rc.2, 0.2.0-rc.2, 0.2.1-rc.2 and 0.2.1-rc.3) | this release |
+| 0.9.x | any dsh at or above 0.1.7-rc.2 (open-ended; verified on 0.1.7-rc.2, 0.2.0-rc.2, 0.2.1-rc.2, 0.2.1-rc.3, 0.2.1-rc.4 and 0.2.1-rc.5) | this release |
 | 0.8.x | dsh 0.1.7-rc.2, dsh 0.2.0-rc.2 and dsh 0.2.1-rc.2 (measured window) | previous; refused on dsh 0.2.1-rc.3 and later |
 | 0.7.x | dsh 0.1.7-rc.2 and dsh 0.2.0-rc.2 | previous; refused on dsh 0.2.1-rc.2 |
 | 0.6.x | dsh 0.1.7-rc.2 and dsh 0.2.0-rc.2 | previous; refused on dsh 0.2.1-rc.2 |
@@ -140,7 +140,7 @@ cross-session actions report their service as missing rather than throwing.
 
 ## Install
 
-Prerequisites: Node 22+, pnpm, and the `dsh` CLI (the official `@deepseek-ai/dsh` npm package; `npx @deepseek-ai/dsh` stands in for `dsh` when it is not installed globally). This release admits **every dsh release at or above 0.1.7-rc.2**: `engines.dsh` and the `@deepseek-ai/dsh-tools` peer are both an open lower bound, so dsh 0.2.1-alpha.4 and later (which read `engines.dsh` first) and older hosts (which read the peers) agree that no newer release is refused. 0.9.0 was built and tested on 0.2.1-rc.3. Its artifact was installed with Desktop's own CLI into an isolated 0.2.1-rc.3 profile **with no compatibility exemption**, then booted for real: a 71-row boot graph, all five `dsh.client.inject` targets, the client bundle served at 200,371 bytes, the local Mermaid engine (3,572,661 bytes), the state / usage / backup routes, a UTF-8 round trip and the desktop-forward trust shape all passed (16 live probes pass, 1 skip; the skip is timeline/export/search on a profile with no session, covered by unit tests). 0.8.0 ran the same probes on 0.2.1-rc.2 (70 rows); 0.6.0 ran them on 0.2.0-rc.2 (66 rows) and 0.1.7-rc.2 (65 rows), 18 of 19 each; 0.7.0 additionally passed the desktop-shape probe **on a real Desktop install** (see "On dsh Desktop" below). What stays unverified is what was always unverified: the per-turn chips (Mermaid render, LaTeX) need a real model reply, so a credential-free scratch home cannot reach them, and slot rendering still needs a browser pass. The host gate cannot distinguish "verified" from "unverified", so an explicit upper bound would refuse users on every dsh release until this package published again; the open range plus the scheduled canary replace that waiting with automatic detection. If a host below the floor is ever needed, install the matching older plugin release (`0.5.0` targets 0.1.7-rc.2).
+Prerequisites: Node 22+, pnpm, and the `dsh` CLI (the official `@deepseek-ai/dsh` npm package; `npx @deepseek-ai/dsh` stands in for `dsh` when it is not installed globally). This release admits **every dsh release at or above 0.1.7-rc.2**: `engines.dsh` and the `@deepseek-ai/dsh-tools` peer are both an open lower bound, so dsh 0.2.1-alpha.4 and later (which read `engines.dsh` first) and older hosts (which read the peers) agree that no newer release is refused. 0.9.0 was built and tested on 0.2.1-rc.3. Its artifact was installed with Desktop's own CLI into an isolated 0.2.1-rc.3 profile **with no compatibility exemption**, then booted for real: a 71-row boot graph, all five `dsh.client.inject` targets, the client bundle served at 200,371 bytes, the local Mermaid engine (3,572,661 bytes), the state / usage / backup routes, a UTF-8 round trip and the desktop-forward trust shape all passed (16 live probes pass, 1 skip; the skip is timeline/export/search on a profile with no session, covered by unit tests). On 2026-10-30 the build-and-test cohort moved to 0.2.1-rc.5 (the 11-entry client seed table is unchanged), and the published 0.9.3 artifact was re-verified there: 71 boot rows, all five inject targets, 208,217 bytes served, 16 live probes pass and 1 skips, plus a live Desktop 0.2.1-rc.5 host passing the desktop-shape probe 11 / 0. 0.8.0 ran the same probes on 0.2.1-rc.2 (70 rows); 0.6.0 ran them on 0.2.0-rc.2 (66 rows) and 0.1.7-rc.2 (65 rows), 18 of 19 each; 0.7.0 additionally passed the desktop-shape probe **on a real Desktop install** (see "On dsh Desktop" below). What stays unverified is what was always unverified: the per-turn chips (Mermaid render, LaTeX) need a real model reply, so a credential-free scratch home cannot reach them, and slot rendering still needs a browser pass. The host gate cannot distinguish "verified" from "unverified", so an explicit upper bound would refuse users on every dsh release until this package published again; the open range plus the scheduled canary replace that waiting with automatic detection. If a host below the floor is ever needed, install the matching older plugin release (`0.5.0` targets 0.1.7-rc.2).
 
 ### From npm
 
@@ -154,16 +154,18 @@ The registry tarball ships prebuilt output — no source build on the installing
 ### On dsh Desktop
 
 dsh Desktop is an Electron shell around the same Web application, and it bundles
-**exactly dsh 0.2.1-rc.3** as of 2026-10-23 — the desktop release line pins the
+**exactly dsh 0.2.1-rc.5** as of 2026-10-29 — the desktop release line pins the
 shell and the runtime together, so a Desktop install is always one exact 0.2.x
-runtime. 0.9.0's open range admits rc.3 and every later Desktop build, with no
+runtime. 0.9.0's open range admits rc.5 and every later Desktop build, with no
 compatibility exemption; 0.8.0 and earlier used a measured window and are refused
-on rc.3 by the same gate a 0.2.x Web profile prints.
+on rc.5 by the same gate a 0.2.x Web profile prints.
 
-Measured against 0.2.1-rc.3: the boot graph carries our row and all five inject
-targets (71 module rows), our client bundle is served at 200,371 bytes, the
-Mermaid engine loads locally, and the live host probes pass 16 / skip 1 (the
-session-path skip needs a real session). The access fence shares the platform
+Measured against 0.2.1-rc.5 with the published 0.9.3 artifact: the boot graph
+carries our row and all five inject targets (71 module rows), our client bundle
+is served at 208,217 bytes, the Mermaid engine loads locally, and the live host
+probes pass 16 / skip 1 (the session-path skip needs a real session). On a
+running Desktop 0.2.1-rc.5 host the desktop-shape probe passed 11 / 0 (one
+session-dependent chain skipped). The access fence shares the platform
 fence's trust semantics: a loopback socket naming a loopback Host, a
 non-`cross-site` marker, and an Origin that is absent or matches the Host
 authority. The shell forwards renderer requests to its own Host after deleting
@@ -175,7 +177,8 @@ cross-site requests are still 403. **The 0.7.0 artifact was probed route by
 route on a real Desktop install in the desktop forward shape** (state / debug /
 backup / usage scan / the Mermaid engine preload and script routes all 200;
 foreign-origin and cross-site probes still 403), 0.8.0 repeated the same shape
-against a booted 0.2.1-rc.2 host, and 0.9.0 repeats it on rc.3. The visual pass inside the Desktop
+against a booted 0.2.1-rc.2 host, 0.9.0 repeated it on rc.3, and 0.9.3 repeated
+it on a live rc.5 Desktop host (11 / 0). The visual pass inside the Desktop
 window (liquid glass look, panel layout, pattern removal) belongs to whoever
 installs it.
 

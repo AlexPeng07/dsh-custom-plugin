@@ -40,7 +40,7 @@ describe('manifest compatibility range', () => {
   })
 
   it('admits every release line this package was built and verified against', () => {
-    for (const version of ['0.1.7-rc.2', '0.2.0-rc.2', '0.2.1-rc.2', '0.2.1-rc.3']) {
+    for (const version of ['0.1.7-rc.2', '0.2.0-rc.2', '0.2.1-rc.2', '0.2.1-rc.3', '0.2.1-rc.5']) {
       expect(semver.satisfies(version, declared, gate), version).toBe(true)
     }
   })

@@ -265,7 +265,7 @@ for (const [name, range] of dshPeers) {
     const probe = [
       '0.1.6', '0.1.7-rc.1', '0.1.7-rc.2', '0.1.8', '0.1.9',
       '0.2.0-rc.1', '0.2.0-rc.2', '0.2.0-rc.3', '0.2.0',
-      '0.2.1-alpha.3', '0.2.1-alpha.5', '0.2.1-rc.1', '0.2.1-rc.2', '0.2.1-rc.3', '0.2.1',
+      '0.2.1-alpha.3', '0.2.1-alpha.5', '0.2.1-rc.1', '0.2.1-rc.2', '0.2.1-rc.3', '0.2.1-rc.4', '0.2.1-rc.5', '0.2.1',
       '0.2.2-alpha.1', '0.2.2', '0.3.0', '1.0.0', '99.0.0',
     ]
     const diverging = probe.filter(v => semver.satisfies(v, declared, gateOpts) !== semver.satisfies(v, peer, gateOpts))

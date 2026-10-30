@@ -15,7 +15,7 @@ import type { UserConfig } from 'tsdown'
 /** Plugin id (package name), stamped into the __ModuleLoader__.load handoff. */
 const ID = '@alexpeng/dsh-custom-plugin'
 
-/** Browser platform modules the loader module table answers (mirrors the 0.2.1 shell seed table). */
+/** Browser platform modules the loader module table answers (0.2.1 shell seed table; identical on rc.5). */
 const PLATFORM_MODULES = [
   'react',
   'react/jsx-runtime',

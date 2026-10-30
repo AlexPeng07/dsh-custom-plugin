@@ -4,6 +4,32 @@ All notable changes to this project are documented here. The format loosely
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions
 follow [Semantic Versioning](https://semver.org/).
 
+## Unreleased — 2026-10-30
+
+### Changed
+
+- **构建与测试队列切到 dsh 0.2.1-rc.5**：九个 `@deepseek-ai/dsh-*` devDependencies
+  从 0.2.1-rc.3 升到 0.2.1-rc.5；`pnpm-workspace.yaml` 为同日发布的 35 个
+  `@deepseek-ai/dsh-*@0.2.1-rc.5` 包补 `minimumReleaseAgeExclude`（未删旧条目），
+  锁文件只做同名包版本替换。类型检查、214 单测、build、smoke 全绿；构建产物与
+  已发布的 0.9.3 逐字节一致（`lib/client.js` sha256 `984e1b6c…`、
+  `lib/index.js` `88dc8166…`），因此没有重发 0.9.3。
+- **rc.5 事实同步**：README 双语兼容表与桌面段、AGENTS 的桌面钉版事实更新到
+  0.2.1-rc.5；`tests/manifest.spec.ts` 与 `scripts/smoke.mjs` 的版本探测点补
+  rc.4/rc.5；`tsdown.config.ts` 注明 11 项 seed 表在 rc.5 上未变。
+
+### Verified
+
+- 已发布 0.9.3 在隔离 dsh 0.2.1-rc.5 profile 中安装并冷启动：boot 图 71 行、
+  五个 `dsh.client.inject` 目标齐全、客户端 bundle 服务 208,217 字节、Mermaid
+  本地引擎 3,572,661 字节；活体探针 16 通过 / 1 跳过（无会话）。
+- 真实桌面版 0.2.1-rc.5（运行中的 Host）桌面形态探针 11 通过 / 0 失败；1 项
+  会话相关链路因尚无宿主注册会话跳过。探针前后状态文件逐字段一致。
+- 平台 seed 表 11 项与 `PLATFORM_MODULES` 完全一致（从 Desktop asar 的
+  `dsh-web-frontend` bundle 读取）。
+- `pnpm check:readme`、`pnpm typecheck`、`pnpm test`（214）、`pnpm build`、
+  `pnpm smoke` 全绿。
+
 ## 0.9.3 — 2026-10-26
 
 ### Changed
