@@ -27,7 +27,7 @@ jobs:
         run: node scripts/smoke.mjs --static-only
       - name: Setup Chromium for the registration handshake
         id: chrome
-        uses: browser-actions/setup-chrome@v1
+        uses: browser-actions/setup-chrome@v2
         with:
           chrome-version: stable
       - name: Registration handshake (headless Chromium)
