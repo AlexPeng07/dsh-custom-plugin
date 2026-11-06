@@ -2899,7 +2899,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       d.addEventListener('keydown', onKey)
       return () => d.removeEventListener('keydown', onKey)
     }, [])
-    React.useEffect(() => { if (booted) applyAppearance() }, [booted, cfg.bg, cfg.glass, cfg.glassMode, cfg.globalGlass, dark])
+    React.useEffect(() => { if (booted) applyAppearance() }, [booted, cfg.bg, cfg.bgFx, cfg.glass, cfg.glassMode, cfg.globalGlass, dark])
     React.useEffect(() => {
       syncAntiScroll(cfg.antiScroll === true)
       // Unmount/disable must restore scroll-behavior on every element this
