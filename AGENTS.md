@@ -51,12 +51,34 @@ daily token usage.
     references, never a deep clone of the 90-day usage ledger.
 - The client's uninstall disposer must revert every page-global side effect
   (theme token overrides, `<html>` root classes, the liquid-glass SVG filter,
-  anti-scroll's `scroll-behavior`/`data-vx-anti` attributes, in-place Mermaid
+  the `vx-bg` background layer, anti-scroll's
+  `scroll-behavior`/`data-vx-anti` attributes, in-place Mermaid
   wrappers, pending balance/load-retry/greeting timers); a new global effect
   added to the appearance painter or the chat-DOM scanner needs a matching
   line in the disposer at the bottom of `src/client/custom.tsx`. `saveCfg`
   refuses to POST until a state read has succeeded (`cfgLoaded`) — unloaded
   factory defaults must never reach the host.
+- The page-background layer (`div#vx-bg`) is appended to `<body>`, never
+  inside `.vx-root`: the overlay slot's ancestor is the shell's
+  `.pI_x6G_overlayLayer` (`position:absolute; z-index:20`), so `.vx-root`'s
+  2147483000 only orders plugin surfaces locally and native dialogs at body-level
+  `z-index:1000` paint above the weather FX (measured live on 0.2.1-rc.5). The
+  layer is `position:fixed; inset:0; z-index:-1; pointer-events:none;
+  aria-hidden="true"`. `<html>` is transparent while `body` carries the opaque
+  canvas fill, so a negative z-index child paints above the body fill and below
+  every content surface. Those surfaces are 0.5–0.62 alpha only with glass on,
+  so with `glass:false` the layer is fully covered — by design, not a bug.
+  `applyAppearance` creates/updates it through `src/client/bg-layer.ts`
+  (`decideBgLayer` / `mountBgLayer`), and the disposer removes it with
+  `unmountBgLayer` because slot unmount can run after the disposer. Config is
+  the flat boolean `bgFx` (default `false`; nested values are silently dropped
+  by `normalizeCfg`, old archives fall back to the default, no migration).
+  Gates: no WebGL → don't mount (the body tint stays the fallback);
+  `prefers-reduced-motion` → `data-vx-bg-motion="static"`; hidden → `"paused"`;
+  theme palettes flow in through `--vx-bg-tint` (`bgLayerTint` uses
+  `toDarkRamp`). Phase 1 ships no canvas, no rAF and no third-party GL library;
+  the renderer step must honour that motion attribute and pause on
+  `visibilitychange`.
 - The client store fan-out stays a single listener set; per-turn hot paths
   (`TurnTailEntry`) and the FX canvas subscribe through `useSSelector` so an
   unrelated balance/toast write does not re-render every turn-tail row.

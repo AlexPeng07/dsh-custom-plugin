@@ -20,6 +20,9 @@ export interface CustomPluginConfig {
   /** Background preset: 'default' (no color) or one of the 20 palette names.
    * The removed 'aurora' value migrates to 'default' on load. */
   bg?: string
+  /** Animated page-background layer below the content surfaces. Off by
+   * default; flat on purpose because `normalizeCfg` drops nested values. */
+  bgFx?: boolean
   /** Weather overlay: 'none' | 'snow' | 'rain' | 'sakura'. */
   weather?: string
   /** Master glass toggle for the plugin's own surfaces. */
@@ -45,6 +48,7 @@ export interface CustomPluginConfig {
 /** Default configuration (also the composition-layer default). */
 export const DEFAULT_CONFIG: CustomPluginConfig = {
   bg: '天青灰',
+  bgFx: false,
   weather: 'none',
   glass: true,
   glassMode: 'frost',

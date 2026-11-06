@@ -4,7 +4,16 @@ All notable changes to this project are documented here. The format loosely
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions
 follow [Semantic Versioning](https://semver.org/).
 
-## Unreleased — 2026-10-30
+## Unreleased — 2026-11-06
+
+### Added
+
+- **背景动效骨架（默认关闭）**：新增扁平配置 `bgFx`（默认 `false`；旧存档缺字段
+  即关闭，非布尔值被形状门丢弃），以及 `src/client/bg-layer.ts` 的决策门
+  （关闭 / 无 WebGL / `animated` / `static` / `paused`）、幂等挂载/卸载与主题取色。
+  层是 `<body>` 下的 `div#vx-bg`（`position:fixed; z-index:-1; pointer-events:none;
+  aria-hidden`），由 `applyAppearance` 同步、插件 disposer 移除；骨架不含 canvas、
+  rAF 或第三方库，开启也不改变任何可见像素。
 
 ### Changed
 

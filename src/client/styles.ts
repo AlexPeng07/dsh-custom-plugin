@@ -17,6 +17,18 @@ export const STATIC_CSS = `/* dsh-custom-plugin static styles. Every rule is glo
     z-index: 2147483000;
     font-family: ui-sans-serif, system-ui, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
   }
+  /* Page background layer. It is appended to <body>, never inside .vx-root:
+     the overlay slot is nested in the shell's z-index:20 layer, where a
+     negative z-index would still sit above the content it must stay behind.
+     Transparent by default — the renderer paints it later; the negative
+     z-index only places it under the in-flow content surfaces. */
+  .vx-bg {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    background: transparent;
+    z-index: -1;
+  }
   .vx-fx {
     position: absolute;
     inset: 0;

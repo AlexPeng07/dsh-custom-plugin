@@ -18,6 +18,7 @@ import { DEFAULT_CONFIG, type ConversationSearchItem, type ConversationSearchKin
 import { createUsageRow, dayKey, mergeUsageRow } from '../usage.ts'
 import { DEEPSEEK_PRICING_CHECKED_ON, DEEPSEEK_PRICING_SOURCE_URL, estimateUsageCostCny, usageCostBreakdown } from '../pricing.ts'
 import { DARK_CANVAS_LIGHTNESS, hexToRgb, PALETTE, toDarkRamp } from './palette.ts'
+import { bgLayerTint, decideBgLayer, mountBgLayer, unmountBgLayer, type BgLayerCaps, type BgLayerDocLike } from './bg-layer.ts'
 import {
   apiBalanceGet,
   apiBackupExport,
@@ -600,6 +601,47 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       dyn += ` [role='dialog'], [role='menu'], [role='tooltip'], [role='listbox'], [data-radix-popper-content-wrapper] { backdrop-filter: ${filter} !important; -webkit-backdrop-filter: ${filter} !important; }`
     }
     setDynCss(dyn)
+    syncBackgroundLayer()
+  }
+
+  // The WebGL probe creates a throwaway context; cache the verdict because
+  // probing on every appearance repaint would burn the browser's live-context
+  // budget for no gain, and a failed probe is final for the page lifetime.
+  let bgFxWebgl: boolean | null = null
+  function bgFxCaps(): BgLayerCaps {
+    const w = typeof window !== 'undefined' ? window : null
+    const d = typeof document !== 'undefined' ? document : null
+    if (bgFxWebgl === null) {
+      try {
+        const probe = d !== null ? d.createElement('canvas') : null
+        const gl = probe !== null ? (probe.getContext('webgl2') ?? probe.getContext('webgl')) : null
+        bgFxWebgl = gl !== null
+      } catch {
+        bgFxWebgl = false
+      }
+    }
+    const reducedMotion = w !== null && typeof w.matchMedia === 'function'
+      && w.matchMedia('(prefers-reduced-motion: reduce)').matches
+    return { webgl: bgFxWebgl === true, reducedMotion, hidden: d !== null && d.hidden === true }
+  }
+
+  /**
+   * Keep the decorative page-background layer in step with the config, the
+   * theme and the degradation gates. Off by default: an untouched install
+   * never creates the node, so the feature ships inert. The layer is appended
+   * to <body>, never inside `.vx-root` — the overlay slot's ancestor is the
+   * shell's z-index:20 layer, so a negative z-index there would still paint
+   * above the content it has to stay behind.
+   */
+  function syncBackgroundLayer(): void {
+    const d = typeof document !== 'undefined' ? document : null
+    if (d === null) return
+    const verdict = decideBgLayer(S.cfg.bgFx === true, bgFxCaps())
+    if (!verdict.mount) {
+      unmountBgLayer(d as unknown as BgLayerDocLike)
+      return
+    }
+    mountBgLayer(d as unknown as BgLayerDocLike, verdict, bgLayerTint(S.cfg.bg, S.dark === true))
   }
 
   function syncAntiScroll(on: boolean): void {
@@ -3062,6 +3104,10 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
         try { d.documentElement.classList.remove(cls) } catch { /* classList unavailable */ }
       }
       try { d.getElementById('vx-lg-filter')?.remove() } catch { /* node already gone */ }
+      // The background layer is a page-global node created by the appearance
+      // painter, not by a slot surface: the host can unmount slot entries
+      // after this disposer, so React effect cleanup may never run for it.
+      try { unmountBgLayer(d as unknown as BgLayerDocLike) } catch { /* node already gone */ }
     }
     removeDynCss()
   }

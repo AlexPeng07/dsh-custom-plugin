@@ -58,6 +58,15 @@ describe('normalizeCfg', () => {
     expect(normalizeCfg({ monthlyBudgetCny: -1, budgetWarningPercent: 0 }).budgetWarningPercent).toBe(1)
     expect(normalizeCfg({ monthlyBudgetCny: -1, budgetWarningPercent: 101 })).toMatchObject({ monthlyBudgetCny: 0, budgetWarningPercent: 100 })
   })
+
+  it('defaults the background layer off and rejects non-boolean values', () => {
+    // Old archives have no bgFx key: the layer must stay inert.
+    expect(normalizeCfg({}).bgFx).toBe(false)
+    expect(normalizeCfg({ bgFx: true }).bgFx).toBe(true)
+    // The flat cfg gate drops nested shapes silently; a string is not a switch.
+    expect(normalizeCfg({ bgFx: 'yes' }).bgFx).toBe(false)
+    expect(normalizeCfg({ bgFx: { preset: 'aurora' } }).bgFx).toBe(false)
+  })
 })
 
 describe('mergeState', () => {
