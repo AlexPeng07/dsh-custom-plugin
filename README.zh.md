@@ -13,7 +13,7 @@
 
 [English](README.md) | 中文
 
-DeepSeek Harness（DSH）Web GUI 的 Custom 便利套件：个性化外观、天气特效、玻璃效果、项目文件夹、增强提示词库、会话导出与会话搜索、Mermaid 渲染、引用回复、7/30/90 天用量分析、预算与无密钥本地备份，以及 Ctrl/Cmd+K 快捷面板。
+DeepSeek Harness（DSH）Web GUI 的 Custom 便利套件：个性化外观、天气特效、背景动效、玻璃效果、项目文件夹、增强提示词库、会话导出与会话搜索、Mermaid 渲染、引用回复、7/30/90 天用量分析、预算与无密钥本地备份，以及 Ctrl/Cmd+K 快捷面板。
 
 插件为双半区架构：宿主半区（`src/`）持有状态文档、注册 `/api/custom-plugin` 路由与 `custom_plugin_status` 智能体工具；浏览器半区（`src/client/`）通过 7 个官方 slot 的 8 处注入挂载 UI，以同源 fetch 与宿主通信。经官方 profile 机制挂载，不改 DSH 源码。
 
@@ -54,6 +54,9 @@ DeepSeek Harness（DSH）Web GUI 的 Custom 便利套件：个性化外观、天
 - **背景颜色**：20 组低饱和典雅色（每组合配 tab 栏色，默认「天青灰」），另有「无颜色」（跟随 GUI 默认主题）。深浅色模式均可选用；深色模式自动派生同色系的深色变体（保留色相与低饱和，落到深色明度档），色板预览即当前模式的实际效果。
 - **天气特效**：画布渲染、不挡交互，一键切换——飘雪、电影感雨滴（三层景深 + 地面溅起）、樱花飘落；关闭时自动清空画布。
 - **玻璃效果**：所有 Custom 面板默认毛玻璃；可切换液态玻璃（边缘位移折射 + 轻微模糊提饱和，大面积面板中部文字仍清晰；不支持 SVG 位移滤镜的引擎自动回退毛玻璃）。「全局浮层玻璃」对弹窗、菜单、提示框、下拉框与系统设置窗统一加玻璃质感，液态模式下浮层同样位移折射。
+- **背景动效**：内容层下方的整页动态背景，两套互斥档位——字符档（`flow` / `rain` / `ocean` / `starfield` / `ripple`，以及零动画的 `static`）与 WebGL 档（每套风格一张全屏着色器：`liquid` / `grain`；页面没有 WebGL 时回退字符档并提示）。面板里切换档位与预设，可调密度、速度、帧率、字号与浓度（WebGL 档为强度，字号/浓度不适用），并可「恢复默认」；滑块值一律 clamp 到当前预设声明的范围。**只有开启玻璃时才看得到**：玻璃关闭时内容面板不透明、会把背景完全盖住，面板会直接说明这一点，而不是让人误以为没有生效。
+
+<img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/background-motion-panel.png" alt="背景动效面板（字符档）" width="360">
 
 ### 项目文件夹
 
@@ -214,6 +217,9 @@ dsh plugin --profile web add link:F:/dsh-plugin-dev
 | 配置项 | 默认值 | 说明 |
 |---|---|---|
 | `bg` | `天青灰` | `default`（无颜色）/ 20 组调色板名之一（深浅色通用；旧存档的 `aurora` 自动迁移为 `default`） |
+| `bgFx` | `none` | `none` / `ascii` / `shader`；WebGL 档在无 WebGL 的页面回退字符档 |
+| `bgFxPreset` | `flow` | 当前档位的预设：字符档 `flow`/`rain`/`ocean`/`starfield`/`ripple`/`static`，WebGL 档 `liquid`/`grain`；另一档的 id 会重置为该档默认值 |
+| `bgDensity`、`bgSpeed`、`bgFps`、`bgFontPx`、`bgOpacity`、`bgIntensity` | `-1` | 面板覆盖值；`-1` 表示跟随预设，其余值一律 clamp 到当前预设声明的范围（字符档用五项，WebGL 档用密度/速度/帧率/强度） |
 | `weather` | `none` | `none` / `snow` / `rain` / `sakura` |
 | `glass` | `true` | Custom 面板玻璃总开关 |
 | `glassMode` | `frost` | `frost` 毛玻璃 / `liquid` 液态玻璃 |

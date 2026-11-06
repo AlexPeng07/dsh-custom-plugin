@@ -14,13 +14,31 @@ import * as React from 'react'
 import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ThemeRuntime } from '@deepseek-ai/dsh-client-ui-theme/client'
 import type { Context } from '@deepseek-ai/cordis'
-import { DEFAULT_CONFIG, type ConversationSearchItem, type ConversationSearchKind, type CredentialStorage, type CustomPluginConfig, type FolderNode, type PromptItem, type TimelineItem, type UsageRow } from '../protocol.ts'
+import { DEFAULT_CONFIG, type BgFxPreset, type ConversationSearchItem, type ConversationSearchKind, type CredentialStorage, type CustomPluginConfig, type FolderNode, type PromptItem, type TimelineItem, type UsageRow } from '../protocol.ts'
 import { createUsageRow, dayKey, mergeUsageRow } from '../usage.ts'
 import { DEEPSEEK_PRICING_CHECKED_ON, DEEPSEEK_PRICING_SOURCE_URL, estimateUsageCostCny, usageCostBreakdown } from '../pricing.ts'
 import { DARK_CANVAS_LIGHTNESS, hexToRgb, PALETTE, toDarkRamp } from './palette.ts'
 import { bgLayerTint, decideBgFxLayer, mountBgLayer, swapBgRenderer, unmountBgLayer, type BgFxCaps, type BgFxVerdict, type BgLayerDocLike } from './bg-layer.ts'
 import { createAsciiBackdrop, resolveAsciiPreset, type AsciiBackdrop, type AsciiDocLike, type AsciiWinLike } from './bg-ascii.ts'
 import { createShaderBackdrop, resolveShaderStyle, type ShaderBackdrop, type ShaderDocLike, type ShaderHostLike, type ShaderWinLike } from './bg-shader.ts'
+import {
+  BG_PARAM_META,
+  BG_PARAM_SAVE_MS,
+  asciiParamsFromCfg,
+  createDebouncedSaver,
+  effectiveParam,
+  panelParamKeys,
+  paramRange,
+  presetForTier,
+  resetBgParams,
+  selectAppearanceSlice,
+  setParamInCfg,
+  shaderParamsFromCfg,
+  tierFromCfg,
+  tierPresets,
+  type BgParamKey,
+  type BgTier,
+} from './bg-params.ts'
 import {
   apiBalanceGet,
   apiBackupExport,
@@ -692,11 +710,13 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     bgRenderer = null
   }
   function createAscii(host: Parameters<typeof createAsciiBackdrop>[0]['host']): AsciiBackdrop {
+    const preset = resolveAsciiPreset(S.cfg.bgFxPreset)
     return createAsciiBackdrop({
       doc: (typeof document !== 'undefined' ? document : null) as unknown as AsciiDocLike,
       win: (typeof window !== 'undefined' ? window : null) as unknown as AsciiWinLike,
       host,
-      preset: resolveAsciiPreset(S.cfg.bgFxPreset),
+      preset,
+      params: asciiParamsFromCfg(S.cfg, preset),
     })
   }
   // The context-loss callback runs after this renderer is dead; repaint from
@@ -729,6 +749,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     if (verdict.tier === 'shader') {
       if (bgRenderer !== null && bgRenderer.kind === 'shader') {
         if (bgRenderer.handle.setStyle(style)) {
+          bgRenderer.handle.setParams(shaderParamsFromCfg(S.cfg, style))
           bgRenderer.handle.sync()
           return
         }
@@ -744,6 +765,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
             win: w as unknown as ShaderWinLike,
             host: host as unknown as ShaderHostLike,
             style,
+            params: shaderParamsFromCfg(S.cfg, style),
             onFallback: onShaderFallback,
           }))
         if (handle !== null && handle !== previous) {
@@ -774,6 +796,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
 
     if (bgRenderer !== null && bgRenderer.kind === 'ascii') {
       bgRenderer.handle.setPreset(preset)
+      bgRenderer.handle.setParams(asciiParamsFromCfg(S.cfg, preset))
       bgRenderer.handle.sync()
       return
     }
@@ -925,6 +948,11 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       toast('设置保存失败：' + message, 'error')
     })
   }
+
+  /** Slider writes land in the store immediately (the painter reads it) but
+   * reach the host once, after the drag pauses. Discrete picks call `saveCfg`
+   * directly, so a tier/preset switch is never left pending. */
+  const bgSaveDebounced = createDebouncedSaver(() => { saveCfg() }, BG_PARAM_SAVE_MS)
 
   // ================= weather FX =================
   interface FxParticle {
@@ -2033,19 +2061,52 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       },
     }, btns.length > 0 ? React.createElement('span', { className: 'vx-turn-actions' }, btns) : null)
   }
+  const PRESET_LABELS: Record<string, string> = {
+    flow: '流动', rain: '数字雨', ocean: '海面', ripple: '涟漪', starfield: '星野', static: '静态',
+    liquid: '液态墨', grain: '颗粒',
+  }
+
   function AppearanceTab(): React.ReactElement {
-    const s = useS()
-    const dark = s.dark === true
+    // Narrow subscription: this tab renders the config and the theme only. A
+    // streaming turn, a toast or a usage write must not re-render it.
+    const { cfg, dark } = useSSelector(selectAppearanceSlice, shallowEqual)
     const set = (k: keyof CustomPluginConfig, v: string | boolean): void => {
-      setS({ cfg: { ...s.cfg, [k]: v } })
+      setS({ cfg: { ...S.cfg, [k]: v } })
+      saveCfg()
+    }
+    const tier = tierFromCfg(cfg)
+    const preset = presetForTier(tier, cfg.bgFxPreset)
+    const params = panelParamKeys(tier)
+    // A discrete pick repaints through the appearance effect and saves at
+    // once; only the continuous slider drag is debounced.
+    const pickTier = (next: BgTier): void => {
+      if (next === tier) return
+      bgSaveDebounced.cancel()
+      setS({ cfg: { ...S.cfg, bgFx: next, bgFxPreset: presetForTier(next, S.cfg.bgFxPreset) } })
+      saveCfg()
+    }
+    const pickPreset = (next: BgFxPreset): void => {
+      bgSaveDebounced.cancel()
+      setS({ cfg: { ...S.cfg, bgFxPreset: next } })
+      saveCfg()
+    }
+    const moveParam = (key: BgParamKey, value: number): void => {
+      // The store write is immediate (the renderer repaints from it); only the
+      // host POST waits for the drag to pause.
+      setS({ cfg: setParamInCfg(S.cfg, tier, preset, key, value) })
+      bgSaveDebounced.push()
+    }
+    const restoreDefaults = (): void => {
+      bgSaveDebounced.cancel()
+      setS({ cfg: resetBgParams(S.cfg) })
       saveCfg()
     }
     return React.createElement('div', { className: 'vx-col' },
-      React.createElement('div', { className: 'vx-muted' }, '主题背景、天气特效与玻璃质感，选择后即时生效。'),
+      React.createElement('div', { className: 'vx-muted' }, '主题背景、天气特效、背景动效与玻璃质感，选择后即时生效。'),
       React.createElement('div', { className: 'vx-section-title' }, '背景颜色'),
       React.createElement('div', { className: 'vx-muted' }, '20 组低饱和色板，深浅色模式均可用；深色下自动使用同色系的深色变体（预览即实际效果）。'),
       React.createElement('div', { className: 'vx-swatches' },
-        React.createElement('button', { key: 'default', className: 'vx-swatch' + (s.cfg.bg === 'default' ? ' on' : ''), onClick: () => set('bg', 'default'), title: '无颜色（默认主题）' },
+        React.createElement('button', { key: 'default', className: 'vx-swatch' + (cfg.bg === 'default' ? ' on' : ''), onClick: () => set('bg', 'default'), title: '无颜色（默认主题）' },
           React.createElement('span', { className: 'vx-swatch-box', style: { background: 'repeating-conic-gradient(#ccc 0 25%, #eee 0 50%) 0 0/10px 10px' } }),
           React.createElement('span', { className: 'vx-swatch-label' }, '无颜色')),
         PALETTE.map((p) => {
@@ -2053,7 +2114,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
           // theme: the light pastel in light mode, its same-hue dark variant
           // in dark mode.
           const preview = dark ? toDarkRamp(p[1], DARK_CANVAS_LIGHTNESS) : p[1]
-          return React.createElement('button', { key: p[0], className: 'vx-swatch' + (s.cfg.bg === p[0] ? ' on' : ''), onClick: () => set('bg', p[0]), title: p[0] + ' ' + p[1] },
+          return React.createElement('button', { key: p[0], className: 'vx-swatch' + (cfg.bg === p[0] ? ' on' : ''), onClick: () => set('bg', p[0]), title: p[0] + ' ' + p[1] },
             React.createElement('span', { className: 'vx-swatch-box', style: { background: preview } }),
             React.createElement('span', { className: 'vx-swatch-label' }, p[0]))
         }),
@@ -2065,7 +2126,8 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
           const weatherNames: Record<string, string> = { none: '无', snow: '飘雪', rain: '电影感雨滴', sakura: '樱花飘落' }
           return React.createElement('button', {
             key: w,
-            className: 'vx-btn' + (s.cfg.weather === w ? ' on' : ''),
+            className: 'vx-btn' + (cfg.weather === w ? ' on' : ''),
+            'aria-pressed': cfg.weather === w,
             onClick: () => set('weather', w),
           },
           React.createElement(Icon, { n: iconNames[w], size: 12 }),
@@ -2073,12 +2135,69 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
         }),
       ),
       React.createElement('div', { className: 'vx-section-title' }, '玻璃效果'),
-      React.createElement(Toggle, { label: '启用玻璃', checked: s.cfg.glass === true, onChange: (v) => set('glass', v) }),
+      React.createElement(Toggle, { label: '启用玻璃', checked: cfg.glass === true, onChange: (v) => set('glass', v) }),
       React.createElement('div', { className: 'vx-row wrap' },
-        React.createElement('button', { className: 'vx-btn' + (s.cfg.glassMode !== 'liquid' ? ' on' : ''), onClick: () => set('glassMode', 'frost') }, '毛玻璃'),
-        React.createElement('button', { className: 'vx-btn' + (s.cfg.glassMode === 'liquid' ? ' on' : ''), onClick: () => set('glassMode', 'liquid') }, '液态玻璃'),
+        React.createElement('button', { className: 'vx-btn' + (cfg.glassMode !== 'liquid' ? ' on' : ''), 'aria-pressed': cfg.glassMode !== 'liquid', onClick: () => set('glassMode', 'frost') }, '毛玻璃'),
+        React.createElement('button', { className: 'vx-btn' + (cfg.glassMode === 'liquid' ? ' on' : ''), 'aria-pressed': cfg.glassMode === 'liquid', onClick: () => set('glassMode', 'liquid') }, '液态玻璃'),
       ),
-      React.createElement(Toggle, { label: '全局浮层玻璃', checked: s.cfg.globalGlass === true, onChange: (v) => set('globalGlass', v), hint: '对弹窗/菜单等浮层应用玻璃质感；液态玻璃模式下浮层同样位移折射' }),
+      React.createElement(Toggle, { label: '全局浮层玻璃', checked: cfg.globalGlass === true, onChange: (v) => set('globalGlass', v), hint: '对弹窗/菜单等浮层应用玻璃质感；液态玻璃模式下浮层同样位移折射' }),
+      React.createElement('div', { className: 'vx-section-title' }, '背景动效'),
+      React.createElement('div', { className: 'vx-muted' }, '整页的背景层：字符档用字形网格绘制，WebGL 档用一张全屏着色器。选「关闭」不会创建任何图层。'),
+      React.createElement('div', { className: 'vx-row wrap', role: 'group', 'aria-label': '背景动效档位' },
+        ([['none', '关闭'], ['ascii', '字符'], ['shader', 'WebGL']] as const).map(([id, label]) => {
+          const active = tier === id
+          return React.createElement('button', {
+            key: id,
+            className: 'vx-btn' + (active ? ' on' : ''),
+            'aria-pressed': active,
+            onClick: () => pickTier(id),
+          }, label)
+        }),
+      ),
+      tier === 'none'
+        ? React.createElement('div', { className: 'vx-muted' }, '背景动效已关闭，页面使用纯色画布。')
+        : React.createElement(React.Fragment, null,
+            React.createElement('div', { className: 'vx-row wrap', role: 'group', 'aria-label': '背景动效预设' },
+              tierPresets(tier).map((id) => {
+                const active = preset === id
+                return React.createElement('button', {
+                  key: id,
+                  className: 'vx-btn' + (active ? ' on' : ''),
+                  'aria-pressed': active,
+                  onClick: () => pickPreset(id),
+                }, PRESET_LABELS[id] ?? id)
+              }),
+            ),
+            React.createElement('div', { className: 'vx-param-list' },
+              params.map((key) => {
+                const meta = BG_PARAM_META[key]
+                const range = paramRange(tier, preset, key)
+                const value = effectiveParam(cfg, tier, preset, key)
+                return React.createElement('div', { className: 'vx-param-row', key },
+                  React.createElement('span', { className: 'vx-param-label' }, meta.label),
+                  React.createElement('input', {
+                    type: 'range',
+                    className: 'vx-range',
+                    min: range === null ? 0 : range.min,
+                    max: range === null ? 0 : range.max,
+                    step: meta.step,
+                    value,
+                    'aria-label': '背景' + meta.label,
+                    onChange: (e: React.ChangeEvent<HTMLInputElement>) => moveParam(key, Number(e.currentTarget.value)),
+                  }),
+                  React.createElement('span', { className: 'vx-param-val' }, value.toFixed(meta.decimals) + meta.unit),
+                )
+              }),
+            ),
+            React.createElement('div', { className: 'vx-row' },
+              React.createElement('button', { className: 'vx-btn', onClick: restoreDefaults }, '恢复默认')),
+            // Explain a blank result instead of silently doing nothing: the
+            // content surfaces are opaque without glass, so the layer sits
+            // fully covered. Never flip the glass toggle for the user.
+            cfg.glass !== true
+              ? React.createElement('div', { className: 'vx-note' }, '提示：玻璃效果已关闭。内容面板是不透明底色，会把背景动效完全盖住——看不到属正常现象。在上方打开「启用玻璃」后即可看到，这里不会替你自动打开。')
+              : null,
+          ),
     )
   }
 
@@ -3038,7 +3157,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       d.addEventListener('keydown', onKey)
       return () => d.removeEventListener('keydown', onKey)
     }, [])
-    React.useEffect(() => { if (booted) applyAppearance() }, [booted, cfg.bg, cfg.bgFx, cfg.bgFxPreset, cfg.glass, cfg.glassMode, cfg.globalGlass, dark])
+    React.useEffect(() => { if (booted) applyAppearance() }, [booted, cfg.bg, cfg.bgFx, cfg.bgFxPreset, cfg.bgDensity, cfg.bgSpeed, cfg.bgFps, cfg.bgFontPx, cfg.bgOpacity, cfg.bgIntensity, cfg.glass, cfg.glassMode, cfg.globalGlass, dark])
     React.useEffect(() => {
       syncAntiScroll(cfg.antiScroll === true)
       // Unmount/disable must restore scroll-behavior on every element this
@@ -3218,6 +3337,9 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       clearTimeout(greetTimer)
       greetTimer = null
     }
+    // A slider burst may still be waiting to POST when the plugin is disabled;
+    // drop it rather than writing after teardown.
+    bgSaveDebounced.cancel()
     // Slot teardown unmounts only the React surfaces; the appearance
     // painter's page-global side effects — theme token overrides, root
     // classes, the liquid-glass SVG filter, a pending balance retry — live

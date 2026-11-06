@@ -431,6 +431,41 @@ export const STATIC_CSS = `/* dsh-custom-plugin static styles. Every rule is glo
     color: rgba(120, 128, 148, .95);
     font-size: 11.5px;
   }
+  .vx-param-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 2px;
+  }
+  .vx-param-row {
+    display: grid;
+    grid-template-columns: 52px 1fr 54px;
+    gap: 8px;
+    align-items: center;
+  }
+  .vx-param-label {
+    font-size: 11.5px;
+    opacity: .9;
+  }
+  .vx-param-val {
+    font-size: 11px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    color: rgba(120, 128, 148, .95);
+  }
+  .vx-range {
+    width: 100%;
+    height: 18px;
+    margin: 0;
+    accent-color: #7fa4e0;
+  }
+  .vx-note {
+    border-left: 2px solid rgba(127, 164, 224, .7);
+    padding: 4px 0 4px 8px;
+    font-size: 11.5px;
+    line-height: 1.5;
+    color: rgba(120, 128, 148, .95);
+  }
   .vx-error {
     color: #d85858;
     font-size: 12px;

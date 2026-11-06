@@ -45,6 +45,15 @@ follow [Semantic Versioning](https://semver.org/).
   停 rAF 并冻结时间；WebGL 探测失败、编译失败或运行中上下文丢失都回退 ASCII，
   并以 toast 明示（每页一次），不会静默换成另一种画。`bgFxPreset` 仍是单个扁平
   字段，按当前档位单向收窄。
+- **背景动效面板（Phase 3c）**：`AppearanceTab` 内新增档位（关闭 / 字符 / WebGL）、
+  预设选择、参数滑块与「恢复默认」。六个扁平字段 `bgDensity` / `bgSpeed` /
+  `bgFps` / `bgFontPx` / `bgOpacity` / `bgIntensity`（`-1` 表示跟随预设），面板
+  写入前按当前预设声明的 `ranges` clamp，渲染器 `resolveAsciiSpec` /
+  `resolveShaderSpec` 再夹一次；字符档显示 5 项，WebGL 档显示 4 项（字号/浓度
+  不适用），未知预设随档位回落到该档默认值。拖动滑块即时写入存储并重绘，POST 经
+  320 ms 防抖只发一次；换档、换预设与恢复默认立即保存并取消待发请求。玻璃关闭时
+  面板明确说明背景被不透明内容层完全遮住，且不会替用户自动打开玻璃。面板只在
+  弹层/设置页打开时挂载，`AppearanceTab` 仅订阅 `cfg` 与 `dark`。
 - **固定降级阶梯（只降不升）**：L1 fps 24→15、L2 密度 ×0.75、L3 单色（ASCII 档
   已是单墨色）、L4 关抖动、L5 画一帧后停 rAF、L6 只留底色。60 帧滑窗均值超过
   `budget × 1.6` 记为坏窗，连续 2 个坏窗降一档；好窗抵消一个坏窗；切换预设回到

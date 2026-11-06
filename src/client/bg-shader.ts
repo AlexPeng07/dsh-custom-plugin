@@ -99,6 +99,34 @@ export function resolveShaderStyle(preset: string | undefined): ShaderStyle {
   return 'liquid'
 }
 
+/** Panel overrides for one shader style. Values are clamped into the style's
+ * own `ranges` before they reach a uniform. */
+export type ShaderParams = Partial<Record<'speed' | 'density' | 'intensity' | 'fps', number>>
+
+/** Clamp one override into a style range; `undefined`/non-finite means "use
+ * the style default". */
+function clampOverride(value: number | undefined, range: ShaderRange, fallback: number): number {
+  if (value === undefined || !Number.isFinite(value)) return fallback
+  return value < range.min ? range.min : value > range.max ? range.max : value
+}
+
+/**
+ * Resolve overrides against one style. Missing keys fall back to the style
+ * default, so a style switch never inherits a value it cannot honour. Returns
+ * the base spec object itself when nothing is overridden.
+ */
+export function resolveShaderSpec(style: ShaderStyle, params: ShaderParams): ShaderStyleSpec {
+  const base = SHADER_STYLES[style]
+  const speed = clampOverride(params.speed, base.ranges.speed, base.speed)
+  const density = clampOverride(params.density, base.ranges.density, base.density)
+  const intensity = clampOverride(params.intensity, base.ranges.intensity, base.intensity)
+  const fps = clampOverride(params.fps, base.ranges.fps, base.fps)
+  if (speed === base.speed && density === base.density && intensity === base.intensity && fps === base.fps) {
+    return base
+  }
+  return { ...base, speed, density, intensity, fps }
+}
+
 /** Hard bounds the uniform contract promises, independent of a style. */
 export const SHADER_UNIFORM_RANGES = {
   speed: { min: 0, max: 2 },
@@ -408,6 +436,8 @@ export interface ShaderBackdropOptions {
   win: ShaderWinLike
   host: ShaderHostLike
   style?: ShaderStyle
+  /** Panel overrides for the boot style; clamps to its `ranges`. */
+  params?: ShaderParams
   /** Called once when the GPU drops this context. The caller falls back to
    * ASCII; this renderer never tries to recover on its own. */
   onFallback?: (reason: 'context-lost') => void
@@ -419,6 +449,10 @@ export interface ShaderBackdrop {
   /** Rebuild the program for another style. False means compile failed and
    * the previous style is still live, so the caller can fall back. */
   setStyle(style: ShaderStyle): boolean
+  /** Replace the panel overrides for the current style. Values are clamped
+   * into that style's `ranges`; a style switch keeps the overrides and
+   * re-clamps them. Repaints immediately so a dragging slider is visible. */
+  setParams(params: ShaderParams): void
   destroy(): void
   readonly stats: ShaderBackdropStats
 }
@@ -528,6 +562,8 @@ export function createShaderBackdrop(options: ShaderBackdropOptions): ShaderBack
     return null
   }
   let style = resolveShaderStyle(options.style)
+  let params: ShaderParams = normalizeParams(options.params)
+  let current: ShaderStyleSpec = resolveShaderSpec(style, params)
   // Non-null alias: TypeScript cannot keep the outer narrowing inside the
   // function declarations that close over it.
   const gpu: ShaderGL = gl
@@ -563,13 +599,27 @@ export function createShaderBackdrop(options: ShaderBackdropOptions): ShaderBack
   let layoutDone = false
   let surface = FALLBACK_SURFACE
   let densityScale = 1
-  let targetFps = SHADER_STYLES[style].fps
+  let targetFps = current.fps
   let resizeTimer: ReturnType<typeof setTimeout> | null = null
   let resizeObserver: ShaderResizeObserverLike | null = null
   let dprMql: ShaderMediaQueryLike | null = null
 
   function spec(): ShaderStyleSpec {
-    return SHADER_STYLES[style]
+    return current
+  }
+
+  function normalizeParams(next: ShaderParams | undefined): ShaderParams {
+    const out: ShaderParams = {}
+    if (next === undefined) return out
+    for (const key of ['speed', 'density', 'intensity', 'fps'] as const) {
+      const value = next[key]
+      if (typeof value === 'number' && Number.isFinite(value)) out[key] = value
+    }
+    return out
+  }
+
+  function paramsEqual(a: ShaderParams, b: ShaderParams): boolean {
+    return a.speed === b.speed && a.density === b.density && a.intensity === b.intensity && a.fps === b.fps
   }
 
   function resetLadder(): void {
@@ -783,6 +833,8 @@ export function createShaderBackdrop(options: ShaderBackdropOptions): ShaderBack
     built = candidate
     style = target
     stats.style = style
+    // Overrides travel with the style switch and re-clamp to its own ranges.
+    current = resolveShaderSpec(style, params)
     resetLadder()
     layout()
     if (!layoutDone) return true
@@ -799,6 +851,31 @@ export function createShaderBackdrop(options: ShaderBackdropOptions): ShaderBack
     drawFrame(acc / 1000)
     if (!running) startLoop()
     return true
+  }
+
+  function setParams(next: ShaderParams): void {
+    if (destroyed || lost) return
+    const normalized = normalizeParams(next)
+    if (paramsEqual(normalized, params)) return
+    params = normalized
+    current = resolveShaderSpec(style, params)
+    resetLadder()
+    if (!layoutDone) layout()
+    if (!layoutDone) return
+    const motion = computeMotion()
+    if (motion === 'paused') {
+      stopLoop()
+      return
+    }
+    // speed/intensity/density are uniforms, so one immediate draw shows the
+    // new value; a static style and the reduced-motion path paint one frame.
+    if (motion === 'static' || !spec().animated || level >= 5) {
+      stopLoop()
+      drawOnce()
+      return
+    }
+    drawFrame(acc / 1000)
+    if (!running) startLoop()
   }
 
   function onVisibility(): void {
@@ -888,7 +965,7 @@ export function createShaderBackdrop(options: ShaderBackdropOptions): ShaderBack
     stats.alive = false
   }
 
-  return { sync, setStyle, destroy, stats }
+  return { sync, setStyle, setParams, destroy, stats }
 }
 
 /** Read the actual back-end string when the browser exposes it. Never used to

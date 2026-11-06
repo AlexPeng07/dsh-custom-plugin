@@ -3,6 +3,9 @@ lib/
 *.tsbuildinfo
 *.tgz
 .zcode/
+# Research artifacts and live screenshots from 2026-11-06: kept out of the
+# repository; only code and docs ship.
+2026-11-06/
 # Scratch for the live checks: throwaway npm installs, isolated DSH_HOME trees,
 # packed tarballs and the cookie jars holding boot tokens. Never committed.
 .deskprobe/

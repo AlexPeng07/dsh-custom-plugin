@@ -61,6 +61,14 @@ export function normalizeCfg(raw: unknown): CustomPluginConfig {
   const fallback: BgFxPreset = shaderTier ? 'liquid' : 'flow'
   const preset = cfg.bgFxPreset
   if (typeof preset !== 'string' || !allowed.includes(preset)) cfg.bgFxPreset = fallback
+  // Background tunables are overrides, not absolute values: -1 means "follow
+  // the preset". A negative or non-finite hand-edited value is that sentinel;
+  // everything else stays as written and the renderer clamps it into the
+  // active preset's declared `ranges` (the panel clamps on write as well).
+  for (const key of ['bgDensity', 'bgSpeed', 'bgFps', 'bgFontPx', 'bgOpacity', 'bgIntensity'] as const) {
+    const value = cfg[key]
+    cfg[key] = typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : -1
+  }
   // Budget values are user-facing numeric settings. Keep malformed or stale
   // values inside the documented range even when they came from an older
   // state file or an external backup.

@@ -42,6 +42,18 @@ export interface CustomPluginConfig {
    * `normalizeCfg` resets it into the set that matches `bgFx`. Unknown values
    * fall back to the tier default (`'flow'` / `'liquid'`). */
   bgFxPreset?: BgFxPreset
+  /** Background tunable overrides. One flat numeric field per knob because
+   * `normalizeCfg` drops nested values. `BG_PARAM_UNSET` (-1) means "follow
+   * the active preset"; any other value is clamped into that preset's
+   * declared `ranges` by the renderer and by the panel. The ASCII tier uses
+   * density/speed/fps/fontPx/opacity, the shader tier uses
+   * density/speed/fps/intensity. */
+  bgDensity?: number
+  bgSpeed?: number
+  bgFps?: number
+  bgFontPx?: number
+  bgOpacity?: number
+  bgIntensity?: number
   /** Weather overlay: 'none' | 'snow' | 'rain' | 'sakura'. */
   weather?: string
   /** Master glass toggle for the plugin's own surfaces. */
@@ -69,6 +81,12 @@ export const DEFAULT_CONFIG: CustomPluginConfig = {
   bg: '天青灰',
   bgFx: 'none',
   bgFxPreset: 'flow',
+  bgDensity: -1,
+  bgSpeed: -1,
+  bgFps: -1,
+  bgFontPx: -1,
+  bgOpacity: -1,
+  bgIntensity: -1,
   weather: 'none',
   glass: true,
   glassMode: 'frost',

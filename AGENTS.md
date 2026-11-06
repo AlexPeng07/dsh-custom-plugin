@@ -159,6 +159,27 @@ daily token usage.
   picture is the failure mode this exists to prevent. The shader reuses
   `createLadder` / `observeFrame` unchanged; L3 (mono) and L4 (dither off) are
   deliberate no-ops because it already mixes one ink.
+- The background-motion panel lives inside `AppearanceTab` (both the popover
+  and the settings page) and is only mounted while that surface is open. It
+  reads/writes six **flat** config fields — `bgDensity`, `bgSpeed`, `bgFps`,
+  `bgFontPx`, `bgOpacity`, `bgIntensity` — where `-1` (the default) means
+  "follow the active preset". `normalizeCfg` rewrites any negative or
+  non-finite value to `-1`; the panel clamps every write to the active
+  preset's declared `ranges` through `src/client/bg-params.ts`
+  (`paramRange` / `effectiveParam` / `setParamInCfg` / `resetBgParams`), and
+  the renderers clamp again in `resolveAsciiSpec` / `resolveShaderSpec`, so a
+  stale hand edit can never leave the documented band. Knob lists are per tier
+  (`panelParamKeys`: ASCII five, shader four — no `fontPx`/`opacity`), and
+  `presetForTier` re-homes a cross-tier or unknown preset id to the tier
+  default. Slider input updates the store immediately (the appearance effect
+  calls `setParams` and repaints), but the host POST goes through one
+  `createDebouncedSaver` (320 ms, `BG_PARAM_SAVE_MS`); tier/preset/restore are
+  discrete and call `saveCfg` directly after cancelling the pending debounce,
+  and the disposer cancels it too. `AppearanceTab` subscribes via
+  `useSSelector(selectAppearanceSlice)` (cfg + `dark` only), so no per-turn
+  write re-renders it. With `glass:false` the layer is fully covered by design;
+  the panel shows an explicit note explaining that and never flips the glass
+  toggle for the user.
 - The client store fan-out stays a single listener set; per-turn hot paths
   (`TurnTailEntry`) and the FX canvas subscribe through `useSSelector` so an
   unrelated balance/toast write does not re-render every turn-tail row.

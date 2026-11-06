@@ -129,6 +129,37 @@ export function resolveAsciiPreset(preset: string | undefined): AsciiPreset {
   return 'flow'
 }
 
+/** Panel overrides for one ASCII preset. Every value is clamped into the
+ * preset's own `ranges` before it is used, so an out-of-range value (a stale
+ * state file, a slider crossing a preset switch) never reaches the grid. */
+export type AsciiParams = Partial<Record<'density' | 'speed' | 'fps' | 'fontPx' | 'opacity', number>>
+
+/** Clamp one override into a preset range; `undefined`/non-finite means "use
+ * the preset default". */
+function clampOverride(value: number | undefined, range: AsciiRange, fallback: number): number {
+  if (value === undefined || !Number.isFinite(value)) return fallback
+  return value < range.min ? range.min : value > range.max ? range.max : value
+}
+
+/**
+ * Resolve overrides against one preset. Missing or invalid keys fall back to
+ * the preset's own default, so a preset switch never inherits a value the new
+ * piece cannot honour. Returns the base spec object itself when nothing is
+ * overridden (no allocation until the user actually moves a slider).
+ */
+export function resolveAsciiSpec(preset: AsciiPreset, params: AsciiParams): AsciiPresetSpec {
+  const base = ASCII_PRESETS[preset]
+  const density = clampOverride(params.density, base.ranges.density, base.density)
+  const speed = clampOverride(params.speed, base.ranges.speed, base.speed)
+  const fps = clampOverride(params.fps, base.ranges.fps, base.fps)
+  const fontPx = clampOverride(params.fontPx, base.ranges.fontPx, base.fontPx)
+  const opacity = clampOverride(params.opacity, base.ranges.opacity, base.opacity)
+  if (density === base.density && speed === base.speed && fps === base.fps && fontPx === base.fontPx && opacity === base.opacity) {
+    return base
+  }
+  return { ...base, density, speed, fps, fontPx, opacity }
+}
+
 /** Resize debounce before the grid is rebuilt. */
 export const RESIZE_DEBOUNCE_MS = 150
 
@@ -587,6 +618,8 @@ export interface AsciiBackdropOptions {
   win: AsciiWinLike
   host: AsciiHostLike
   preset?: AsciiPreset
+  /** Panel overrides for the boot preset; clamps to its `ranges`. */
+  params?: AsciiParams
 }
 
 /** Handle owned by the appearance painter. */
@@ -597,6 +630,10 @@ export interface AsciiBackdrop {
    * canvas and level buffer survive; the atlas is reused when its key (ramp,
    * ink, theme, dpr, cell size, font, opacity) is unchanged. */
   setPreset(preset: AsciiPreset): void
+  /** Replace the panel overrides for the current preset. Values are clamped
+   * into that preset's `ranges`; a preset switch keeps the overrides and
+   * re-clamps them. Repaints immediately so a dragging slider is visible. */
+  setParams(params: AsciiParams): void
   /** Stop everything and free the canvas, listeners, arrays and atlases. */
   destroy(): void
   readonly stats: AsciiBackdropStats
@@ -626,6 +663,8 @@ export function createAsciiBackdrop(options: AsciiBackdropOptions): AsciiBackdro
   const probeCtx = probeCanvas.getContext('2d')
 
   let preset: AsciiPreset = options.preset ?? 'flow'
+  let params: AsciiParams = normalizeParams(options.params)
+  let current: AsciiPresetSpec = resolveAsciiSpec(preset, params)
   let destroyed = false
   let running = false
   let level = 0
@@ -653,8 +692,8 @@ export function createAsciiBackdrop(options: AsciiBackdropOptions): AsciiBackdro
   let atlas: Atlas | null = null
   let atlasKey = ''
   let densityScale = 1
-  let dither = ASCII_PRESETS[preset].dither
-  let targetFps = ASCII_PRESETS[preset].fps
+  let dither = current.dither
+  let targetFps = current.fps
   let resizeTimer: ReturnType<typeof setTimeout> | null = null
   let resizeObserver: AsciiResizeObserverLike | null = null
   let dprMql: AsciiMediaQueryLike | null = null
@@ -662,7 +701,22 @@ export function createAsciiBackdrop(options: AsciiBackdropOptions): AsciiBackdro
   const stats: AsciiBackdropStats = { level: 0, cols: 0, rows: 0, frames: 0, atlasBuilds: 0, alive: true }
 
   function spec(): AsciiPresetSpec {
-    return ASCII_PRESETS[preset]
+    return current
+  }
+
+  function normalizeParams(next: AsciiParams | undefined): AsciiParams {
+    const out: AsciiParams = {}
+    if (next === undefined) return out
+    for (const key of ['density', 'speed', 'fps', 'fontPx', 'opacity'] as const) {
+      const value = next[key]
+      if (typeof value === 'number' && Number.isFinite(value)) out[key] = value
+    }
+    return out
+  }
+
+  function paramsEqual(a: AsciiParams, b: AsciiParams): boolean {
+    return a.density === b.density && a.speed === b.speed && a.fps === b.fps
+      && a.fontPx === b.fontPx && a.opacity === b.opacity
   }
 
   function resetLadder(): void {
@@ -944,6 +998,9 @@ export function createAsciiBackdrop(options: AsciiBackdropOptions): AsciiBackdro
   function setPreset(next: AsciiPreset): void {
     if (destroyed || next === preset) return
     preset = next
+    // The overrides travel with the switch: each value re-clamps against the
+    // new preset's own ranges, so nothing the new piece cannot honour leaks in.
+    current = resolveAsciiSpec(preset, params)
     resetLadder()
     // Re-derive the grid for the new density/fontPx. When the geometry did not
     // move, `layout` keeps the existing `levels` buffer and the atlas key
@@ -963,6 +1020,32 @@ export function createAsciiBackdrop(options: AsciiBackdropOptions): AsciiBackdro
     }
     // Repaint the new piece now: the opaque surface fill below the switch
     // would otherwise stay stale until the next scheduled frame.
+    drawFrame((acc / 1000) * spec().speed)
+    if (!running) startLoop()
+  }
+
+  function setParams(next: AsciiParams): void {
+    if (destroyed) return
+    const normalized = normalizeParams(next)
+    if (paramsEqual(normalized, params)) return
+    params = normalized
+    current = resolveAsciiSpec(preset, params)
+    resetLadder()
+    // Density/fontPx move the grid, opacity/font feed the atlas key; a change
+    // in either must relayout before the immediate repaint. `layout` keeps the
+    // atlas and the level buffer when the geometry did not move.
+    layout()
+    if (!layoutDone) return
+    const motion = computeMotion()
+    if (motion === 'paused') {
+      stopLoop()
+      return
+    }
+    if (motion === 'static' || preset === 'static' || level >= 5) {
+      stopLoop()
+      drawStaticFrame()
+      return
+    }
     drawFrame((acc / 1000) * spec().speed)
     if (!running) startLoop()
   }
@@ -1048,5 +1131,5 @@ export function createAsciiBackdrop(options: AsciiBackdropOptions): AsciiBackdro
     stats.alive = false
   }
 
-  return { sync, setPreset, destroy, stats }
+  return { sync, setPreset, setParams, destroy, stats }
 }

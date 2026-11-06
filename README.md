@@ -13,7 +13,7 @@
 
 English | [中文](README.zh.md)
 
-Custom convenience suite for the DeepSeek Harness (DSH) Web GUI: personalization, weather FX, glass effects, project folders, enhanced prompts, conversation export/search, Mermaid rendering, quote reply, 7/30/90-day usage analytics, budget and key-free local backups, plus a Ctrl/Cmd+K command palette.
+Custom convenience suite for the DeepSeek Harness (DSH) Web GUI: personalization, weather FX, background motion, glass effects, project folders, enhanced prompts, conversation export/search, Mermaid rendering, quote reply, 7/30/90-day usage analytics, budget and key-free local backups, plus a Ctrl/Cmd+K command palette.
 
 The plugin is dual-face: the host half (`src/`) owns the state document, registers the `/api/custom-plugin` routes and the `custom_plugin_status` agent tool; the browser half (`src/client/`) injects its UI through eight injections into seven official slots and talks to the host over same-origin fetch. Mounted through the official profile mechanism — no DSH source changes.
 
@@ -54,6 +54,9 @@ Weather FX is shown in dark mode. Usage history, backup-import previews, session
 - **Background colors**: 20 muted low-saturation palettes (each with a matching tab color, `天青灰` by default) plus "no color" (follows the GUI default theme). Every palette works in both themes; dark mode derives the same family's dark variant (hue and low saturation kept, lightness dropped onto the dark ramp), and the swatch preview shows what the current theme will actually paint.
 - **Weather FX**: canvas-rendered, pointer-transparent one-click overlays — falling snow, cinematic rain (three depth layers with splashes), and drifting sakura petals; turning it off clears the canvas.
 - **Glass**: frosted glass on every Custom surface, or liquid glass (edge displacement refraction chained with a slight blur + saturation so text over large panels stays readable; engines without SVG-referencing backdrop filters fall back to frosted). A global-glass option extends the same treatment to dialogs, menus, tooltips, listboxes and the system settings window — displaced as well in liquid mode.
+- **Background motion**: a full-page animated layer beneath the content, in two independent tiers — ASCII glyph grids (`flow`, `rain`, `ocean`, `starfield`, `ripple`, plus the zero-animation `static`) and WebGL1 (one full-screen shader per style: `liquid`, `grain`; a page without WebGL falls back to the ASCII tier and says so). The panel switches tier and preset, tunes density, speed, frame rate, font size and opacity — intensity instead of font/opacity on the WebGL tier — and restores the preset defaults; every slider clamps to the active preset's declared range. **It is only visible with glass on**: without glass the content surfaces are opaque and cover the layer completely, and the panel states that instead of silently showing nothing.
+
+<img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/background-motion-panel.png" alt="Background motion panel with the character tier active" width="360">
 
 ### Project folders
 
@@ -231,6 +234,9 @@ Appearance and feature toggles (the `cfg` field, all with defaults):
 | Key | Default | Meaning |
 |---|---|---|
 | `bg` | `天青灰` | `default` (no color) / one of the 20 palette names (both themes; a stored `aurora` migrates to `default`) |
+| `bgFx` | `none` | `none` / `ascii` / `shader`; the shader tier falls back to ASCII when the page has no WebGL |
+| `bgFxPreset` | `flow` | the active tier's preset: `flow`/`rain`/`ocean`/`starfield`/`ripple`/`static` for ASCII, `liquid`/`grain` for WebGL; an id from the other tier resets to that tier's default |
+| `bgDensity`, `bgSpeed`, `bgFps`, `bgFontPx`, `bgOpacity`, `bgIntensity` | `-1` | panel overrides; `-1` follows the preset, anything else is clamped to the active preset's declared range (ASCII uses five, WebGL uses density/speed/fps/intensity) |
 | `weather` | `none` | `none` / `snow` / `rain` / `sakura` |
 | `glass` | `true` | master glass toggle for Custom surfaces |
 | `glassMode` | `frost` | `frost` frosted / `liquid` displacement glass |
