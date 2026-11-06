@@ -13,7 +13,7 @@
 import { mkdir, open, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { dshHome } from './dsh-home.ts'
-import { DEFAULT_CONFIG, type CustomPluginConfig, type CustomPluginState, type FolderNode, type PromptItem, type StarsMap, type UsageMap, type UsageRow } from './protocol.ts'
+import { BG_FX_ASCII_PRESETS, BG_FX_SHADER_STYLES, DEFAULT_CONFIG, type BgFxPreset, type CustomPluginConfig, type CustomPluginState, type FolderNode, type PromptItem, type StarsMap, type UsageMap, type UsageRow } from './protocol.ts'
 import { createUsageRow, normalizeUsageMap, pruneUsage } from './usage.ts'
 
 /** State file name of this plugin. */
@@ -52,11 +52,15 @@ export function normalizeCfg(raw: unknown): CustomPluginConfig {
   // it as a boolean; map that first so the user's on/off choice survives.
   if (typeof src.bgFx === 'boolean') cfg.bgFx = src.bgFx ? 'ascii' : 'none'
   if (cfg.bgFx !== 'none' && cfg.bgFx !== 'ascii' && cfg.bgFx !== 'shader') cfg.bgFx = 'none'
-  // Preset ids are a closed set. Keep the client list in sync with
-  // `ASCII_PRESETS` in src/client/bg-ascii.ts; an unknown id degrades to the
-  // default rather than mounting a piece the renderer does not know.
-  const presets = ['flow', 'rain', 'ocean', 'starfield', 'ripple', 'static']
-  if (typeof cfg.bgFxPreset !== 'string' || !presets.includes(cfg.bgFxPreset)) cfg.bgFxPreset = 'flow'
+  // Preset ids are a closed set per tier. `bgFxPreset` stays one flat field
+  // because the two renderers never coexist; an id from the other tier is a
+  // stale combination, so it resets to that tier's default rather than
+  // mounting a piece the active renderer does not know.
+  const shaderTier = cfg.bgFx === 'shader'
+  const allowed: readonly string[] = shaderTier ? BG_FX_SHADER_STYLES : BG_FX_ASCII_PRESETS
+  const fallback: BgFxPreset = shaderTier ? 'liquid' : 'flow'
+  const preset = cfg.bgFxPreset
+  if (typeof preset !== 'string' || !allowed.includes(preset)) cfg.bgFxPreset = fallback
   // Budget values are user-facing numeric settings. Keep malformed or stale
   // values inside the documented range even when they came from an older
   // state file or an external backup.

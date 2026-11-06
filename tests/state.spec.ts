@@ -63,6 +63,7 @@ describe('normalizeCfg', () => {
     // Old archives have no bgFx key: the layer must stay inert.
     expect(normalizeCfg({}).bgFx).toBe('none')
     expect(normalizeCfg({ bgFx: 'ascii' }).bgFx).toBe('ascii')
+    expect(normalizeCfg({ bgFx: 'shader' }).bgFx).toBe('shader')
     expect(normalizeCfg({ bgFx: 'none' }).bgFx).toBe('none')
     // They may store a Phase 1 boolean; that on/off choice must survive.
     expect(normalizeCfg({ bgFx: true }).bgFx).toBe('ascii')
@@ -83,6 +84,17 @@ describe('normalizeCfg', () => {
     // unknown piece.
     expect(normalizeCfg({ bgFxPreset: 'clouds' }).bgFxPreset).toBe('flow')
     expect(normalizeCfg({ bgFxPreset: 3 }).bgFxPreset).toBe('flow')
+  })
+
+  it('resets the flat preset into the active tier namespace', () => {
+    // Shader tier defaults to liquid and accepts only its own styles.
+    expect(normalizeCfg({ bgFx: 'shader' }).bgFxPreset).toBe('liquid')
+    expect(normalizeCfg({ bgFx: 'shader', bgFxPreset: 'grain' }).bgFxPreset).toBe('grain')
+    expect(normalizeCfg({ bgFx: 'shader', bgFxPreset: 'flow' }).bgFxPreset).toBe('liquid')
+    expect(normalizeCfg({ bgFx: 'shader', bgFxPreset: 'clouds' }).bgFxPreset).toBe('liquid')
+    // An ASCII mode never carries a shader id, including the default mode.
+    expect(normalizeCfg({ bgFx: 'ascii', bgFxPreset: 'grain' }).bgFxPreset).toBe('flow')
+    expect(normalizeCfg({ bgFxPreset: 'liquid' }).bgFxPreset).toBe('flow')
   })
 })
 

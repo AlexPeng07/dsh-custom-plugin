@@ -31,6 +31,20 @@ follow [Semantic Versioning](https://semver.org/).
   没有霓虹或高饱和撞色。每套 spec 附带可写的 `ranges`（`density`/`speed`/`fps`/
   `fontPx`/`opacity` 上下限）与默认值，留给下一阶段的自定义面板；配置仍是扁平
   boolean/number/string。
+- **Shader 档（Phase 3b，WebGL1）**：`src/client/bg-shader.ts` 用一块 WebGL1
+  上下文、一个全屏三角形（`[-1,-1, 3,-1, -1,3]`）与内联 GLSL 实现 GPU 背景，
+  零第三方依赖。uniform 契约固定为 `u_time` / `u_resolution`（CSS px）/
+  `u_dpr`（≤2）/ `u_surface` / `u_ink` / `u_speed` / `u_density` /
+  `u_intensity` / `u_seed`，`shaderUniforms` 逐项夹紧到 `SHADER_UNIFORM_RANGES`。
+  两套画面语言：`liquid` 低频 domain-warp 墨云（3 octave fbm + 竖向呼吸，
+  24 fps 可动）、`grain` 静态细颗粒（CSS 像素网格 + 低频雾 + 边缘渐隐，零 rAF）。
+  墨色仍由 `inkFor(surface, isDarkSurface(surface))` 派生（浅色固定 ΔL 0.13、
+  深色 +0.11），浅色/深色与全部色板下都成立，没有霓虹或高饱和撞色。两档互斥：
+  切换经 `swapBgRenderer` 先建后拆，离开 shader 档删除 program/buffer 并
+  `WEBGL_lose_context`；`static` 与 `prefers-reduced-motion` 只画首帧，页面隐藏
+  停 rAF 并冻结时间；WebGL 探测失败、编译失败或运行中上下文丢失都回退 ASCII，
+  并以 toast 明示（每页一次），不会静默换成另一种画。`bgFxPreset` 仍是单个扁平
+  字段，按当前档位单向收窄。
 - **固定降级阶梯（只降不升）**：L1 fps 24→15、L2 密度 ×0.75、L3 单色（ASCII 档
   已是单墨色）、L4 关抖动、L5 画一帧后停 rAF、L6 只留底色。60 帧滑窗均值超过
   `budget × 1.6` 记为坏窗，连续 2 个坏窗降一档；好窗抵消一个坏窗；切换预设回到
@@ -46,10 +60,12 @@ follow [Semantic Versioning](https://semver.org/).
 
 - **背景配置改为枚举**：`bgFx` 从布尔迁移为 `'none' | 'ascii' | 'shader'`
   （默认 `'none'`；旧存档 `true → 'ascii'`、`false → 'none'`，未知值回落
-  `'none'`），新增 `bgFxPreset: 'flow' | 'rain' | 'ocean' | 'starfield' | 'ripple' |
-  'static'`（默认 `'flow'`，未知 id 回落 `'flow'`）。`'shader'`
-  预留，当前仍走 ASCII 档。挂载门从 WebGL 改为 2D canvas；`body` 只在背景真正
-  挂载时透明，`bgFx:'none'` 与渲染器落地前的页面逐像素一致（活体 A/B 实测差 0）。
+  `'none'`），`bgFxPreset` 改为一个承载两档 id 的扁平字段：ASCII 档
+  `flow`/`rain`/`ocean`/`starfield`/`ripple`/`static`（默认 `flow`），shader 档
+  `liquid`/`grain`（默认 `liquid`）。`normalizeCfg` 按当前档位单向收窄，跨档或
+  未知 id 回落当前档默认值。挂载门按档位判定：shader 需要 WebGL1，只有 2D
+  canvas 时同层回退 ASCII；`body` 只在背景真正挂载时透明，`bgFx:'none'` 与
+  渲染器落地前的页面逐像素一致（活体 A/B 实测差 0）。
 
 - **等级语义统一（修正 Phase 2 浅色主题反转）**：level 0 在浅色与深色主题都渲染为
   空白字形，ramp 只随等级增加墨密度；主题切换只换墨色（`inkFor`），不再反转字形
@@ -95,11 +111,32 @@ follow [Semantic Versioning](https://semver.org/).
   是预设自定的节奏（20/15/20 fps），p95 与目标帧间隔一致，不是性能受限。
   浅色/深色与各色板截图逐套留存；像素亮度 min 202–206、max 235，墨色随 surface
   派生，无高饱和撞色。
+- Shader 两套风格在同一隔离 0.2.1-rc.5 活体宿主（1440×900，DPR 1，有会话）逐套
+  实测（POST 配置后 reload，空闲 10 秒 + 6 秒合成滚动）：`liquid` 空闲 240 帧
+  （23.98 fps），帧间隔 p50 41.7 ms / p95 42.7 ms / max 48.6 ms；滚动 144 帧
+  （23.98 fps）、p95 42.1 ms / max 49.0 ms；两项 0 掉帧（>100 ms / >150 ms 均为
+  0）、0 long task。`grain` 声明 `animated:false`：挂载后空闲 10 秒 0 次
+  `drawArrays`，6 秒滚动同样 0 次（首帧即停）；`liquid` 配
+  `prefers-reduced-motion` 时 `data-vx-bg-motion="static"`，6 秒 0 次绘制。
+  DPR 1 下 backing 1440×900，实际后端由 `WEBGL_debug_renderer_info` 读到
+  `ANGLE (NVIDIA GeForce RTX 5070 Laptop GPU, Direct3D11 vs_5_0 ps_5_0)`（只取
+  后端名，不报占用率）。像素亮度：`liquid` min 219 / max 235 / std 5.2（ASCII
+  `flow` 为 std 5.48），`grain` min 215 / max 235 / std 4.4；浅色/深色截图逐套留存。
+- 无 WebGL 回退实测（同一宿主，页面脚本执行前把 `getContext('webgl')` 全部返回
+  null）：`bgFx:'shader'` 下只创建 1 个 ASCII canvas、0 个 shader canvas，toast
+  显示“当前环境无法创建 WebGL 背景，已回退到字符动效。”，ASCII 的 `fillRect`
+  1.2 秒内 44→73（约 24 fps），`body` 透明但有画，无空背景。运行中上下文丢失
+  实测：对真实 context 调 `loseContext()`，120 ms 内 shader canvas 0、ASCII
+  canvas 1、toast 出现，随后持续绘制；旧 handle 的 destroy 再调一次
+  `loseContext` 完成回收（计数 1→2，未重复丢失同一 context）。
 - `pnpm check:readme`、`pnpm typecheck`、`pnpm test`（243）、`pnpm build`、
   `pnpm smoke` 全绿。
 - Phase 3a 后：`pnpm typecheck`、`pnpm test`（251，29 个文件，`bg-ascii` 23 项）、
   `pnpm build`（`lib/client.js` 240.98 kB）、`pnpm check:readme`、`pnpm smoke`
   全绿。
+- Phase 3b 后：`pnpm check:readme`、`pnpm typecheck`、`pnpm test`（280，30 个文件，
+  新增 `bg-shader` 20 项、`bg-layer` 档位判定与先建后拆 8 项、`state` 跨档收窄）、
+  `pnpm build`（`lib/client.js` 264.65 kB / gzip 69.75 kB）、`pnpm smoke` 全绿。
 
 ## 0.9.3 — 2026-10-26
 

@@ -37,6 +37,53 @@ export type BgLayerVerdict =
   | { readonly mount: false; readonly reason: 'disabled' | 'no-canvas' }
   | { readonly mount: true; readonly motion: BgLayerMotion }
 
+/** Capability facts for the two renderer tiers. `webgl` is the result of the
+ * cached WebGL1 probe; `canvas2d` is required by the ASCII fallback. */
+export interface BgFxCaps extends BgLayerCaps {
+  readonly webgl: boolean
+}
+
+/** Verdict for the multi-tier gate: which renderer the layer will host. */
+export type BgFxVerdict =
+  | { readonly mount: false; readonly reason: 'disabled' | 'no-canvas' }
+  | { readonly mount: true; readonly motion: BgLayerMotion; readonly tier: 'ascii' | 'shader' }
+
+function motionOf(caps: BgLayerCaps): BgLayerMotion {
+  return caps.hidden ? 'paused' : caps.reducedMotion ? 'static' : 'animated'
+}
+
+/**
+ * Gate for the full `bgFx` enum. The requested shader tier needs WebGL1; when
+ * the probe failed but a 2D context exists, the same layer mounts with the
+ * ASCII tier so the page keeps an animated background instead of dropping to
+ * the plain tint. When neither context exists there is nothing to draw, and
+ * the caller leaves the body fill in place.
+ */
+export function decideBgFxLayer(mode: 'none' | 'ascii' | 'shader', caps: BgFxCaps): BgFxVerdict {
+  if (mode === 'none') return { mount: false, reason: 'disabled' }
+  if (mode === 'shader') {
+    if (caps.webgl) return { mount: true, motion: motionOf(caps), tier: 'shader' }
+    if (caps.canvas2d) return { mount: true, motion: motionOf(caps), tier: 'ascii' }
+    return { mount: false, reason: 'no-canvas' }
+  }
+  if (!caps.canvas2d) return { mount: false, reason: 'no-canvas' }
+  return { mount: true, motion: motionOf(caps), tier: 'ascii' }
+}
+
+/**
+ * Build-before-teardown swap. The two tiers are mutually exclusive, so the
+ * replacement must be constructed (and its first frame painted) before the
+ * old renderer is destroyed: that order is what prevents a blank frame while
+ * the opaque body fill is still transparent. A failed build leaves the current
+ * renderer untouched, so the caller can fall back without losing the layer.
+ */
+export function swapBgRenderer<R extends { destroy(): void }>(current: R | null, build: () => R | null): R | null {
+  const next = build()
+  if (next === null) return current
+  if (current !== null) current.destroy()
+  return next
+}
+
 /**
  * Decide whether the background layer may exist. The layer is off by
  * convention: `bgFx` starts `'none'`, so an untouched install never creates a

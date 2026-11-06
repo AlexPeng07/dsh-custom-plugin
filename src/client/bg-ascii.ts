@@ -120,6 +120,15 @@ export const ASCII_PRESETS: Record<AsciiPreset, AsciiPresetSpec> = {
   },
 }
 
+/** Resolve a stored preset id to an ASCII piece. A shader-tier id (or any
+ * unknown string) is a stale combination and falls back to `flow`. */
+export function resolveAsciiPreset(preset: string | undefined): AsciiPreset {
+  if (preset !== undefined && Object.prototype.hasOwnProperty.call(ASCII_PRESETS, preset)) {
+    return preset as AsciiPreset
+  }
+  return 'flow'
+}
+
 /** Resize debounce before the grid is rebuilt. */
 export const RESIZE_DEBOUNCE_MS = 150
 

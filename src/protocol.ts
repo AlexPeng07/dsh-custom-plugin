@@ -15,21 +15,33 @@ export const CUSTOM_PLUGIN_API_PREFIX = '/api/custom-plugin'
 /** Path the host serves the fetched Mermaid engine at (script src). */
 export const MERMAID_SCRIPT_PATH = '/custom-plugin/mermaid.js'
 
+/** ASCII preset ids; keep in sync with `ASCII_PRESETS` in `client/bg-ascii.ts`. */
+export const BG_FX_ASCII_PRESETS = ['flow', 'rain', 'ocean', 'starfield', 'ripple', 'static'] as const
+
+/** Shader style ids; keep in sync with `SHADER_STYLES` in `client/bg-shader.ts`. */
+export const BG_FX_SHADER_STYLES = ['liquid', 'grain'] as const
+
+/** The `bgFxPreset` value space: one flat string across both renderer tiers.
+ * `normalizeCfg` narrows it to the set that matches the active `bgFx` mode. */
+export type BgFxPreset = (typeof BG_FX_ASCII_PRESETS)[number] | (typeof BG_FX_SHADER_STYLES)[number]
+
 /** Plugin appearance and behavior configuration, persisted in the host state file. */
 export interface CustomPluginConfig {
   /** Background preset: 'default' (no color) or one of the 20 palette names.
    * The removed 'aurora' value migrates to 'default' on load. */
   bg?: string
   /** Animated page-background layer below the content surfaces. `'none'` is
-   * off; `'ascii'` runs the character renderer; `'shader'` is reserved for the
-   * WebGL tier (Phase 2 renders the ASCII tier until that mode lands). Flat
+   * off; `'ascii'` runs the character renderer; `'shader'` runs the WebGL1
+   * full-screen fragment renderer (falling back to ASCII without WebGL). Flat
    * string on purpose because `normalizeCfg` drops nested values; a Phase 1
    * boolean migrates (true → 'ascii', false → 'none'). */
   bgFx?: 'none' | 'ascii' | 'shader'
-  /** Which ASCII piece runs: 'flow' (animated, default), 'rain', 'ocean',
-   * 'starfield', 'ripple', or 'static' (one still frame, no rAF). Unknown
-   * values fall back to 'flow' in `normalizeCfg`. */
-  bgFxPreset?: 'flow' | 'rain' | 'ocean' | 'starfield' | 'ripple' | 'static'
+  /** Which piece runs in the active tier: the ASCII ids ('flow', 'rain',
+   * 'ocean', 'starfield', 'ripple', 'static') or the shader ids ('liquid',
+   * 'grain'). One flat field for both because the two tiers never coexist;
+   * `normalizeCfg` resets it into the set that matches `bgFx`. Unknown values
+   * fall back to the tier default (`'flow'` / `'liquid'`). */
+  bgFxPreset?: BgFxPreset
   /** Weather overlay: 'none' | 'snow' | 'rain' | 'sakura'. */
   weather?: string
   /** Master glass toggle for the plugin's own surfaces. */

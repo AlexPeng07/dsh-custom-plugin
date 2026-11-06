@@ -72,13 +72,16 @@ daily token usage.
   (`decideBgLayer` / `mountBgLayer`), and the disposer destroys the renderer and
   then calls `unmountBgLayer` because slot unmount can run after the disposer.
   Config is `bgFx: 'none' | 'ascii' | 'shader'` (default `'none'`) plus
-  `bgFxPreset: 'flow' | 'rain' | 'ocean' | 'starfield' | 'ripple' | 'static'`
-  (default `'flow'`); a Phase 1 boolean archive migrates `true → 'ascii'`,
-  `false → 'none'`, any other string/value falls back to `'none'`, and a
-  retired or foreign preset id falls back to `'flow'`. `'shader'` is reserved
-  and currently renders the ASCII tier.
-  Gate is a 2D canvas context (`canvas2d`, not WebGL): without it the layer does
-  not mount and the body tint stays; `prefers-reduced-motion` →
+  `bgFxPreset` (default `'flow'`), one flat field shared by both tiers: the
+  ASCII tier owns `flow`/`rain`/`ocean`/`starfield`/`ripple`/`static`, the
+  shader tier owns `liquid`/`grain`. `normalizeCfg` narrows it one-way by the
+  current tier (`shader` → any id outside the shader list becomes `'liquid'`;
+  `ascii`/`none` → any id outside the ASCII list becomes `'flow'`), and the
+  Phase 1 boolean archive migrates `true → 'ascii'`, `false → 'none'`, any
+  other value → `'none'`.
+  Gate: the shader tier needs WebGL1 and falls back to ASCII when only
+  `canvas2d` is available; the ASCII tier needs `canvas2d`; with neither the
+  layer does not mount and the body tint stays. `prefers-reduced-motion` →
   `data-vx-bg-motion="static"`; hidden → `"paused"`; theme palettes flow in
   through `--vx-bg-tint` (`bgLayerTint` uses `toDarkRamp`).
 - The renderer is `src/client/bg-ascii.ts`, mounted as one canvas inside
@@ -131,7 +134,31 @@ daily token usage.
   not). `setPreset` resets the ladder to L0, then either stops the loop and
   paints one frame (paused/static/reduced/L5) or draws an immediate frame and
   restarts rAF, so no blank frame or leftover preset frame is left behind. The
-  shader tier and the custom panel stay deferred.
+  custom panel stays deferred.
+- The shader tier is `src/client/bg-shader.ts`: one WebGL1 context, one
+  full-screen triangle (`[-1,-1, 3,-1, -1,3]`), one inlined fragment shader per
+  style, no library. The uniform contract is fixed: `u_time` (seconds, frozen
+  while hidden), `u_resolution` (CSS px, never backing px), `u_dpr` (≤2),
+  `u_surface` / `u_ink` (0..1 vec3 from `--vx-bg-tint` and
+  `inkFor(surface, isDarkSurface(surface))`, so the ink keeps the same fixed
+  ΔL the ASCII tier uses), `u_speed`, `u_density`, `u_intensity`, `u_seed`;
+  `shaderUniforms` clamps every value to `SHADER_UNIFORM_RANGES` so a
+  hand-edited state file cannot push the GPU outside the documented band.
+  Styles self-declare motion: `liquid` is an animated 3-octave domain-warped
+  ink cloud at 24 fps, `grain` is a static CSS-pixel speck field with an edge
+  falloff and `animated:false` — that declaration is how the zero-rAF path is
+  reached without pixel sniffing. Each style carries `ranges` next to its
+  defaults (pinned by `tests/bg-shader.spec.ts`).
+- The two tiers never coexist: `swapBgRenderer` builds the replacement first
+  and only then destroys the old handle, and leaving the shader tier deletes
+  its program/buffer, removes the canvas and calls `WEBGL_lose_context` (an
+  already-lost context is not lost twice). WebGL probing is cached for the
+  page lifetime, and a failed probe, compile or live context loss sets
+  `bgFxShaderBlocked` so a repaint never retries in a loop. The fallback to
+  ASCII is announced once through a toast — a silent downgrade to a different
+  picture is the failure mode this exists to prevent. The shader reuses
+  `createLadder` / `observeFrame` unchanged; L3 (mono) and L4 (dither off) are
+  deliberate no-ops because it already mixes one ink.
 - The client store fan-out stays a single listener set; per-turn hot paths
   (`TurnTailEntry`) and the FX canvas subscribe through `useSSelector` so an
   unrelated balance/toast write does not re-render every turn-tail row.

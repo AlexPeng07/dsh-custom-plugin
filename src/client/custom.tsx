@@ -18,8 +18,9 @@ import { DEFAULT_CONFIG, type ConversationSearchItem, type ConversationSearchKin
 import { createUsageRow, dayKey, mergeUsageRow } from '../usage.ts'
 import { DEEPSEEK_PRICING_CHECKED_ON, DEEPSEEK_PRICING_SOURCE_URL, estimateUsageCostCny, usageCostBreakdown } from '../pricing.ts'
 import { DARK_CANVAS_LIGHTNESS, hexToRgb, PALETTE, toDarkRamp } from './palette.ts'
-import { bgLayerTint, decideBgLayer, mountBgLayer, unmountBgLayer, type BgLayerCaps, type BgLayerDocLike, type BgLayerVerdict } from './bg-layer.ts'
-import { ASCII_PRESETS, createAsciiBackdrop, type AsciiBackdrop, type AsciiDocLike, type AsciiPreset, type AsciiWinLike } from './bg-ascii.ts'
+import { bgLayerTint, decideBgFxLayer, mountBgLayer, swapBgRenderer, unmountBgLayer, type BgFxCaps, type BgFxVerdict, type BgLayerDocLike } from './bg-layer.ts'
+import { createAsciiBackdrop, resolveAsciiPreset, type AsciiBackdrop, type AsciiDocLike, type AsciiWinLike } from './bg-ascii.ts'
+import { createShaderBackdrop, resolveShaderStyle, type ShaderBackdrop, type ShaderDocLike, type ShaderHostLike, type ShaderWinLike } from './bg-shader.ts'
 import {
   apiBalanceGet,
   apiBackupExport,
@@ -587,7 +588,8 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     // family surface exactly as before — that is the "turn it off and the page
     // fully reverts" contract. The verdict is computed once here and handed to
     // the layer so the CSS and the DOM can never disagree on whether it mounts.
-    const bgVerdict = decideBgLayer(bgFxEnabled(cfg.bgFx), bgFxCaps())
+    const requestedMode = cfg.bgFx ?? 'none'
+    const bgVerdict = decideBgFxLayer(requestedMode, bgFxCaps(requestedMode === 'shader'))
     let dyn = ''
     if (cfg.bg !== undefined && cfg.bg !== 'default') {
       const base = (PALETTE.find((p) => p[0] === cfg.bg) ?? PALETTE[0])[1]
@@ -615,11 +617,36 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     syncBackgroundLayer(bgVerdict)
   }
 
-  // The 2D-canvas probe creates a throwaway context; cache the verdict because
-  // probing on every appearance repaint would burn the browser's live-context
-  // budget for no gain, and a failed probe is final for the page lifetime.
+  // The 2D-canvas and WebGL probes create throwaway contexts; cache the
+  // verdicts because probing on every appearance repaint would burn the
+  // browser's live-context budget for no gain, and a failed probe is final for
+  // the page lifetime.
   let bgFxCanvas2d: boolean | null = null
-  function bgFxCaps(): BgLayerCaps {
+  let bgFxWebgl: boolean | null = null
+  // A lost context or a failed program compile is final for this page: never
+  // retry the shader tier on every repaint, and never re-toast the fallback.
+  let bgFxShaderBlocked = false
+  let bgFxFallbackNotice = false
+  function bgFxWebglAvailable(): boolean {
+    if (bgFxShaderBlocked) return false
+    if (bgFxWebgl !== null) return bgFxWebgl
+    const d = typeof document !== 'undefined' ? document : null
+    try {
+      const probe = d !== null ? d.createElement('canvas') : null
+      const gl = probe !== null ? probe.getContext('webgl') : null
+      bgFxWebgl = gl !== null
+      // Release the probe immediately so it cannot consume one of the page's
+      // live contexts once the real renderer creates its own.
+      if (gl !== null) {
+        const ext = gl.getExtension('WEBGL_lose_context')
+        if (ext !== null) ext.loseContext()
+      }
+    } catch {
+      bgFxWebgl = false
+    }
+    return bgFxWebgl === true
+  }
+  function bgFxCaps(webgl: boolean): BgFxCaps {
     const w = typeof window !== 'undefined' ? window : null
     const d = typeof document !== 'undefined' ? document : null
     if (bgFxCanvas2d === null) {
@@ -632,13 +659,19 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     }
     const reducedMotion = w !== null && typeof w.matchMedia === 'function'
       && w.matchMedia('(prefers-reduced-motion: reduce)').matches
-    return { canvas2d: bgFxCanvas2d === true, reducedMotion, hidden: d !== null && d.hidden === true }
+    return {
+      canvas2d: bgFxCanvas2d === true,
+      webgl: webgl && bgFxWebglAvailable(),
+      reducedMotion,
+      hidden: d !== null && d.hidden === true,
+    }
   }
-
-  /** `'shader'` is reserved; until the WebGL tier lands it runs the ASCII
-   * renderer rather than mounting a node with nothing to draw. */
-  function bgFxEnabled(mode: CustomPluginConfig['bgFx']): boolean {
-    return mode === 'ascii' || mode === 'shader'
+  function announceBgFallback(contextLost: boolean): void {
+    if (bgFxFallbackNotice) return
+    bgFxFallbackNotice = true
+    toast(contextLost
+      ? 'WebGL 背景上下文已丢失，已回退到字符动效。'
+      : '当前环境无法创建 WebGL 背景，已回退到字符动效。', 'info')
   }
 
   /**
@@ -649,40 +682,105 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
    * shell's z-index:20 layer, so a negative z-index there would still paint
    * above the content it has to stay behind.
    */
-  let bgRenderer: AsciiBackdrop | null = null
-  function syncBackgroundLayer(verdict: BgLayerVerdict): void {
+  type LiveBgRenderer =
+    | { kind: 'ascii'; handle: AsciiBackdrop }
+    | { kind: 'shader'; handle: ShaderBackdrop }
+  let bgRenderer: LiveBgRenderer | null = null
+  function destroyBgRenderer(): void {
+    if (bgRenderer === null) return
+    try { bgRenderer.handle.destroy() } catch { /* canvas already detached */ }
+    bgRenderer = null
+  }
+  function createAscii(host: Parameters<typeof createAsciiBackdrop>[0]['host']): AsciiBackdrop {
+    return createAsciiBackdrop({
+      doc: (typeof document !== 'undefined' ? document : null) as unknown as AsciiDocLike,
+      win: (typeof window !== 'undefined' ? window : null) as unknown as AsciiWinLike,
+      host,
+      preset: resolveAsciiPreset(S.cfg.bgFxPreset),
+    })
+  }
+  // The context-loss callback runs after this renderer is dead; repaint from
+  // the gate (now that `bgFxShaderBlocked` is set) on the next task so the
+  // canvas node list is not mutated while the browser is dispatching.
+  const onShaderFallback = (): void => {
+    bgFxShaderBlocked = true
+    announceBgFallback(true)
+    setTimeout(() => {
+      if (!disposed) applyAppearance()
+    }, 0)
+  }
+  function syncBackgroundLayer(verdict: BgFxVerdict): void {
     const d = typeof document !== 'undefined' ? document : null
     if (d === null) return
     if (!verdict.mount) {
       // Tear the renderer down before the host node: it owns the canvas,
       // rAF handle, listeners, observer, atlas and level buffer.
-      if (bgRenderer !== null) {
-        try { bgRenderer.destroy() } catch { /* canvas already detached */ }
-        bgRenderer = null
-      }
+      destroyBgRenderer()
       unmountBgLayer(d as unknown as BgLayerDocLike)
       return
     }
     const w = typeof window !== 'undefined' ? window : null
     if (w === null) return
     const host = mountBgLayer(d as unknown as BgLayerDocLike, verdict, bgLayerTint(S.cfg.bg, S.dark === true))
-    // The host already normalized the id against the closed preset list; this
-    // second lookup only guards a stale in-memory cfg from a newer host.
-    const requested = S.cfg.bgFxPreset ?? 'flow'
-    const preset: AsciiPreset = ASCII_PRESETS[requested] !== undefined ? requested : 'flow'
-    if (bgRenderer === null) {
-      bgRenderer = createAsciiBackdrop({
-        doc: d as unknown as AsciiDocLike,
-        win: w as unknown as AsciiWinLike,
-        host,
-        preset,
-      })
-    } else {
-      bgRenderer.setPreset(preset)
+    // The host already normalized the id against the closed tier list; these
+    // second lookups only guard a stale in-memory cfg from a newer host.
+    const preset = resolveAsciiPreset(S.cfg.bgFxPreset)
+    const style = resolveShaderStyle(S.cfg.bgFxPreset)
+    if (verdict.tier === 'shader') {
+      if (bgRenderer !== null && bgRenderer.kind === 'shader') {
+        if (bgRenderer.handle.setStyle(style)) {
+          bgRenderer.handle.sync()
+          return
+        }
+        // Compile failure on a style switch: keep the old frame alive and fall
+        // through to the ASCII build. `bgFxShaderBlocked` stops a retry loop.
+        bgFxShaderBlocked = true
+        announceBgFallback(false)
+      } else {
+        const previous = bgRenderer?.handle ?? null
+        const handle = swapBgRenderer<AsciiBackdrop | ShaderBackdrop>(previous, () =>
+          createShaderBackdrop({
+            doc: d as unknown as ShaderDocLike,
+            win: w as unknown as ShaderWinLike,
+            host: host as unknown as ShaderHostLike,
+            style,
+            onFallback: onShaderFallback,
+          }))
+        if (handle !== null && handle !== previous) {
+          bgRenderer = { kind: 'shader', handle: handle as ShaderBackdrop }
+          ;(handle as ShaderBackdrop).sync()
+          return
+        }
+        if (handle === null && previous === null) {
+          // Probe said WebGL was available but context creation still failed.
+          // Recompute the verdict with the tier blocked: this either mounts the
+          // ASCII fallback or restores the body fill, so the transparent body
+          // never survives without a renderer.
+          bgFxShaderBlocked = true
+          announceBgFallback(false)
+          destroyBgRenderer()
+          if (!disposed) applyAppearance()
+          return
+        }
+        // Build failed but a renderer is still live (the ASCII tier): keep it.
+        bgFxShaderBlocked = true
+        announceBgFallback(false)
+      }
+    } else if (S.cfg.bgFx === 'shader') {
+      // The WebGL probe failed before any context was created; the verdict
+      // already chose ASCII, so make the fallback explicit to the user.
+      announceBgFallback(false)
     }
-    // Always re-read motion + tint: a palette or theme flip has to repaint the
-    // still frame too, otherwise a paused/static layer keeps stale colors.
-    bgRenderer.sync()
+
+    if (bgRenderer !== null && bgRenderer.kind === 'ascii') {
+      bgRenderer.handle.setPreset(preset)
+      bgRenderer.handle.sync()
+      return
+    }
+    const previous = bgRenderer?.handle ?? null
+    const handle = swapBgRenderer<AsciiBackdrop | ShaderBackdrop>(previous, () => createAscii(host))
+    bgRenderer = { kind: 'ascii', handle: handle as AsciiBackdrop }
+    ;(handle as AsciiBackdrop).sync()
   }
 
   function syncAntiScroll(on: boolean): void {
@@ -3148,12 +3246,9 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       // The background layer is a page-global node created by the appearance
       // painter, not by a slot surface: the host can unmount slot entries
       // after this disposer, so React effect cleanup may never run for it.
-      // The renderer goes first (canvas, rAF, listeners, observer, atlas,
-      // level buffer), then the host node that contained the canvas.
-      if (bgRenderer !== null) {
-        try { bgRenderer.destroy() } catch { /* canvas already detached */ }
-        bgRenderer = null
-      }
+      // The renderer goes first (canvas/context, rAF, listeners, observer,
+      // atlas, level buffer), then the host node that contained the canvas.
+      destroyBgRenderer()
       try { unmountBgLayer(d as unknown as BgLayerDocLike) } catch { /* node already gone */ }
     }
     removeDynCss()

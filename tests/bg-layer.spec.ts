@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { BG_LAYER_ID, bgLayerTint, decideBgLayer, mountBgLayer, unmountBgLayer, type BgLayerDocLike, type BgLayerElementLike } from '../src/client/bg-layer.ts'
+import { BG_LAYER_ID, bgLayerTint, decideBgFxLayer, decideBgLayer, mountBgLayer, swapBgRenderer, unmountBgLayer, type BgLayerDocLike, type BgLayerElementLike } from '../src/client/bg-layer.ts'
 import { DARK_CANVAS_LIGHTNESS, PALETTE, toDarkRamp } from '../src/client/palette.ts'
 
 interface FakeElement extends BgLayerElementLike {
@@ -75,6 +75,55 @@ describe('decideBgLayer', () => {
 
   it('pauses while the document is hidden, even with reduced motion', () => {
     expect(decideBgLayer(true, { ...CAPS, hidden: true })).toEqual({ mount: true, motion: 'paused' })
+  })
+})
+
+describe('decideBgFxLayer', () => {
+  const SHADER = { canvas2d: true, webgl: true, reducedMotion: false, hidden: false }
+
+  it('keeps the disabled and no-canvas gates', () => {
+    expect(decideBgFxLayer('none', SHADER)).toEqual({ mount: false, reason: 'disabled' })
+    expect(decideBgFxLayer('ascii', { ...SHADER, canvas2d: false })).toEqual({ mount: false, reason: 'no-canvas' })
+  })
+
+  it('mounts the shader tier when WebGL1 is available', () => {
+    expect(decideBgFxLayer('shader', SHADER)).toMatchObject({ mount: true, tier: 'shader' })
+  })
+
+  it('falls back to ASCII when WebGL is missing but 2D is available, so the user still gets a layer', () => {
+    expect(decideBgFxLayer('shader', { ...SHADER, webgl: false })).toMatchObject({ mount: true, tier: 'ascii' })
+  })
+
+  it('does not mount when neither context exists', () => {
+    expect(decideBgFxLayer('shader', { ...SHADER, webgl: false, canvas2d: false })).toEqual({ mount: false, reason: 'no-canvas' })
+  })
+
+  it('carries motion through the tier decision', () => {
+    expect(decideBgFxLayer('shader', { ...SHADER, reducedMotion: true })).toMatchObject({ tier: 'shader', motion: 'static' })
+    expect(decideBgFxLayer('shader', { ...SHADER, hidden: true })).toMatchObject({ tier: 'shader', motion: 'paused' })
+  })
+})
+
+describe('swapBgRenderer', () => {
+  it('builds the replacement before destroying the old renderer', () => {
+    const order: string[] = []
+    const current = { destroy() { order.push('destroy-old') } }
+    const next = swapBgRenderer(current, () => {
+      order.push('build-new')
+      return { destroy() { order.push('destroy-new') } }
+    })
+    expect(order).toEqual(['build-new', 'destroy-old'])
+    expect(next).not.toBe(current)
+  })
+
+  it('keeps the current renderer when the build fails', () => {
+    const current = { destroy: () => { throw new Error('must not be called') } }
+    expect(swapBgRenderer(current, () => null)).toBe(current)
+  })
+
+  it('returns the new renderer when there was nothing mounted', () => {
+    const next = { destroy() {} }
+    expect(swapBgRenderer(null, () => next)).toBe(next)
   })
 })
 
