@@ -18,7 +18,8 @@ import { DEFAULT_CONFIG, type ConversationSearchItem, type ConversationSearchKin
 import { createUsageRow, dayKey, mergeUsageRow } from '../usage.ts'
 import { DEEPSEEK_PRICING_CHECKED_ON, DEEPSEEK_PRICING_SOURCE_URL, estimateUsageCostCny, usageCostBreakdown } from '../pricing.ts'
 import { DARK_CANVAS_LIGHTNESS, hexToRgb, PALETTE, toDarkRamp } from './palette.ts'
-import { bgLayerTint, decideBgLayer, mountBgLayer, unmountBgLayer, type BgLayerCaps, type BgLayerDocLike } from './bg-layer.ts'
+import { bgLayerTint, decideBgLayer, mountBgLayer, unmountBgLayer, type BgLayerCaps, type BgLayerDocLike, type BgLayerVerdict } from './bg-layer.ts'
+import { createAsciiBackdrop, type AsciiBackdrop, type AsciiDocLike, type AsciiWinLike } from './bg-ascii.ts'
 import {
   apiBalanceGet,
   apiBackupExport,
@@ -581,13 +582,23 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
         tokenDisposer = theme.overrideTokens('custom-plugin-appearance', NEUTRAL_TOKENS)
       }
     }
+    // The background layer paints its own opaque surface while mounted, so
+    // `body` must stay transparent. With the layer off the body keeps the
+    // family surface exactly as before — that is the "turn it off and the page
+    // fully reverts" contract. The verdict is computed once here and handed to
+    // the layer so the CSS and the DOM can never disagree on whether it mounts.
+    const bgVerdict = decideBgLayer(bgFxEnabled(cfg.bgFx), bgFxCaps())
     let dyn = ''
     if (cfg.bg !== undefined && cfg.bg !== 'default') {
       const base = (PALETTE.find((p) => p[0] === cfg.bg) ?? PALETTE[0])[1]
       // Dark mode derives the same family's dark variant; S.dark is kept in
       // step with the GUI theme (applyDark) and re-runs this painter.
       const surface = S.dark === true ? toDarkRamp(base, DARK_CANVAS_LIGHTNESS) : base
-      dyn += ` body { background-color: ${surface} !important; }`
+      dyn += bgVerdict.mount
+        ? ' body { background-color: transparent !important; }'
+        : ` body { background-color: ${surface} !important; }`
+    } else if (bgVerdict.mount) {
+      dyn += ' body { background-color: transparent !important; }'
     }
     if (cfg.globalGlass === true) {
       // In liquid mode the same SVG displacement chain as the plugin's own
@@ -601,28 +612,33 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       dyn += ` [role='dialog'], [role='menu'], [role='tooltip'], [role='listbox'], [data-radix-popper-content-wrapper] { backdrop-filter: ${filter} !important; -webkit-backdrop-filter: ${filter} !important; }`
     }
     setDynCss(dyn)
-    syncBackgroundLayer()
+    syncBackgroundLayer(bgVerdict)
   }
 
-  // The WebGL probe creates a throwaway context; cache the verdict because
+  // The 2D-canvas probe creates a throwaway context; cache the verdict because
   // probing on every appearance repaint would burn the browser's live-context
   // budget for no gain, and a failed probe is final for the page lifetime.
-  let bgFxWebgl: boolean | null = null
+  let bgFxCanvas2d: boolean | null = null
   function bgFxCaps(): BgLayerCaps {
     const w = typeof window !== 'undefined' ? window : null
     const d = typeof document !== 'undefined' ? document : null
-    if (bgFxWebgl === null) {
+    if (bgFxCanvas2d === null) {
       try {
         const probe = d !== null ? d.createElement('canvas') : null
-        const gl = probe !== null ? (probe.getContext('webgl2') ?? probe.getContext('webgl')) : null
-        bgFxWebgl = gl !== null
+        bgFxCanvas2d = probe !== null && probe.getContext('2d') !== null
       } catch {
-        bgFxWebgl = false
+        bgFxCanvas2d = false
       }
     }
     const reducedMotion = w !== null && typeof w.matchMedia === 'function'
       && w.matchMedia('(prefers-reduced-motion: reduce)').matches
-    return { webgl: bgFxWebgl === true, reducedMotion, hidden: d !== null && d.hidden === true }
+    return { canvas2d: bgFxCanvas2d === true, reducedMotion, hidden: d !== null && d.hidden === true }
+  }
+
+  /** `'shader'` is reserved; until the WebGL tier lands it runs the ASCII
+   * renderer rather than mounting a node with nothing to draw. */
+  function bgFxEnabled(mode: CustomPluginConfig['bgFx']): boolean {
+    return mode === 'ascii' || mode === 'shader'
   }
 
   /**
@@ -633,15 +649,37 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
    * shell's z-index:20 layer, so a negative z-index there would still paint
    * above the content it has to stay behind.
    */
-  function syncBackgroundLayer(): void {
+  let bgRenderer: AsciiBackdrop | null = null
+  function syncBackgroundLayer(verdict: BgLayerVerdict): void {
     const d = typeof document !== 'undefined' ? document : null
     if (d === null) return
-    const verdict = decideBgLayer(S.cfg.bgFx === true, bgFxCaps())
     if (!verdict.mount) {
+      // Tear the renderer down before the host node: it owns the canvas,
+      // rAF handle, listeners, observer, atlas and level buffer.
+      if (bgRenderer !== null) {
+        try { bgRenderer.destroy() } catch { /* canvas already detached */ }
+        bgRenderer = null
+      }
       unmountBgLayer(d as unknown as BgLayerDocLike)
       return
     }
-    mountBgLayer(d as unknown as BgLayerDocLike, verdict, bgLayerTint(S.cfg.bg, S.dark === true))
+    const w = typeof window !== 'undefined' ? window : null
+    if (w === null) return
+    const host = mountBgLayer(d as unknown as BgLayerDocLike, verdict, bgLayerTint(S.cfg.bg, S.dark === true))
+    const preset = S.cfg.bgFxPreset === 'static' ? 'static' : 'flow'
+    if (bgRenderer === null) {
+      bgRenderer = createAsciiBackdrop({
+        doc: d as unknown as AsciiDocLike,
+        win: w as unknown as AsciiWinLike,
+        host,
+        preset,
+      })
+    } else {
+      bgRenderer.setPreset(preset)
+    }
+    // Always re-read motion + tint: a palette or theme flip has to repaint the
+    // still frame too, otherwise a paused/static layer keeps stale colors.
+    bgRenderer.sync()
   }
 
   function syncAntiScroll(on: boolean): void {
@@ -2899,7 +2937,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       d.addEventListener('keydown', onKey)
       return () => d.removeEventListener('keydown', onKey)
     }, [])
-    React.useEffect(() => { if (booted) applyAppearance() }, [booted, cfg.bg, cfg.bgFx, cfg.glass, cfg.glassMode, cfg.globalGlass, dark])
+    React.useEffect(() => { if (booted) applyAppearance() }, [booted, cfg.bg, cfg.bgFx, cfg.bgFxPreset, cfg.glass, cfg.glassMode, cfg.globalGlass, dark])
     React.useEffect(() => {
       syncAntiScroll(cfg.antiScroll === true)
       // Unmount/disable must restore scroll-behavior on every element this
@@ -3107,6 +3145,12 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       // The background layer is a page-global node created by the appearance
       // painter, not by a slot surface: the host can unmount slot entries
       // after this disposer, so React effect cleanup may never run for it.
+      // The renderer goes first (canvas, rAF, listeners, observer, atlas,
+      // level buffer), then the host node that contained the canvas.
+      if (bgRenderer !== null) {
+        try { bgRenderer.destroy() } catch { /* canvas already detached */ }
+        bgRenderer = null
+      }
       try { unmountBgLayer(d as unknown as BgLayerDocLike) } catch { /* node already gone */ }
     }
     removeDynCss()

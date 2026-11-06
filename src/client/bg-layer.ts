@@ -12,8 +12,8 @@
  * `.pI_x6G_overlayLayer` (`z-index:20`), so its 2147483000 only orders plugin
  * surfaces locally and native dialogs at z1000 paint above it.
  *
- * Phase 1 owns the layer, its config path and the degradation gates only:
- * no canvas, no requestAnimationFrame, no GLSL.
+ * Phase 1 owns the layer, its config path and the degradation gates; Phase 2
+ * adds the ASCII canvas renderer inside this node (see `bg-ascii.ts`).
  * @module @alexpeng/dsh-custom-plugin/client/bg-layer
  */
 
@@ -27,26 +27,26 @@ export type BgLayerMotion = 'animated' | 'static' | 'paused'
 
 /** Environment facts the gates read; injected so tests need no DOM. */
 export interface BgLayerCaps {
-  readonly webgl: boolean
+  readonly canvas2d: boolean
   readonly reducedMotion: boolean
   readonly hidden: boolean
 }
 
 /** Whether the layer may mount, and if so the motion state to record. */
 export type BgLayerVerdict =
-  | { readonly mount: false; readonly reason: 'disabled' | 'no-webgl' }
+  | { readonly mount: false; readonly reason: 'disabled' | 'no-canvas' }
   | { readonly mount: true; readonly motion: BgLayerMotion }
 
 /**
  * Decide whether the background layer may exist. The layer is off by
- * convention: `bgFx` starts `false`, so an untouched install never creates a
- * DOM node. Without WebGL the renderer has nothing to draw and the plain body
- * tint is the documented fallback; mounting an empty node would add surface
- * without value.
+ * convention: `bgFx` starts `'none'`, so an untouched install never creates a
+ * DOM node. Without a 2D canvas context the ASCII renderer has nothing to
+ * draw and the plain body tint is the documented fallback; mounting an empty
+ * node would add surface without value.
  */
 export function decideBgLayer(enabled: boolean, caps: BgLayerCaps): BgLayerVerdict {
   if (!enabled) return { mount: false, reason: 'disabled' }
-  if (!caps.webgl) return { mount: false, reason: 'no-webgl' }
+  if (!caps.canvas2d) return { mount: false, reason: 'no-canvas' }
   const motion: BgLayerMotion = caps.hidden ? 'paused' : caps.reducedMotion ? 'static' : 'animated'
   return { mount: true, motion }
 }
@@ -67,8 +67,15 @@ export function bgLayerTint(bg: string | undefined, dark: boolean): string {
 export interface BgLayerElementLike {
   id: string
   className: string
+  readonly clientWidth: number
+  readonly clientHeight: number
   setAttribute(name: string, value: string): void
-  style: { setProperty(name: string, value: string): void }
+  getAttribute(name: string): string | null
+  appendChild(node: unknown): unknown
+  style: {
+    setProperty(name: string, value: string): void
+    getPropertyValue(name: string): string
+  }
   remove(): void
 }
 

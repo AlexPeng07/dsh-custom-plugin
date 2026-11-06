@@ -1,9 +1,9 @@
 /**
  * Invariant tests for the page-background layer skeleton: the layer is off
- * unless `bgFx` is explicitly true, the WebGL gate is a real gate, the node
- * is created at most once, and unmount leaves nothing behind. The DOM is
- * faked structurally because vitest runs in a node environment and the
- * module deliberately touches only four DOM operations.
+ * unless `bgFx` is enabled, the 2D-canvas gate is a real gate, the node is
+ * created at most once, and unmount leaves nothing behind. The DOM is faked
+ * structurally because vitest runs in a node environment and the module
+ * deliberately touches only a handful of DOM operations.
  * @module @alexpeng/dsh-custom-plugin/tests/bg-layer
  */
 
@@ -14,6 +14,7 @@ import { DARK_CANVAS_LIGHTNESS, PALETTE, toDarkRamp } from '../src/client/palett
 interface FakeElement extends BgLayerElementLike {
   attrs: Map<string, string>
   props: Map<string, string>
+  children: FakeElement[]
   removed: boolean
 }
 
@@ -25,11 +26,19 @@ function fakeElement(): FakeElement {
   const el: FakeElement = {
     id: '',
     className: '',
+    clientWidth: 1440,
+    clientHeight: 900,
     attrs: new Map<string, string>(),
     props: new Map<string, string>(),
+    children: [],
     removed: false,
     setAttribute(name: string, value: string) { el.attrs.set(name, value) },
-    style: { setProperty(name: string, value: string) { el.props.set(name, value) } },
+    getAttribute(name: string) { return el.attrs.get(name) ?? null },
+    appendChild(node: unknown) { el.children.push(node as FakeElement); return node },
+    style: {
+      setProperty(name: string, value: string) { el.props.set(name, value) },
+      getPropertyValue(name: string) { return el.props.get(name) ?? '' },
+    },
     remove() { el.removed = true },
   }
   return el
@@ -45,15 +54,15 @@ function fakeDoc(): FakeDoc {
   }
 }
 
-const CAPS = { webgl: true, reducedMotion: false, hidden: false }
+const CAPS = { canvas2d: true, reducedMotion: false, hidden: false }
 
 describe('decideBgLayer', () => {
-  it('is off unless bgFx is explicitly true, even when every capability is present', () => {
+  it('is off unless bgFx is enabled, even when every capability is present', () => {
     expect(decideBgLayer(false, CAPS)).toEqual({ mount: false, reason: 'disabled' })
   })
 
-  it('does not mount without WebGL — the body tint is the documented fallback', () => {
-    expect(decideBgLayer(true, { ...CAPS, webgl: false })).toEqual({ mount: false, reason: 'no-webgl' })
+  it('does not mount without a 2D canvas context — the body tint is the documented fallback', () => {
+    expect(decideBgLayer(true, { ...CAPS, canvas2d: false })).toEqual({ mount: false, reason: 'no-canvas' })
   })
 
   it('animates only when motion is allowed', () => {

@@ -99,6 +99,19 @@ export function toDarkRamp(hex: string, lightness: number): string {
   return '#' + [r, g, b].map((v) => v.toString(16).padStart(2, '0')).join('')
 }
 
+/**
+ * Character ink for the ASCII backdrop: the surface keeps its hue, saturation
+ * is compressed the same way the dark ramp compresses it, and lightness moves
+ * by a fixed delta (up on dark surfaces, down on light ones). The target is
+ * "visible but not competing with body text", not WCAG text contrast.
+ */
+export function inkFor(surfaceHex: string, dark: boolean): string {
+  const [h, s, l] = rgbToHsl(hexToRgb(surfaceHex))
+  const targetL = Math.max(0.04, Math.min(0.96, l + (dark ? 0.11 : -0.13)))
+  const [r, g, b] = hslToRgb(h, Math.max(0, Math.min(1, s * DARK_SATURATION_SCALE)), targetL)
+  return '#' + [r, g, b].map((v) => v.toString(16).padStart(2, '0')).join('')
+}
+
 /** Body-canvas lightness for the dark variant of a palette family. */
 export const DARK_CANVAS_LIGHTNESS = 0.12
 

@@ -69,16 +69,42 @@ daily token usage.
   every content surface. Those surfaces are 0.5–0.62 alpha only with glass on,
   so with `glass:false` the layer is fully covered — by design, not a bug.
   `applyAppearance` creates/updates it through `src/client/bg-layer.ts`
-  (`decideBgLayer` / `mountBgLayer`), and the disposer removes it with
-  `unmountBgLayer` because slot unmount can run after the disposer. Config is
-  the flat boolean `bgFx` (default `false`; nested values are silently dropped
-  by `normalizeCfg`, old archives fall back to the default, no migration).
-  Gates: no WebGL → don't mount (the body tint stays the fallback);
-  `prefers-reduced-motion` → `data-vx-bg-motion="static"`; hidden → `"paused"`;
-  theme palettes flow in through `--vx-bg-tint` (`bgLayerTint` uses
-  `toDarkRamp`). Phase 1 ships no canvas, no rAF and no third-party GL library;
-  the renderer step must honour that motion attribute and pause on
-  `visibilitychange`.
+  (`decideBgLayer` / `mountBgLayer`), and the disposer destroys the renderer and
+  then calls `unmountBgLayer` because slot unmount can run after the disposer.
+  Config is `bgFx: 'none' | 'ascii' | 'shader'` (default `'none'`) plus
+  `bgFxPreset: 'flow' | 'static'` (default `'flow'`); a Phase 1 boolean archive
+  migrates `true → 'ascii'`, `false → 'none'`, any other string/value falls
+  back to `'none'`. `'shader'` is reserved and currently renders the ASCII tier.
+  Gate is a 2D canvas context (`canvas2d`, not WebGL): without it the layer does
+  not mount and the body tint stays; `prefers-reduced-motion` →
+  `data-vx-bg-motion="static"`; hidden → `"paused"`; theme palettes flow in
+  through `--vx-bg-tint` (`bgLayerTint` uses `toDarkRamp`).
+- The renderer is `src/client/bg-ascii.ts`, mounted as one canvas inside
+  `#vx-bg`. The effect contract is `(t, out: Uint8Array, cols, rows) => void`:
+  pieces write ramp levels, never strings, into one reused buffer. Glyphs are
+  pre-baked into one per-level atlas (single ink colour from `inkFor`, whose
+  ΔL is 0.13; the light theme reverses both the glyph order and the alpha ramp),
+  so a frame is one `fillRect` plus one `drawImage` per non-empty tile — no
+  per-frame allocation. Grid cell comes from measuring 50 `M` advances
+  (`cellH = fontPx × 1.15`), DPR is capped at 2, `density` multiplies the cell
+  size, and `MAX_COLS = 240` / `MAX_ROWS = 96` widen the cell rather than
+  truncating the grid.
+- The degradation ladder is fixed and only moves down: L1 fps 24→15, L2
+  density ×0.75, L3 mono (already satisfied by the single-ink atlas), L4 dither
+  off, L5 one static frame and `cancelAnimationFrame`, L6 surface only. A rung
+  steps after two consecutive 60-frame windows whose mean interval exceeds
+  `budget × 1.6`; a good window clears one bad window; `setPreset` resets to
+  L0. L6 is not reachable from the automatic ladder because L5 already stops
+  rAF; it exists for the explicit off path. Hidden stops rAF and freezes
+  accumulated time; resume paints immediately; a theme flip rebuilds the atlas
+  and repaints even in static mode. Teardown covers the canvas, rAF, resize
+  timer, `visibilitychange`, the reduced-motion and resolution queries, the
+  `ResizeObserver`, the atlas/probe canvases, and the levels buffer.
+  `body{background-color:transparent}` applies only while the verdict mounts;
+  with `bgFx:'none'` the page is pixel-identical to the pre-renderer baseline
+  (live A/B diff, 2026-11-06). Phase 2 ships `flow` and `static` only; rain /
+  ocean / starfield / ripple presets, the shader tier and the custom panel are
+  deferred.
 - The client store fan-out stays a single listener set; per-turn hot paths
   (`TurnTailEntry`) and the FX canvas subscribe through `useSSelector` so an
   unrelated balance/toast write does not re-render every turn-tail row.

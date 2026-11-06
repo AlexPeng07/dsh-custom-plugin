@@ -8,14 +8,38 @@ follow [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- **背景动效骨架（默认关闭）**：新增扁平配置 `bgFx`（默认 `false`；旧存档缺字段
-  即关闭，非布尔值被形状门丢弃），以及 `src/client/bg-layer.ts` 的决策门
-  （关闭 / 无 WebGL / `animated` / `static` / `paused`）、幂等挂载/卸载与主题取色。
+- **背景动效骨架（默认关闭）**：扁平配置 `bgFx: 'none' | 'ascii' | 'shader'`
+  （默认 `'none'`），以及 `src/client/bg-layer.ts` 的决策门
+  （关闭 / 无 2D canvas / `animated` / `static` / `paused`）、幂等挂载/卸载与主题取色。
   层是 `<body>` 下的 `div#vx-bg`（`position:fixed; z-index:-1; pointer-events:none;
-  aria-hidden`），由 `applyAppearance` 同步、插件 disposer 移除；骨架不含 canvas、
-  rAF 或第三方库，开启也不改变任何可见像素。
+  aria-hidden`），由 `applyAppearance` 同步、插件 disposer 移除；默认关闭时不含
+  canvas、rAF 或第三方库，也不改变任何可见像素。
+- **ASCII 渲染器（Phase 2）**：`src/client/bg-ascii.ts` 在 `#vx-bg` 内挂一块 canvas。
+  效果函数只向复用的 `Uint8Array` 写等级（不产出字符串），glyph 按等级预烘焙进
+  单块 atlas（单一墨色 `inkFor`，ΔL 0.13；浅色主题同时反转字形与透明度斜坡），
+  每帧仅一次 `fillRect` + 每非空格一次 `drawImage`，无逐帧小分配。网格由实测等宽
+  字体的 `advance` 定 cell（`cellH = fontPx × 1.15`），DPR 上限 2，`density` 乘在
+  cell 尺寸上，`cols/rows` 硬上限 240/96 且超限时放大 cell 而不是截断。先只提供
+  `flow`（默认可动）与 `static`（一次性静止帧，零 rAF）；系统预设与自定义面板留待
+  下一阶段。
+- **固定降级阶梯（只降不升）**：L1 fps 24→15、L2 密度 ×0.75、L3 单色（ASCII 档
+  已是单墨色）、L4 关抖动、L5 画一帧后停 rAF、L6 只留底色。60 帧滑窗均值超过
+  `budget × 1.6` 记为坏窗，连续 2 个坏窗降一档；好窗抵消一个坏窗；切换预设回到
+  L0。L6 不在自动路径上（L5 已停 rAF），仅保留给显式关闭路径。
+- **动效生命周期与回收**：读取 `data-vx-bg-motion` 与 `--vx-bg-tint`；
+  `visibilitychange` 隐藏时停 rAF 并冻结累计时间，返回时立即补画一帧；
+  `prefers-reduced-motion` 与 `static` 预设都只画静止帧；主题切换重建 atlas 并立即
+  重绘。卸载回收 canvas、rAF、resize 定时器、`visibilitychange`、reduced-motion 与
+  resolution 查询、`ResizeObserver`、atlas/probe 画布和等级缓冲，并已并入
+  `custom.tsx` 底部 disposer。
 
 ### Changed
+
+- **背景配置改为枚举**：`bgFx` 从布尔迁移为 `'none' | 'ascii' | 'shader'`
+  （默认 `'none'`；旧存档 `true → 'ascii'`、`false → 'none'`，未知值回落
+  `'none'`），新增 `bgFxPreset: 'flow' | 'static'`（默认 `'flow'`）。`'shader'`
+  预留，当前仍走 ASCII 档。挂载门从 WebGL 改为 2D canvas；`body` 只在背景真正
+  挂载时透明，`bgFx:'none'` 与渲染器落地前的页面逐像素一致（活体 A/B 实测差 0）。
 
 - **构建与测试队列切到 dsh 0.2.1-rc.5**：九个 `@deepseek-ai/dsh-*` devDependencies
   从 0.2.1-rc.3 升到 0.2.1-rc.5；`pnpm-workspace.yaml` 为同日发布的 35 个
@@ -36,7 +60,14 @@ follow [Semantic Versioning](https://semver.org/).
   会话相关链路因尚无宿主注册会话跳过。探针前后状态文件逐字段一致。
 - 平台 seed 表 11 项与 `PLATFORM_MODULES` 完全一致（从 Desktop asar 的
   `dsh-web-frontend` bundle 读取）。
-- `pnpm check:readme`、`pnpm typecheck`、`pnpm test`（214）、`pnpm build`、
+- 背景 ASCII 渲染器在隔离 dsh 0.2.1-rc.5 活体宿主（1440×900，有会话）实测：
+  `flow` 空闲 10 秒 24.27 fps、帧间隔 p50 41.1 ms / p95 45.4 ms / max 45.8 ms，
+  0 掉帧、0 long task；6 秒连续滚动 24.33 fps、p95 45.5 ms、0 掉帧；6 秒逐字
+  流式追加 24.51 fps、p95 45.5 ms、0 掉帧。隐藏 2.5 秒内 0 帧，返回后立即恢复
+  24 fps；`prefers-reduced-motion`/`static` 档 3 秒 0 帧但保留静止画面。DPR 2 与
+  3 均按 2 渲染（backing 2880×1800）。关闭 `bgFx` 后 `#vx-bg` 与 canvas 消失，
+  `body` 回到 `rgb(233,235,238)`，全页与渲染器落地前基线逐像素差 0。
+- `pnpm check:readme`、`pnpm typecheck`、`pnpm test`（243）、`pnpm build`、
   `pnpm smoke` 全绿。
 
 ## 0.9.3 — 2026-10-26

@@ -48,6 +48,11 @@ export function normalizeCfg(raw: unknown): CustomPluginConfig {
       if (typeof value === 'string') (cfg as Record<string, unknown>)[key] = value
     }
   }
+  // Background mode is an enum, not "any string". A Phase 1 archive stored
+  // it as a boolean; map that first so the user's on/off choice survives.
+  if (typeof src.bgFx === 'boolean') cfg.bgFx = src.bgFx ? 'ascii' : 'none'
+  if (cfg.bgFx !== 'none' && cfg.bgFx !== 'ascii' && cfg.bgFx !== 'shader') cfg.bgFx = 'none'
+  if (cfg.bgFxPreset !== 'flow' && cfg.bgFxPreset !== 'static') cfg.bgFxPreset = 'flow'
   // Budget values are user-facing numeric settings. Keep malformed or stale
   // values inside the documented range even when they came from an older
   // state file or an external backup.

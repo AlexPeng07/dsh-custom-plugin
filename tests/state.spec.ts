@@ -59,13 +59,25 @@ describe('normalizeCfg', () => {
     expect(normalizeCfg({ monthlyBudgetCny: -1, budgetWarningPercent: 101 })).toMatchObject({ monthlyBudgetCny: 0, budgetWarningPercent: 100 })
   })
 
-  it('defaults the background layer off and rejects non-boolean values', () => {
+  it('defaults the background layer off and accepts only the mode enum', () => {
     // Old archives have no bgFx key: the layer must stay inert.
-    expect(normalizeCfg({}).bgFx).toBe(false)
-    expect(normalizeCfg({ bgFx: true }).bgFx).toBe(true)
-    // The flat cfg gate drops nested shapes silently; a string is not a switch.
-    expect(normalizeCfg({ bgFx: 'yes' }).bgFx).toBe(false)
-    expect(normalizeCfg({ bgFx: { preset: 'aurora' } }).bgFx).toBe(false)
+    expect(normalizeCfg({}).bgFx).toBe('none')
+    expect(normalizeCfg({ bgFx: 'ascii' }).bgFx).toBe('ascii')
+    expect(normalizeCfg({ bgFx: 'none' }).bgFx).toBe('none')
+    // They may store a Phase 1 boolean; that on/off choice must survive.
+    expect(normalizeCfg({ bgFx: true }).bgFx).toBe('ascii')
+    expect(normalizeCfg({ bgFx: false }).bgFx).toBe('none')
+    // Anything outside the enum is not a mode.
+    expect(normalizeCfg({ bgFx: 'yes' }).bgFx).toBe('none')
+    expect(normalizeCfg({ bgFx: { preset: 'aurora' } }).bgFx).toBe('none')
+  })
+
+  it('accepts only the preset enum and defaults it to flow', () => {
+    expect(normalizeCfg({}).bgFxPreset).toBe('flow')
+    expect(normalizeCfg({ bgFxPreset: 'flow' }).bgFxPreset).toBe('flow')
+    expect(normalizeCfg({ bgFxPreset: 'static' }).bgFxPreset).toBe('static')
+    expect(normalizeCfg({ bgFxPreset: 'rain' }).bgFxPreset).toBe('flow')
+    expect(normalizeCfg({ bgFxPreset: 3 }).bgFxPreset).toBe('flow')
   })
 })
 

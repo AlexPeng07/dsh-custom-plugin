@@ -29,6 +29,16 @@ export const STATIC_CSS = `/* dsh-custom-plugin static styles. Every rule is glo
     background: transparent;
     z-index: -1;
   }
+  /* The ASCII renderer owns this canvas. It stretches to the layer and paints
+     its own opaque surface, which is why applyAppearance makes body
+     transparent while the layer is mounted. */
+  .vx-bg > canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
   .vx-fx {
     position: absolute;
     inset: 0;
