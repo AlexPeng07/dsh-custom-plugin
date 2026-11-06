@@ -16,12 +16,21 @@ follow [Semantic Versioning](https://semver.org/).
   canvas、rAF 或第三方库，也不改变任何可见像素。
 - **ASCII 渲染器（Phase 2）**：`src/client/bg-ascii.ts` 在 `#vx-bg` 内挂一块 canvas。
   效果函数只向复用的 `Uint8Array` 写等级（不产出字符串），glyph 按等级预烘焙进
-  单块 atlas（单一墨色 `inkFor`，ΔL 0.13；浅色主题同时反转字形与透明度斜坡），
+  单块 atlas（单一墨色 `inkFor`，ΔL 0.13；level 0 恒为空白字形，主题只换墨色），
   每帧仅一次 `fillRect` + 每非空格一次 `drawImage`，无逐帧小分配。网格由实测等宽
   字体的 `advance` 定 cell（`cellH = fontPx × 1.15`），DPR 上限 2，`density` 乘在
   cell 尺寸上，`cols/rows` 硬上限 240/96 且超限时放大 cell 而不是截断。先只提供
   `flow`（默认可动）与 `static`（一次性静止帧，零 rAF）；系统预设与自定义面板留待
   下一阶段。
+- **ASCII 系统预设（Phase 3a）**：新增 `rain` / `ocean` / `starfield` / `ripple`
+  四套独立效果（各自一种画面语言，不是同一算法换参数）：`rain` 逐列下落雨丝
+  （亮头 + 二次淡出拖尾、14% 空列、16 级 `classic` ramp）；`ocean` 低频横向波涌
+  + 固定泡沫点（`dots` + 抖动）；`starfield` 稀疏视差星场（空白格 >50%，不开
+  抖动）；`ripple` 三固定中心同心环（`CELL_ASPECT = 1.9` 校正单元纵横比、关抖动
+  保等值线）。墨色仍只由 surface 亮度按固定 ΔL 派生，浅色/深色与全部色板下都成立，
+  没有霓虹或高饱和撞色。每套 spec 附带可写的 `ranges`（`density`/`speed`/`fps`/
+  `fontPx`/`opacity` 上下限）与默认值，留给下一阶段的自定义面板；配置仍是扁平
+  boolean/number/string。
 - **固定降级阶梯（只降不升）**：L1 fps 24→15、L2 密度 ×0.75、L3 单色（ASCII 档
   已是单墨色）、L4 关抖动、L5 画一帧后停 rAF、L6 只留底色。60 帧滑窗均值超过
   `budget × 1.6` 记为坏窗，连续 2 个坏窗降一档；好窗抵消一个坏窗；切换预设回到
@@ -37,9 +46,19 @@ follow [Semantic Versioning](https://semver.org/).
 
 - **背景配置改为枚举**：`bgFx` 从布尔迁移为 `'none' | 'ascii' | 'shader'`
   （默认 `'none'`；旧存档 `true → 'ascii'`、`false → 'none'`，未知值回落
-  `'none'`），新增 `bgFxPreset: 'flow' | 'static'`（默认 `'flow'`）。`'shader'`
+  `'none'`），新增 `bgFxPreset: 'flow' | 'rain' | 'ocean' | 'starfield' | 'ripple' |
+  'static'`（默认 `'flow'`，未知 id 回落 `'flow'`）。`'shader'`
   预留，当前仍走 ASCII 档。挂载门从 WebGL 改为 2D canvas；`body` 只在背景真正
   挂载时透明，`bgFx:'none'` 与渲染器落地前的页面逐像素一致（活体 A/B 实测差 0）。
+
+- **等级语义统一（修正 Phase 2 浅色主题反转）**：level 0 在浅色与深色主题都渲染为
+  空白字形，ramp 只随等级增加墨密度；主题切换只换墨色（`inkFor`），不再反转字形
+  与 alpha 斜坡。此前浅色主题会把空白格画成最密字形，导致 `rain`/`starfield`
+  的空白帧被铺满（rain 每帧 14,010 次 blit）；修正后 rain 3,490、starfield 280。
+- **预设切换复用**：`setPreset` 只重置降级阶梯，复用同一 canvas、等级缓冲与网格；
+  atlas 仅在 key（charset/ink/theme/dpr/tile 尺寸/fontPx/opacity）变化时重建，
+  切换后立即按当前 motion 补画一帧（静止档停 rAF，动效档重启 rAF），不会白屏或
+  残留上一套的帧。
 
 - **构建与测试队列切到 dsh 0.2.1-rc.5**：九个 `@deepseek-ai/dsh-*` devDependencies
   从 0.2.1-rc.3 升到 0.2.1-rc.5；`pnpm-workspace.yaml` 为同日发布的 35 个
@@ -67,8 +86,20 @@ follow [Semantic Versioning](https://semver.org/).
   24 fps；`prefers-reduced-motion`/`static` 档 3 秒 0 帧但保留静止画面。DPR 2 与
   3 均按 2 渲染（backing 2880×1800）。关闭 `bgFx` 后 `#vx-bg` 与 canvas 消失，
   `body` 回到 `rgb(233,235,238)`，全页与渲染器落地前基线逐像素差 0。
+- ASCII 六档预设在同一隔离 0.2.1-rc.5 活体宿主（1440×900，DPR 1，浅色）逐套实测
+  （每套 POST 配置后 reload，空闲 10 秒 + 6 秒合成滚动）：`flow` 23.98 fps、
+  p95 48.6 ms、每帧 7,490 blit；`rain` 23.98 fps、p95 42.8 ms、3,490 blit；
+  `ocean` 20.58 fps、p95 49.7 ms、3,009 blit；`starfield` 14.41 fps、p95 70.5 ms、
+  280 blit；`ripple` 20.58 fps、p95 55.7 ms、7,824 blit。全部 0 掉帧
+  （>100 ms / >150 ms 均为 0）、0 long task；`ocean`/`starfield`/`ripple` 的低帧率
+  是预设自定的节奏（20/15/20 fps），p95 与目标帧间隔一致，不是性能受限。
+  浅色/深色与各色板截图逐套留存；像素亮度 min 202–206、max 235，墨色随 surface
+  派生，无高饱和撞色。
 - `pnpm check:readme`、`pnpm typecheck`、`pnpm test`（243）、`pnpm build`、
   `pnpm smoke` 全绿。
+- Phase 3a 后：`pnpm typecheck`、`pnpm test`（251，29 个文件，`bg-ascii` 23 项）、
+  `pnpm build`（`lib/client.js` 240.98 kB）、`pnpm check:readme`、`pnpm smoke`
+  全绿。
 
 ## 0.9.3 — 2026-10-26
 

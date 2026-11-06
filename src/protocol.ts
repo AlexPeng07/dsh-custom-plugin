@@ -26,10 +26,10 @@ export interface CustomPluginConfig {
    * string on purpose because `normalizeCfg` drops nested values; a Phase 1
    * boolean migrates (true → 'ascii', false → 'none'). */
   bgFx?: 'none' | 'ascii' | 'shader'
-  /** Which ASCII piece runs: 'flow' (animated, default) or 'static' (one
-   * still frame, no rAF). System presets stay behind this field until the
-   * settings panel lands. */
-  bgFxPreset?: 'flow' | 'static'
+  /** Which ASCII piece runs: 'flow' (animated, default), 'rain', 'ocean',
+   * 'starfield', 'ripple', or 'static' (one still frame, no rAF). Unknown
+   * values fall back to 'flow' in `normalizeCfg`. */
+  bgFxPreset?: 'flow' | 'rain' | 'ocean' | 'starfield' | 'ripple' | 'static'
   /** Weather overlay: 'none' | 'snow' | 'rain' | 'sakura'. */
   weather?: string
   /** Master glass toggle for the plugin's own surfaces. */

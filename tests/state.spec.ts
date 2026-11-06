@@ -76,7 +76,12 @@ describe('normalizeCfg', () => {
     expect(normalizeCfg({}).bgFxPreset).toBe('flow')
     expect(normalizeCfg({ bgFxPreset: 'flow' }).bgFxPreset).toBe('flow')
     expect(normalizeCfg({ bgFxPreset: 'static' }).bgFxPreset).toBe('static')
-    expect(normalizeCfg({ bgFxPreset: 'rain' }).bgFxPreset).toBe('flow')
+    for (const preset of ['rain', 'ocean', 'starfield', 'ripple']) {
+      expect(normalizeCfg({ bgFxPreset: preset }).bgFxPreset).toBe(preset)
+    }
+    // Retired or foreign ids degrade to the default instead of mounting an
+    // unknown piece.
+    expect(normalizeCfg({ bgFxPreset: 'clouds' }).bgFxPreset).toBe('flow')
     expect(normalizeCfg({ bgFxPreset: 3 }).bgFxPreset).toBe('flow')
   })
 })

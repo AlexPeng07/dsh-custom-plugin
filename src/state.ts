@@ -52,7 +52,11 @@ export function normalizeCfg(raw: unknown): CustomPluginConfig {
   // it as a boolean; map that first so the user's on/off choice survives.
   if (typeof src.bgFx === 'boolean') cfg.bgFx = src.bgFx ? 'ascii' : 'none'
   if (cfg.bgFx !== 'none' && cfg.bgFx !== 'ascii' && cfg.bgFx !== 'shader') cfg.bgFx = 'none'
-  if (cfg.bgFxPreset !== 'flow' && cfg.bgFxPreset !== 'static') cfg.bgFxPreset = 'flow'
+  // Preset ids are a closed set. Keep the client list in sync with
+  // `ASCII_PRESETS` in src/client/bg-ascii.ts; an unknown id degrades to the
+  // default rather than mounting a piece the renderer does not know.
+  const presets = ['flow', 'rain', 'ocean', 'starfield', 'ripple', 'static']
+  if (typeof cfg.bgFxPreset !== 'string' || !presets.includes(cfg.bgFxPreset)) cfg.bgFxPreset = 'flow'
   // Budget values are user-facing numeric settings. Keep malformed or stale
   // values inside the documented range even when they came from an older
   // state file or an external backup.

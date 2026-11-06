@@ -11,9 +11,11 @@ import { describe, expect, it } from 'vitest'
 import {
   ASCII_PRESETS,
   buildAtlas,
+  CHARSET,
   createAsciiBackdrop,
   createFlowPiece,
   createLadder,
+  createPresetPiece,
   DEGRADE_MAX,
   isDarkSurface,
   LADDER_BAD_WINDOWS,
@@ -27,6 +29,7 @@ import {
   type AsciiDocLike,
   type AsciiHostLike,
   type AsciiMediaQueryLike,
+  type AsciiPreset,
   type AsciiResizeObserverLike,
   type AsciiWinLike,
 } from '../src/client/bg-ascii.ts'
@@ -250,8 +253,104 @@ describe('createFlowPiece', () => {
   })
 })
 
+/** Render one preset frame into a fresh buffer at a fixed test grid. */
+function presetFrame(preset: AsciiPreset, t: number, cols = 60, rows = 24): { buf: Uint8Array; levels: number } {
+  const spec = ASCII_PRESETS[preset]
+  const levels = CHARSET[spec.charset].length
+  const buf = new Uint8Array(cols * rows)
+  createPresetPiece(preset, levels, spec.dither)(t, buf, cols, rows)
+  return { buf, levels }
+}
+
+/** How many distinct ramp levels a frame uses. */
+function distinctLevels(buf: Uint8Array): number {
+  return new Set(buf).size
+}
+
+describe('preset pieces', () => {
+  const animated: AsciiPreset[] = ['flow', 'rain', 'ocean', 'starfield', 'ripple']
+
+  it('writes in-range levels at both grid extremes for every preset', () => {
+    for (const preset of [...animated, 'static'] as AsciiPreset[]) {
+      const spec = ASCII_PRESETS[preset]
+      const levels = CHARSET[spec.charset].length
+      for (const [cols, rows] of [[1, 1], [MAX_COLS, MAX_ROWS], [1, MAX_ROWS], [MAX_COLS, 1]]) {
+        const buf = new Uint8Array(cols * rows)
+        // Two very different times exercise the modulo/drift arithmetic.
+        for (const t of [0, 12345.678]) {
+          createPresetPiece(preset, levels, spec.dither)(t, buf, cols, rows)
+          expect(buf).toHaveLength(cols * rows)
+          for (const value of buf) expect(value).toBeLessThan(levels)
+        }
+      }
+    }
+  })
+
+  it('uses a non-degenerate level distribution for the dense presets', () => {
+    const flow = presetFrame('flow', 1)
+    expect(distinctLevels(flow.buf)).toBeGreaterThanOrEqual(4)
+
+    const rain = presetFrame('rain', 1)
+    expect(distinctLevels(rain.buf)).toBeGreaterThanOrEqual(6)
+    // The falling head must reach the top of the 16-level ramp.
+    expect(Math.max(...rain.buf)).toBeGreaterThanOrEqual(rain.levels - 2)
+
+    const ocean = presetFrame('ocean', 1)
+    expect(distinctLevels(ocean.buf)).toBeGreaterThanOrEqual(3)
+
+    const ripple = presetFrame('ripple', 1)
+    expect(distinctLevels(ripple.buf)).toBeGreaterThanOrEqual(3)
+  })
+
+  it('paints rain trails down columns, not across rows', () => {
+    const cols = 6
+    const rows = 12
+    const buf = new Uint8Array(cols * rows)
+    createPresetPiece('rain', CHARSET.classic.length, false)(0, buf, cols, rows)
+    expect(buf.some((value) => value > 0)).toBe(true)
+    for (let col = 0; col < cols; col++) {
+      const lit: number[] = []
+      for (let row = 0; row < rows; row++) {
+        if (buf[row * cols + col] > 0) lit.push(row)
+      }
+      // Every lit run in one column is contiguous: a transposed (column-major)
+      // write would scatter the trail across rows instead.
+      for (let k = 1; k < lit.length; k++) expect(lit[k]).toBe(lit[k - 1] + 1)
+    }
+  })
+
+  it('keeps starfield mostly blank while still placing bright stars', () => {
+    const { buf } = presetFrame('starfield', 3)
+    const blank = buf.reduce((count, value) => count + (value === 0 ? 1 : 0), 0)
+    expect(blank / buf.length).toBeGreaterThan(0.5)
+    expect(buf.some((value) => value >= 3)).toBe(true)
+  })
+
+  it('draws the same field for static at t=0 as flow at t=0', () => {
+    const stat = presetFrame('static', 0)
+    const flow = presetFrame('flow', 0)
+    expect(Array.from(stat.buf)).toEqual(Array.from(flow.buf))
+  })
+
+  it('keeps every preset default inside its writable bounds', () => {
+    for (const preset of Object.keys(ASCII_PRESETS) as AsciiPreset[]) {
+      const spec = ASCII_PRESETS[preset]
+      expect(spec.density).toBeGreaterThanOrEqual(spec.ranges.density.min)
+      expect(spec.density).toBeLessThanOrEqual(spec.ranges.density.max)
+      expect(spec.speed).toBeGreaterThanOrEqual(spec.ranges.speed.min)
+      expect(spec.speed).toBeLessThanOrEqual(spec.ranges.speed.max)
+      expect(spec.fps).toBeGreaterThanOrEqual(spec.ranges.fps.min)
+      expect(spec.fps).toBeLessThanOrEqual(spec.ranges.fps.max)
+      expect(spec.fontPx).toBeGreaterThanOrEqual(spec.ranges.fontPx.min)
+      expect(spec.fontPx).toBeLessThanOrEqual(spec.ranges.fontPx.max)
+      expect(spec.opacity).toBeGreaterThanOrEqual(spec.ranges.opacity.min)
+      expect(spec.opacity).toBeLessThanOrEqual(spec.ranges.opacity.max)
+    }
+  })
+})
+
 describe('buildAtlas', () => {
-  it('bakes one tile per level once, reverses the ramp on light surfaces and skips spaces', () => {
+  it('bakes one tile per level once and keeps level 0 blank in both themes', () => {
     const created: FakeCanvas[] = []
     const atlas = buildAtlas({
       createCanvas: () => { const canvas = fakeCanvas(); created.push(canvas); return canvas },
@@ -268,11 +367,11 @@ describe('buildAtlas', () => {
     expect(created).toHaveLength(1)
     expect(created[0].width).toBe(10 * 20)
     expect(created[0].height).toBe(28)
-    // Light theme: least ink (the space) sits at the top of the ramp.
-    expect(atlas?.glyphs[0]).toBe('@')
-    expect(atlas?.glyphs[9]).toBe(' ')
-    expect(atlas?.empty[9]).toBe(1)
-    expect(atlas?.empty[0]).toBe(0)
+    // Level 0 is always the blank glyph; the theme only changes the ink.
+    expect(atlas?.glyphs[0]).toBe(' ')
+    expect(atlas?.glyphs[9]).toBe('@')
+    expect(atlas?.empty[0]).toBe(1)
+    expect(atlas?.empty[9]).toBe(0)
     // Exactly the non-space tiles were painted into the atlas.
     expect(created[0].ctx.fillTextCount).toBe(9)
   })
@@ -358,6 +457,70 @@ describe('createAsciiBackdrop', () => {
     // At most one blit per cell per frame; spaces are skipped, never extra work.
     expect(main.ctx.drawImageCount).toBeLessThanOrEqual(backdrop.stats.cols * backdrop.stats.rows * backdrop.stats.frames)
 
+    backdrop.destroy()
+  })
+
+  it('reuses the canvas, grid and atlas when switching presets that share a ramp', () => {
+    const doc = fakeDoc()
+    const win = fakeWin(1)
+    const host = fakeHost()
+    host.attrs.set('data-vx-bg-motion', 'animated')
+    const backdrop = createAsciiBackdrop({ doc, win, host })
+    backdrop.sync()
+    const main = doc.created[0]
+    expect(backdrop.stats.frames).toBe(1)
+    expect(backdrop.stats.atlasBuilds).toBe(1)
+
+    // flow → ripple → static → flow all use blocks at density 0.75 / 12 px,
+    // so the atlas key never moves: zero rebakes, one immediate repaint each.
+    backdrop.setPreset('ripple')
+    expect(backdrop.stats.atlasBuilds).toBe(1)
+    expect(backdrop.stats.frames).toBe(2)
+
+    backdrop.setPreset('static')
+    expect(backdrop.stats.atlasBuilds).toBe(1)
+    expect(backdrop.stats.frames).toBe(3)
+    expect(win.rafCallbacks.size).toBe(0)
+
+    backdrop.setPreset('flow')
+    expect(backdrop.stats.atlasBuilds).toBe(1)
+    expect(backdrop.stats.frames).toBe(4)
+    expect(win.rafCallbacks.size).toBe(1)
+
+    // One canvas stayed attached; the switch never recreated it.
+    expect(host.children).toHaveLength(1)
+    expect(doc.created[0]).toBe(main)
+    expect(main.ctx.fillRectCount).toBe(4)
+    backdrop.destroy()
+  })
+
+  it('rebakes exactly once per ramp or cell-geometry change, then reuses it', () => {
+    const doc = fakeDoc()
+    const win = fakeWin(1)
+    const host = fakeHost()
+    host.attrs.set('data-vx-bg-motion', 'animated')
+    const backdrop = createAsciiBackdrop({ doc, win, host })
+    backdrop.sync()
+    expect(backdrop.stats.atlasBuilds).toBe(1)
+    expect(backdrop.stats.frames).toBe(1)
+
+    // rain: 16-level classic ramp at density 1 (new grid) → one rebake.
+    backdrop.setPreset('rain')
+    expect(backdrop.stats.atlasBuilds).toBe(2)
+    expect(backdrop.stats.frames).toBe(2)
+
+    // ocean: dots ramp at density 0.5 → one more rebake.
+    backdrop.setPreset('ocean')
+    expect(backdrop.stats.atlasBuilds).toBe(3)
+
+    // starfield shares the dots ramp and the 0.5 density with ocean.
+    backdrop.setPreset('starfield')
+    expect(backdrop.stats.atlasBuilds).toBe(3)
+    expect(backdrop.stats.frames).toBe(4)
+
+    // ripple returns to blocks at density 0.75 → one rebake.
+    backdrop.setPreset('ripple')
+    expect(backdrop.stats.atlasBuilds).toBe(4)
     backdrop.destroy()
   })
 

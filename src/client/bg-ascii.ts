@@ -13,9 +13,12 @@
  * frame rate → density → mono → dither → static frame → off — and never
  * climbs back on its own inside one session.
  *
- * Phase 2 ships two presets: `flow` (the animated default) and `static` (one
- * deterministic still frame, zero rAF). The remaining system presets and the
- * custom panel stay for the next phase.
+ * Phase 3a ships the ASCII system presets — `flow`, `rain`, `ocean`,
+ * `starfield`, `ripple`, plus the zero-rAF `static` tier. Each preset is its
+ * own piece (falling trails, horizontal swells, sparse stars, concentric
+ * rings), not the flow field with different knobs. Switching presets reuses
+ * the canvas and the grid buffer; the atlas is rebuilt only when the ramp,
+ * ink, theme or cell geometry changes.
  * @module @alexpeng/dsh-custom-plugin/client/bg-ascii
  */
 
@@ -44,8 +47,23 @@ export const CHARSET: Record<AsciiCharset, string> = {
   dots: ' .·•●',
 }
 
-/** The two tiers this phase implements. */
-export type AsciiPreset = 'flow' | 'static'
+/** Every ASCII piece id. `static` is the zero-rAF tier. */
+export type AsciiPreset = 'flow' | 'rain' | 'ocean' | 'starfield' | 'ripple' | 'static'
+
+/** Inclusive numeric bounds a future settings panel may write. */
+export interface AsciiRange {
+  readonly min: number
+  readonly max: number
+}
+
+/** Writable bounds per preset; defaults above sit inside these. */
+export interface AsciiPresetRanges {
+  readonly density: AsciiRange
+  readonly speed: AsciiRange
+  readonly fps: AsciiRange
+  readonly fontPx: AsciiRange
+  readonly opacity: AsciiRange
+}
 
 /** Tunables of one preset. */
 export interface AsciiPresetSpec {
@@ -56,14 +74,50 @@ export interface AsciiPresetSpec {
   readonly dither: boolean
   readonly opacity: number
   readonly fontPx: number
+  readonly ranges: AsciiPresetRanges
 }
 
-/** Flow is the default animated tier; static draws one deterministic frame. */
+/**
+ * System presets. `flow` is the default animated tier; `static` draws one
+ * deterministic flow frame (zero rAF). The other four are genuinely different
+ * pieces: vertical falling trails, horizontal swells, sparse parallax stars
+ * and concentric rings. `density` varies the cell size, so presets that share
+ * a charset and a density also share one baked atlas across a switch.
+ */
 export const ASCII_PRESETS: Record<AsciiPreset, AsciiPresetSpec> = {
   // Ink alpha stays 1: the subtlety comes from `inkFor`'s ΔL, not from fading
   // the whole canvas (which is what made the first live pass read as flat grey).
-  flow: { density: 0.75, speed: 1, fps: 24, charset: 'blocks', dither: true, opacity: 1, fontPx: 12 },
-  static: { density: 0.75, speed: 1, fps: 24, charset: 'blocks', dither: true, opacity: 1, fontPx: 12 },
+  flow: {
+    density: 0.75, speed: 1, fps: 24, charset: 'blocks', dither: true, opacity: 1, fontPx: 12,
+    ranges: { density: { min: 0.5, max: 1.5 }, speed: { min: 0, max: 2 }, fps: { min: 15, max: 30 }, fontPx: { min: 10, max: 16 }, opacity: { min: 0.6, max: 1 } },
+  },
+  rain: {
+    // Classic is the 16-level ramp: a long trail needs the extra steps, and
+    // at 16 levels ordered dithering adds grain instead of removing banding.
+    density: 1, speed: 1, fps: 24, charset: 'classic', dither: false, opacity: 1, fontPx: 12,
+    ranges: { density: { min: 0.75, max: 1.5 }, speed: { min: 0.5, max: 2 }, fps: { min: 15, max: 30 }, fontPx: { min: 10, max: 16 }, opacity: { min: 0.6, max: 1 } },
+  },
+  ocean: {
+    // Bigger cells (density 0.5) and the 5-level dot ramp keep the swell slow
+    // and wide; it shares that geometry + ramp with starfield.
+    density: 0.5, speed: 0.8, fps: 20, charset: 'dots', dither: true, opacity: 1, fontPx: 12,
+    ranges: { density: { min: 0.5, max: 1.25 }, speed: { min: 0.3, max: 1.5 }, fps: { min: 15, max: 24 }, fontPx: { min: 10, max: 16 }, opacity: { min: 0.6, max: 1 } },
+  },
+  starfield: {
+    // Almost all cells stay blank; low fps is invisible on a 0.12-cell/s drift.
+    density: 0.5, speed: 0.3, fps: 15, charset: 'dots', dither: false, opacity: 1, fontPx: 12,
+    ranges: { density: { min: 0.5, max: 1.25 }, speed: { min: 0, max: 1 }, fps: { min: 10, max: 20 }, fontPx: { min: 10, max: 16 }, opacity: { min: 0.6, max: 1 } },
+  },
+  ripple: {
+    // Same ramp + geometry as flow, so switching between the two never rebakes
+    // the atlas. No dither: it would speckle the contour bands.
+    density: 0.75, speed: 0.6, fps: 20, charset: 'blocks', dither: false, opacity: 1, fontPx: 12,
+    ranges: { density: { min: 0.5, max: 1.5 }, speed: { min: 0.2, max: 1.2 }, fps: { min: 15, max: 24 }, fontPx: { min: 10, max: 16 }, opacity: { min: 0.6, max: 1 } },
+  },
+  static: {
+    density: 0.75, speed: 0, fps: 24, charset: 'blocks', dither: true, opacity: 1, fontPx: 12,
+    ranges: { density: { min: 0.5, max: 1.5 }, speed: { min: 0, max: 0 }, fps: { min: 10, max: 30 }, fontPx: { min: 10, max: 16 }, opacity: { min: 0.6, max: 1 } },
+  },
 }
 
 /** Resize debounce before the grid is rebuilt. */
@@ -175,6 +229,160 @@ export function createFlowPiece(levels: number, dither: boolean): AsciiPiece {
   }
 }
 
+/** Shared tail of every piece: clamp, optional Bayer dither, quantize. */
+function shade(out: Uint8Array, i: number, v: number, levels: number, dither: boolean, row: number, col: number): void {
+  if (v < 0) v = 0
+  else if (v > 1) v = 1
+  if (dither) {
+    v += (BAYER4[(row & 3) * 4 + (col & 3)] / 16 - 0.5) * (1 / levels)
+    if (v < 0) v = 0
+    else if (v > 1) v = 1
+  }
+  out[i] = quantizeLevel(v, levels)
+}
+
+/**
+ * The `rain` piece: falling columns. Each column owns a phase, a fall speed
+ * and a trail length derived from its index; roughly one column in seven is
+ * dormant, so the rain reads as patchy weather rather than a curtain. The
+ * head is the brightest cell and the trail fades quadratically behind it.
+ */
+export function createRainPiece(levels: number, dither: boolean): AsciiPiece {
+  // Column scratch lives in the closure and grows only when the grid widens:
+  // one Float64Array assignment per column per frame, no per-frame allocation.
+  let capacity = 0
+  let head = new Float64Array(0)
+  let trail = new Float64Array(0)
+  let active = new Uint8Array(0)
+  return (t, out, cols, rows) => {
+    if (cols > capacity) {
+      capacity = cols
+      head = new Float64Array(capacity)
+      trail = new Float64Array(capacity)
+      active = new Uint8Array(capacity)
+    }
+    out.fill(0)
+    const span = rows + 20
+    for (let col = 0; col < cols; col++) {
+      const seed = hash2(col, 17)
+      active[col] = seed < 0.14 ? 0 : 1
+      if (!active[col]) continue
+      head[col] = (t * (18 + seed * 26) + hash2(col, 43) * span) % span
+      trail[col] = Math.max(3, Math.round((0.18 + hash2(col, 73) * 0.42) * rows))
+    }
+    // The renderer consumes the buffer row-major; write it the same way.
+    let i = 0
+    for (let row = 0; row < rows; row++) {
+      for (let col = 0; col < cols; col++, i++) {
+        if (!active[col]) continue
+        const behind = head[col] - row
+        if (behind < 0 || behind >= trail[col]) continue
+        const fade = 1 - behind / trail[col]
+        shade(out, i, 0.22 + 0.78 * fade * fade, levels, dither, row, col)
+      }
+    }
+  }
+}
+
+/**
+ * The `ocean` piece: two low-frequency swells sliding in opposite directions
+ * plus a slow vertical bob. A fixed foam speckle (hash of the cell, never of
+ * time) adds texture without flicker.
+ */
+export function createOceanPiece(levels: number, dither: boolean): AsciiPiece {
+  return (t, out, cols, rows) => {
+    let i = 0
+    for (let row = 0; row < rows; row++) {
+      const rowPhase = Math.sin(row * 0.16 + t * 0.18) * 0.07
+      for (let col = 0; col < cols; col++, i++) {
+        let v = 0.46 + rowPhase
+        v += Math.sin(col * 0.045 + row * 0.018 + t * 0.55) * 0.26
+        v += Math.sin(col * 0.11 - row * 0.032 - t * 0.9) * 0.14
+        v += Math.sin(col * 0.21 + t * 1.1) * 0.05
+        if (hash2(col, row) > 0.982) v += 0.16
+        shade(out, i, v, levels, dither, row, col)
+      }
+    }
+  }
+}
+
+/**
+ * The `starfield` piece: sparse stars on a mostly blank field, drifting one
+ * cell every ~8 s and twinkling slowly. The cells below the star thresholds
+ * stay at level 0, so the blit loop skips them and the tier is the cheapest.
+ */
+export function createStarfieldPiece(levels: number, _dither: boolean): AsciiPiece {
+  return (t, out, cols, rows) => {
+    out.fill(0)
+    const base = Math.floor(t * 0.12)
+    let i = 0
+    for (let row = 0; row < rows; row++) {
+      const sourceRow = row - base
+      for (let col = 0; col < cols; col++, i++) {
+        const h = hash2(col, sourceRow)
+        if (h > 0.962) {
+          const twinkle = 0.5 + 0.5 * Math.sin(t * 0.6 + h * 120)
+          shade(out, i, 0.62 + 0.3 * twinkle, levels, false, row, col)
+        } else if (h > 0.9) {
+          const twinkle = 0.5 + 0.5 * Math.sin(t * 0.25 + h * 90)
+          shade(out, i, 0.16 + 0.14 * twinkle, levels, false, row, col)
+        }
+      }
+    }
+  }
+}
+
+/** Row height is 1.15 em against a ~0.6 em advance, so one row spans about
+ * 1.9 cells. Correcting that keeps the rings round instead of squashed. */
+const CELL_ASPECT = 1.9
+
+/** Three fixed origins in viewport fractions. Fixed (not hashed) so the crop
+ * a user actually looks at always contains at least one ring centre. */
+const RIPPLE_ORIGINS = [
+  { x: 0.3, y: 0.34, phase: 0, rate: 1.15 },
+  { x: 0.7, y: 0.64, phase: 2.2, rate: 1.45 },
+  { x: 0.52, y: 0.18, phase: 4.4, rate: 0.95 },
+]
+
+/**
+ * The `ripple` piece: concentric rings from three fixed origins. Each ring
+ * decays with distance from its origin, keeping the field low-contrast —
+ * crests brighten, troughs fall back toward the base, nothing saturates.
+ * Dithering stays off: the stipple would break the contour lines the rings
+ * are read through.
+ */
+export function createRipplePiece(levels: number, dither: boolean): AsciiPiece {
+  return (t, out, cols, rows) => {
+    let i = 0
+    for (let row = 0; row < rows; row++) {
+      for (let col = 0; col < cols; col++, i++) {
+        let v = 0.45
+        for (const origin of RIPPLE_ORIGINS) {
+          const dx = col - origin.x * cols
+          const dy = (row - origin.y * rows) * CELL_ASPECT
+          const dist = Math.sqrt(dx * dx + dy * dy)
+          v += Math.sin(dist * 0.38 - t * origin.rate + origin.phase) * 0.26 / (1 + dist * 0.07)
+        }
+        shade(out, i, v, levels, dither, row, col)
+      }
+    }
+  }
+}
+
+/** Pick the piece for one preset. `static` reuses the flow field at t=0. */
+export function createPresetPiece(preset: AsciiPreset, levels: number, dither: boolean): AsciiPiece {
+  switch (preset) {
+    case 'rain': return createRainPiece(levels, dither)
+    case 'ocean': return createOceanPiece(levels, dither)
+    case 'starfield': return createStarfieldPiece(levels, dither)
+    case 'ripple': return createRipplePiece(levels, dither)
+    case 'flow':
+    case 'static':
+    default:
+      return createFlowPiece(levels, dither)
+  }
+}
+
 /** Structural canvas surface needed by the renderer and by tests. */
 export interface AsciiCtxLike {
   font: string
@@ -279,13 +487,14 @@ export interface AtlasOptions {
 }
 
 /**
- * Bake one colored tile per ramp level. Light themes use the reversed ramp
- * (bright = less ink) so the piece never has to know the theme; empty tiles
- * are marked for the draw loop. Per-level alpha is baked here too, which is
- * why the hot loop never touches `globalAlpha`.
+ * Bake one colored tile per ramp level. Level 0 is the blank glyph and the
+ * last level is the densest one in **both** themes — pieces write levels, not
+ * glyphs, so a level must mean the same thing whichever ink the theme picks.
+ * Empty tiles are marked for the draw loop. Per-level alpha is baked here
+ * too, which is why the hot loop never touches `globalAlpha`.
  */
 export function buildAtlas(options: AtlasOptions): Atlas | null {
-  const { chars, ink, dark, dpr, tileW, tileH, fontPx, opacity, createCanvas } = options
+  const { chars, ink, dpr, tileW, tileH, fontPx, opacity, createCanvas } = options
   const levels = chars.length
   const canvas = createCanvas()
   const pxW = Math.max(1, Math.round(tileW * dpr))
@@ -303,16 +512,15 @@ export function buildAtlas(options: AtlasOptions): Atlas | null {
   const empty = new Uint8Array(levels)
   const last = levels - 1
   for (let i = 0; i < levels; i++) {
-    const glyph = dark ? chars[i] : chars[last - i]
+    const glyph = chars[i]
     glyphs[i] = glyph
     if (glyph === ' ') {
       empty[i] = 1
       continue
     }
-    // The densest glyph must carry the strongest ink in both themes; on a
-    // light surface the ramp is reversed, so the alpha ramp reverses too.
-    const inkIndex = dark ? i : last - i
-    ctx.globalAlpha = opacity * (0.55 + 0.45 * (last > 0 ? inkIndex / last : 1))
+    // Denser glyphs carry stronger ink in both themes; light surfaces just
+    // pick a darker ink colour in `inkFor`.
+    ctx.globalAlpha = opacity * (0.55 + 0.45 * (last > 0 ? i / last : 1))
     ctx.fillText(glyph, i * tileW + tileW / 2, tileH / 2)
   }
   return { canvas, tileW, tileH, pxW, pxH, glyphs, empty }
@@ -376,7 +584,9 @@ export interface AsciiBackdropOptions {
 export interface AsciiBackdrop {
   /** Re-read motion + tint and paint/resume/stop accordingly. */
   sync(): void
-  /** Switch tier; resets the ladder to rung 0 (only a preset change does). */
+  /** Switch piece; resets the ladder to rung 0 and repaints immediately. The
+   * canvas and level buffer survive; the atlas is reused when its key (ramp,
+   * ink, theme, dpr, cell size, font, opacity) is unchanged. */
   setPreset(preset: AsciiPreset): void
   /** Stop everything and free the canvas, listeners, arrays and atlases. */
   destroy(): void
@@ -458,15 +668,11 @@ export function createAsciiBackdrop(options: AsciiBackdropOptions): AsciiBackdro
     acc = 0
     lastTick = 0
     lastDraw = 0
-    layoutDone = false
-    atlasKey = ''
-    levels = null
-    piece = null
     stats.level = 0
   }
 
   function updatePiece(): void {
-    piece = createFlowPiece(CHARSET[spec().charset].length, dither)
+    piece = createPresetPiece(preset, CHARSET[spec().charset].length, dither)
   }
 
   function layout(force = false): void {
@@ -730,6 +936,26 @@ export function createAsciiBackdrop(options: AsciiBackdropOptions): AsciiBackdro
     if (destroyed || next === preset) return
     preset = next
     resetLadder()
+    // Re-derive the grid for the new density/fontPx. When the geometry did not
+    // move, `layout` keeps the existing `levels` buffer and the atlas key
+    // (ramp, ink, theme, cell size, font, opacity) stays the same, so the
+    // baked atlas is reused; only the piece is replaced.
+    layout()
+    if (!layoutDone) return
+    const motion = computeMotion()
+    if (motion === 'paused') {
+      stopLoop()
+      return
+    }
+    if (motion === 'static' || preset === 'static' || level >= 5) {
+      stopLoop()
+      drawStaticFrame()
+      return
+    }
+    // Repaint the new piece now: the opaque surface fill below the switch
+    // would otherwise stay stale until the next scheduled frame.
+    drawFrame((acc / 1000) * spec().speed)
+    if (!running) startLoop()
   }
 
   function onVisibility(): void {

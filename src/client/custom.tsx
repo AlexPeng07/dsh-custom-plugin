@@ -19,7 +19,7 @@ import { createUsageRow, dayKey, mergeUsageRow } from '../usage.ts'
 import { DEEPSEEK_PRICING_CHECKED_ON, DEEPSEEK_PRICING_SOURCE_URL, estimateUsageCostCny, usageCostBreakdown } from '../pricing.ts'
 import { DARK_CANVAS_LIGHTNESS, hexToRgb, PALETTE, toDarkRamp } from './palette.ts'
 import { bgLayerTint, decideBgLayer, mountBgLayer, unmountBgLayer, type BgLayerCaps, type BgLayerDocLike, type BgLayerVerdict } from './bg-layer.ts'
-import { createAsciiBackdrop, type AsciiBackdrop, type AsciiDocLike, type AsciiWinLike } from './bg-ascii.ts'
+import { ASCII_PRESETS, createAsciiBackdrop, type AsciiBackdrop, type AsciiDocLike, type AsciiPreset, type AsciiWinLike } from './bg-ascii.ts'
 import {
   apiBalanceGet,
   apiBackupExport,
@@ -666,7 +666,10 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     const w = typeof window !== 'undefined' ? window : null
     if (w === null) return
     const host = mountBgLayer(d as unknown as BgLayerDocLike, verdict, bgLayerTint(S.cfg.bg, S.dark === true))
-    const preset = S.cfg.bgFxPreset === 'static' ? 'static' : 'flow'
+    // The host already normalized the id against the closed preset list; this
+    // second lookup only guards a stale in-memory cfg from a newer host.
+    const requested = S.cfg.bgFxPreset ?? 'flow'
+    const preset: AsciiPreset = ASCII_PRESETS[requested] !== undefined ? requested : 'flow'
     if (bgRenderer === null) {
       bgRenderer = createAsciiBackdrop({
         doc: d as unknown as AsciiDocLike,
