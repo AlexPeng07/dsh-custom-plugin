@@ -6,7 +6,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { DARK_CANVAS_LIGHTNESS, DARK_SATURATION_SCALE, PALETTE, toDarkRamp } from '../src/client/palette.ts'
+import { appearanceTokenKey, DARK_CANVAS_LIGHTNESS, DARK_SATURATION_SCALE, PALETTE, toDarkRamp } from '../src/client/palette.ts'
 
 function hslOf(hex: string): [number, number, number] {
   const m = /^#([0-9a-f]{6})$/i.exec(hex)
@@ -63,5 +63,32 @@ describe('palette dark ramp', () => {
     const [, , l] = hslOf(neutral)
     expect(Math.abs(l - DARK_CANVAS_LIGHTNESS)).toBeLessThan(0.02)
     expect(toDarkRamp('#ffffff', 5).slice(1)).toMatch(/^[0-9a-f]{6}$/)
+  })
+})
+
+describe('appearance token key', () => {
+  it('separates the three override shapes and folds glass into the palette key', () => {
+    // No palette and no glass: the painter must leave the shell tokens alone.
+    expect(appearanceTokenKey('default', false)).toBe('none')
+    expect(appearanceTokenKey(undefined, false)).toBe('none')
+    // Glass without a family overrides only the neutral surface tokens.
+    expect(appearanceTokenKey('default', true)).toBe('neutral')
+    // A family always carries the glass flag, because glass changes the alpha
+    // form of the very same values.
+    expect(appearanceTokenKey('雾蓝', false)).toBe('palette:雾蓝|glass:0')
+    expect(appearanceTokenKey('雾蓝', true)).toBe('palette:雾蓝|glass:1')
+  })
+
+  it('is stable for an unchanged configuration and moves with every input it reads', () => {
+    // Stability is the whole point: a repaint with the same cfg must not
+    // re-register tokens (that reparses the shell's variables).
+    for (const [name] of PALETTE) {
+      expect(appearanceTokenKey(name, true)).toBe(appearanceTokenKey(name, true))
+      const withoutGlass = appearanceTokenKey(name, false)
+      expect(withoutGlass).not.toBe(appearanceTokenKey(name, true))
+      if (name !== PALETTE[0][0]) expect(withoutGlass).not.toBe(appearanceTokenKey(PALETTE[0][0], false))
+    }
+    expect(appearanceTokenKey('default', false)).not.toBe(appearanceTokenKey('default', true))
+    expect(appearanceTokenKey('默认以外的未知族', false)).not.toBe(appearanceTokenKey('default', false))
   })
 })

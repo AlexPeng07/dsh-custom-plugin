@@ -134,3 +134,20 @@ export const DARK_CANVAS_LIGHTNESS = 0.12
  * (gold / rose / peach) down from "eye-catching" to "ambient" on the dark
  * canvas; 0.4 turned them into mud, 0.7 still glared. */
 export const DARK_SATURATION_SCALE = 0.55
+
+/**
+ * Identity of the theme-token override an appearance repaint would install.
+ *
+ * Re-registering the very same variables through the theme service is a costly
+ * no-op: it re-applies tokens for the whole shell even when the palette and the
+ * glass toggle did not move (which is what every slider tick does). The painter
+ * compares this key and skips the registration when it has not changed.
+ *
+ * `'none'` means the painter leaves the shell's own tokens alone; `'neutral'`
+ * is the glass-only override; `palette:<name>|glass:<0|1>` is a family override
+ * (glass changes the alpha form of the same values, so it is part of the key).
+ */
+export function appearanceTokenKey(bg: string | undefined, glass: boolean): string {
+  if (bg !== undefined && bg !== 'default') return `palette:${bg}|glass:${glass ? 1 : 0}`
+  return glass ? 'neutral' : 'none'
+}

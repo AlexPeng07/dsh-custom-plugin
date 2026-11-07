@@ -110,6 +110,14 @@ follow [Semantic Versioning](https://semver.org/).
   面前（原「WebGL」）；说明改成"整页铺一层很淡的背景动效，垫在内容下面，不挡任何
   操作"；帧率滑块的 `fps` 单位去掉（标签已写「帧率」）；回退 toast 与玻璃关闭提示
   同步改写。
+- **面板内拖参数不再触发全文档重算（Round 3）**：外观绘制改为按
+  `appearanceTokenKey(bg, glass)` 去重——滑杆每动一次都会重跑 `applyAppearance`，
+  但色板与玻璃没变时不再重新注册同一套主题 token；`setDynCss` 同时改为文本未变就
+  跳过写入（原实现每次重写约 21k 字符的样式表，触发全文档 style recalc）。
+  Desktop 真机、同口径（同一 6.5 s 拖动、同一插桩）：长任务 21 个 / 2,375 ms →
+  11 个 / 813 ms，`documentpreview` 与侧栏 `layout` 从热点列表消失；剩余成本是
+  atlas `drawImage` 搬运（968 ms / 37%）。新增 `appearanceTokenKey` 单测
+  （三形态分离、玻璃折入 key、同输入稳定）。
 
 - **构建与测试队列切到 dsh 0.2.1-rc.5**：九个 `@deepseek-ai/dsh-*` devDependencies
   从 0.2.1-rc.3 升到 0.2.1-rc.5；`pnpm-workspace.yaml` 为同日发布的 35 个

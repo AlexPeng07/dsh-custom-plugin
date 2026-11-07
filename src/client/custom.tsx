@@ -17,7 +17,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { DEFAULT_CONFIG, type BgFxPreset, type ConversationSearchItem, type ConversationSearchKind, type CredentialStorage, type CustomPluginConfig, type FolderNode, type PromptItem, type TimelineItem, type UsageRow } from '../protocol.ts'
 import { createUsageRow, dayKey, mergeUsageRow } from '../usage.ts'
 import { DEEPSEEK_PRICING_CHECKED_ON, DEEPSEEK_PRICING_SOURCE_URL, estimateUsageCostCny, usageCostBreakdown } from '../pricing.ts'
-import { DARK_CANVAS_LIGHTNESS, hexToRgb, PALETTE, toDarkRamp } from './palette.ts'
+import { appearanceTokenKey, DARK_CANVAS_LIGHTNESS, hexToRgb, PALETTE, toDarkRamp } from './palette.ts'
 import { bgLayerTint, decideBgFxLayer, mountBgLayer, swapBgRenderer, unmountBgLayer, type BgFxCaps, type BgFxVerdict, type BgLayerDocLike } from './bg-layer.ts'
 import { createAsciiBackdrop, resolveAsciiPreset, type AsciiBackdrop, type AsciiDocLike, type AsciiWinLike } from './bg-ascii.ts'
 import { createShaderBackdrop, resolveShaderStyle, type ShaderBackdrop, type ShaderDocLike, type ShaderHostLike, type ShaderWinLike } from './bg-shader.ts'
@@ -231,21 +231,34 @@ function ensureLiquidGlass(): void {
 
 /** One owned style element carrying the static rules plus the dynamic body rules. */
 let dynStyle: HTMLStyleElement | null = null
+// Rewriting a ~21 kB stylesheet re-parses it and recalculates style for the
+// whole document, so a repaint that would produce byte-identical text must not
+// touch `textContent` at all (the appearance painter runs on every theme/slider
+// update, most of which leave these rules alone).
+let dynCssText: string | null = null
 function setDynCss(css: string): void {
   const d = typeof document !== 'undefined' ? document : null
   if (d === null) return
-  if (dynStyle === null || !dynStyle.isConnected) {
-    dynStyle = d.createElement('style')
-    dynStyle.setAttribute('data-custom-plugin-css', '')
-    d.head.appendChild(dynStyle)
+  const text = STATIC_CSS + '\n' + css
+  const styleMissed = dynStyle === null || !dynStyle.isConnected
+  if (!styleMissed && dynCssText === text) return
+  let style = dynStyle
+  if (styleMissed) {
+    style = d.createElement('style')
+    style.setAttribute('data-custom-plugin-css', '')
+    d.head.appendChild(style)
+    dynStyle = style
   }
-  dynStyle.textContent = STATIC_CSS + '\n' + css
+  if (style === null) return
+  style.textContent = text
+  dynCssText = text
 }
 function removeDynCss(): void {
   if (dynStyle !== null && dynStyle.isConnected) {
     try { dynStyle.remove() } catch { /* style already gone */ }
   }
   dynStyle = null
+  dynCssText = null
 }
 
 /** Public component props (the product slot system injects these). */
@@ -569,6 +582,10 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
   }
 
   let tokenDisposer: (() => void) | null = null
+  // Last token override identity actually installed (see appearanceTokenKey).
+  // Left null after a dispose so the next repaint registers again.
+  let lastTokenKey: string | null = null
+  let lastTokenTheme: ThemeRuntime | undefined
   function applyAppearance(): void {
     const cfg = S.cfg
     const dEl = typeof document !== 'undefined' ? document.documentElement : null
@@ -576,12 +593,24 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       try { dEl.classList.toggle('vx-liquid', cfg.glass === true && cfg.glassMode === 'liquid') } catch { /* classList unavailable */ }
     }
     const theme = C.get('theme') as ThemeRuntime | undefined
-    if (tokenDisposer !== null) {
-      try { tokenDisposer() } catch { /* best effort */ }
-      tokenDisposer = null
-    }
-    if (theme !== undefined && typeof theme.overrideTokens === 'function') {
-      if (cfg.bg !== undefined && cfg.bg !== 'default') {
+    // Slider ticks repaint the appearance dozens of times with an unchanged
+    // palette + glass toggle; re-registering identical tokens would re-apply
+    // the shell's variables and force a full-document recalc each time.
+    const tokenKey = appearanceTokenKey(cfg.bg, cfg.glass === true)
+    const themeUsable = theme !== undefined && typeof theme.overrideTokens === 'function'
+    if (themeUsable && (tokenKey !== lastTokenKey || theme !== lastTokenTheme)) {
+      if (tokenDisposer !== null) {
+        try { tokenDisposer() } catch { /* best effort */ }
+        tokenDisposer = null
+      }
+      if (tokenKey === 'none') {
+        lastTokenKey = 'none'
+        lastTokenTheme = theme
+      } else if (tokenKey === 'neutral') {
+        tokenDisposer = theme.overrideTokens('custom-plugin-appearance', NEUTRAL_TOKENS)
+        lastTokenKey = tokenKey
+        lastTokenTheme = theme
+      } else {
         const entry = PALETTE.find((p) => p[0] === cfg.bg) ?? PALETTE[0]
         const base = entry[1]
         const tab = entry[2] ?? shade(base, 0.94)
@@ -598,9 +627,14 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
           '--dsw-alias-bg-overlay': { light: mk(shade(base, 1.04), 0.8), dark: mk(shade(darkBase, 0.86), 0.8) },
           '--dsw-specific-sidebar-fill': { light: mk(tab, 0.62), dark: mk(darkTab, 0.62) },
         })
-      } else if (cfg.glass === true) {
-        tokenDisposer = theme.overrideTokens('custom-plugin-appearance', NEUTRAL_TOKENS)
+        lastTokenKey = tokenKey
+        lastTokenTheme = theme
       }
+    } else if (!themeUsable && tokenDisposer !== null) {
+      try { tokenDisposer() } catch { /* best effort */ }
+      tokenDisposer = null
+      lastTokenKey = null
+      lastTokenTheme = undefined
     }
     // The background layer paints its own opaque surface while mounted, so
     // `body` must stay transparent. With the layer off the body keeps the
@@ -3461,6 +3495,8 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       try { tokenDisposer() } catch { /* best effort */ }
       tokenDisposer = null
     }
+    lastTokenKey = null
+    lastTokenTheme = undefined
     if (balanceRetryTimer !== null) {
       clearTimeout(balanceRetryTimer)
       balanceRetryTimer = null
