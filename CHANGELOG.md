@@ -67,6 +67,11 @@ follow [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **「恢复默认参数」语义写明**：按钮只把六个扁平参数恢复为 `-1`
+  （「跟随当前预设」），档位与预设保持不变——点一下不该突然换画。按钮改名为
+  「恢复默认参数」，`title` 提示与按钮旁的灰字（「仅重置参数，不改档位与预设」）
+  都把这条语义写在面板里；`resetBgParams` 行为本身未变（已有单测覆盖档位/预设/
+  玻璃字段原样保留）。
 - **背景配置改为枚举**：`bgFx` 从布尔迁移为 `'none' | 'ascii' | 'shader'`
   （默认 `'none'`；旧存档 `true → 'ascii'`、`false → 'none'`，未知值回落
   `'none'`），`bgFxPreset` 改为一个承载两档 id 的扁平字段：ASCII 档

@@ -2190,7 +2190,12 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
               }),
             ),
             React.createElement('div', { className: 'vx-row' },
-              React.createElement('button', { className: 'vx-btn', onClick: restoreDefaults }, '恢复默认')),
+              React.createElement('button', {
+                className: 'vx-btn',
+                onClick: restoreDefaults,
+                title: '只把上面六项参数恢复为「跟随预设」，不改变动效档位与预设。',
+              }, '恢复默认参数'),
+              React.createElement('span', { className: 'vx-muted' }, '仅重置参数，不改档位与预设')),
             // Explain a blank result instead of silently doing nothing: the
             // content surfaces are opaque without glass, so the layer sits
             // fully covered. Never flip the glass toggle for the user.

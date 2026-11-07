@@ -173,9 +173,12 @@ daily token usage.
   `presetForTier` re-homes a cross-tier or unknown preset id to the tier
   default. Slider input updates the store immediately (the appearance effect
   calls `setParams` and repaints), but the host POST goes through one
-  `createDebouncedSaver` (320 ms, `BG_PARAM_SAVE_MS`); tier/preset/restore are
+  `createDebouncedSaver` (320 ms, `BG_PARAM_SAVE_MS`); tier/preset are
   discrete and call `saveCfg` directly after cancelling the pending debounce,
-  and the disposer cancels it too. `AppearanceTab` subscribes via
+  and the disposer cancels it too. "恢复默认参数" clears only the six overrides
+  (`resetBgParams`) — tier and preset stay put on purpose (one click must not
+  swap the picture), and the button's label, title tooltip and the muted hint
+  beside it say exactly that. `AppearanceTab` subscribes via
   `useSSelector(selectAppearanceSlice)` (cfg + `dark` only), so no per-turn
   write re-renders it. With `glass:false` the layer is fully covered by design;
   the panel shows an explicit note explaining that and never flips the glass
