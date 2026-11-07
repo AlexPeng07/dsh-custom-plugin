@@ -54,7 +54,7 @@ DeepSeek Harness（DSH）Web GUI 的 Custom 便利套件：个性化外观、天
 - **背景颜色**：20 组低饱和典雅色（每组合配 tab 栏色，默认「天青灰」），另有「无颜色」（跟随 GUI 默认主题）。深浅色模式均可选用；深色模式自动派生同色系的深色变体（保留色相与低饱和，落到深色明度档），色板预览即当前模式的实际效果。
 - **天气特效**：画布渲染、不挡交互，一键切换——飘雪、电影感雨滴（三层景深 + 地面溅起）、樱花飘落；关闭时自动清空画布。
 - **玻璃效果**：所有 Custom 面板默认毛玻璃；可切换液态玻璃（边缘位移折射 + 轻微模糊提饱和，大面积面板中部文字仍清晰；不支持 SVG 位移滤镜的引擎自动回退毛玻璃）。「全局浮层玻璃」对弹窗、菜单、提示框、下拉框与系统设置窗统一加玻璃质感，液态模式下浮层同样位移折射。
-- **背景动效**：内容层下方的整页动态背景，两套互斥档位——字符档（`flow` / `rain` / `ocean` / `starfield` / `ripple`，以及零动画的 `static`）与 WebGL 档（每套风格一张全屏着色器：`liquid` / `grain`；页面没有 WebGL 时回退字符档并提示）。面板里切换档位与预设，可调密度、速度、帧率、字号与浓度（WebGL 档为强度，字号/浓度不适用），「恢复默认参数」只把六项参数恢复为「跟随预设」，不改变动效档位与预设（按钮旁与提示里都写明了这一点）；滑块值一律 clamp 到当前预设声明的范围。**只有开启玻璃时才看得到**：玻璃关闭时内容面板不透明、会把背景完全盖住，面板会直接说明这一点，而不是让人误以为没有生效。
+- **背景动效**：内容层下方的整页动态背景，两套互斥档位——字符档（`flow` / `rain` / `ocean` / `starfield` / `ripple`，以及零动画的 `static`）与光影档（每套风格一张全屏着色器：`liquid` / `grain`；页面不支持 WebGL 时回退字符档并提示）。面板里切换档位与预设，可调密度、速度、帧率、字号与浓度（光影档为强度，字号/浓度不适用），「恢复默认参数」只把六项参数恢复为「跟随预设」，不改变动效档位与预设（按钮旁与提示里都写明了这一点）；滑块值一律 clamp 到当前预设声明的范围。**只有开启玻璃时才看得到**：玻璃关闭时内容面板不透明、会把背景完全盖住，面板会直接说明这一点，而不是让人误以为没有生效。
 
 <img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/background-motion-panel.png" alt="背景动效面板（字符档）" width="360">
 
@@ -106,7 +106,7 @@ DeepSeek Harness（DSH）Web GUI 的 Custom 便利套件：个性化外观、天
 
 ### 设置入口
 
-「设置 > 个性化」页提供外观与工具开关的整页配置；会话头部与侧边栏底部的「个性化」按钮打开同一套面板弹框。
+「设置 > 个性化」页提供外观与工具开关的整页配置；会话头部与侧边栏底部的「个性化」按钮打开同一套面板弹框。弹框不抢焦点、不挡正文：按 `Escape` 或点面板外关闭，关闭后焦点回到触发按钮；默认位置与可变高度都会让出底部输入区（1280×822 这类小窗口下也成立），拖到边缘时自动夹回可见范围。
 
 ### 智能体集成
 
@@ -217,9 +217,9 @@ dsh plugin --profile web add link:F:/dsh-plugin-dev
 | 配置项 | 默认值 | 说明 |
 |---|---|---|
 | `bg` | `天青灰` | `default`（无颜色）/ 20 组调色板名之一（深浅色通用；旧存档的 `aurora` 自动迁移为 `default`） |
-| `bgFx` | `none` | `none` / `ascii` / `shader`；WebGL 档在无 WebGL 的页面回退字符档 |
-| `bgFxPreset` | `flow` | 当前档位的预设：字符档 `flow`/`rain`/`ocean`/`starfield`/`ripple`/`static`，WebGL 档 `liquid`/`grain`；另一档的 id 会重置为该档默认值 |
-| `bgDensity`、`bgSpeed`、`bgFps`、`bgFontPx`、`bgOpacity`、`bgIntensity` | `-1` | 面板覆盖值；`-1` 表示跟随预设，其余值一律 clamp 到当前预设声明的范围（字符档用五项，WebGL 档用密度/速度/帧率/强度） |
+| `bgFx` | `none` | `none` / `ascii` / `shader`（面板上的「关闭 / 字符 / 光影」）；光影档在不支持 WebGL 的页面回退字符档 |
+| `bgFxPreset` | `flow` | 当前档位的预设：字符档 `flow`/`rain`/`ocean`/`starfield`/`ripple`/`static`，光影档 `liquid`/`grain`；另一档的 id 会重置为该档默认值 |
+| `bgDensity`、`bgSpeed`、`bgFps`、`bgFontPx`、`bgOpacity`、`bgIntensity` | `-1` | 面板覆盖值；`-1` 表示跟随预设，其余值一律 clamp 到当前预设声明的范围（字符档用五项，光影档用密度/速度/帧率/强度） |
 | `weather` | `none` | `none` / `snow` / `rain` / `sakura` |
 | `glass` | `true` | Custom 面板玻璃总开关 |
 | `glassMode` | `frost` | `frost` 毛玻璃 / `liquid` 液态玻璃 |

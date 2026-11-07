@@ -104,13 +104,27 @@ export function toDarkRamp(hex: string, lightness: number): string {
  * is compressed the same way the dark ramp compresses it, and lightness moves
  * by a fixed delta (up on dark surfaces, down on light ones). The target is
  * "visible but not competing with body text", not WCAG text contrast.
+ *
+ * The two deltas are not symmetric on purpose. Content surfaces sit at 0.5–0.7
+ * alpha, so only 8–13% of the ink survives in the reading column; on a light
+ * surface 0.13 still leaves ~3 luma of structure, while the same delta on the
+ * dark ramp measured as a flat sheet (2 luma, live 1280×822 host, 0.2.x), which
+ * read as "the background is on but nothing happened". 0.20 restores the same
+ * perceived presence in dark mode without touching the light rendering.
  */
 export function inkFor(surfaceHex: string, dark: boolean): string {
   const [h, s, l] = rgbToHsl(hexToRgb(surfaceHex))
-  const targetL = Math.max(0.04, Math.min(0.96, l + (dark ? 0.11 : -0.13)))
+  const targetL = Math.max(0.04, Math.min(0.96, l + (dark ? DARK_INK_DELTA : LIGHT_INK_DELTA)))
   const [r, g, b] = hslToRgb(h, Math.max(0, Math.min(1, s * DARK_SATURATION_SCALE)), targetL)
   return '#' + [r, g, b].map((v) => v.toString(16).padStart(2, '0')).join('')
 }
+
+/** Ink lightness drop from a light surface. */
+export const LIGHT_INK_DELTA = -0.13
+
+/** Ink lightness lift from a dark surface; see {@link inkFor} for why it is
+ *  larger than the light delta. */
+export const DARK_INK_DELTA = 0.20
 
 /** Body-canvas lightness for the dark variant of a palette family. */
 export const DARK_CANVAS_LIGHTNESS = 0.12

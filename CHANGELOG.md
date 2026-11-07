@@ -39,17 +39,17 @@ follow [Semantic Versioning](https://semver.org/).
   两套画面语言：`liquid` 低频 domain-warp 墨云（3 octave fbm + 竖向呼吸，
   24 fps 可动）、`grain` 静态细颗粒（CSS 像素网格 + 低频雾 + 边缘渐隐，零 rAF）。
   墨色仍由 `inkFor(surface, isDarkSurface(surface))` 派生（浅色固定 ΔL 0.13、
-  深色 +0.11），浅色/深色与全部色板下都成立，没有霓虹或高饱和撞色。两档互斥：
+  深色 +0.20），浅色/深色与全部色板下都成立，没有霓虹或高饱和撞色。两档互斥：
   切换经 `swapBgRenderer` 先建后拆，离开 shader 档删除 program/buffer 并
   `WEBGL_lose_context`；`static` 与 `prefers-reduced-motion` 只画首帧，页面隐藏
   停 rAF 并冻结时间；WebGL 探测失败、编译失败或运行中上下文丢失都回退 ASCII，
   并以 toast 明示（每页一次），不会静默换成另一种画。`bgFxPreset` 仍是单个扁平
   字段，按当前档位单向收窄。
-- **背景动效面板（Phase 3c）**：`AppearanceTab` 内新增档位（关闭 / 字符 / WebGL）、
+- **背景动效面板（Phase 3c）**：`AppearanceTab` 内新增档位（关闭 / 字符 / 光影）、
   预设选择、参数滑块与「恢复默认」。六个扁平字段 `bgDensity` / `bgSpeed` /
   `bgFps` / `bgFontPx` / `bgOpacity` / `bgIntensity`（`-1` 表示跟随预设），面板
   写入前按当前预设声明的 `ranges` clamp，渲染器 `resolveAsciiSpec` /
-  `resolveShaderSpec` 再夹一次；字符档显示 5 项，WebGL 档显示 4 项（字号/浓度
+  `resolveShaderSpec` 再夹一次；字符档显示 5 项，光影档显示 4 项（字号/浓度
   不适用），未知预设随档位回落到该档默认值。拖动滑块即时写入存储并重绘，POST 经
   320 ms 防抖只发一次；换档、换预设与恢复默认立即保存并取消待发请求。玻璃关闭时
   面板明确说明背景被不透明内容层完全遮住，且不会替用户自动打开玻璃。面板只在
@@ -89,6 +89,27 @@ follow [Semantic Versioning](https://semver.org/).
   atlas 仅在 key（charset/ink/theme/dpr/tile 尺寸/fontPx/opacity）变化时重建，
   切换后立即按当前 motion 补画一帧（静止档停 rAF，动效档重启 rAF），不会白屏或
   残留上一套的帧。
+- **面板不再挡输入区（Round 2）**：新增 `src/client/panel-bounds.ts`（纯几何，
+  未依赖 DOM）——`pickComposerTop` 从当前页面的输入框里挑最靠下且尺寸合理的那个，
+  `panelFrame` 把面板夹进可视区、并把高度截到 `输入框顶 − 10px`
+  （`COMPOSER_CLEARANCE`）。会话头部的弹框改用它：默认位置右上、高度随窗口变，
+  1280×822 下实测 `774..1204 × 74..692`，输入框 top=702，不重叠；拖到窗口外会被
+  夹回可见范围。`Escape`（面板内键）与点击面板外都会关闭，清理时把焦点还给触发
+  按钮（关闭后 `activeElement` 回到 `.vx-header-btn`）。面板是 `role="dialog"` +
+  `aria-modal="false"`，Tab 不设陷阱，顺序仍在面板内。11 个几何单测在
+  `tests/panel-bounds.spec.ts`。
+- **弹窗遮罩对齐原生（Round 2）**：`.vx-modal-mask` 由 `rgba(8, 10, 16, .4)` 改为
+  `.25`。Desktop 1280×822 实测，原生确认框把页面压到原亮度的 0.764，插件弹窗
+  原本是 0.616，两者并排能看出"多盖了一层"；改后为 0.762。色相本来就一致，只调
+  alpha，不改任何画面数值。
+- **深色墨色加深（Round 2）**：`DARK_INK_DELTA` 从 0.11 提到 0.20（浅色仍 −0.13）。
+  深色色板下内容面 0.5–0.7 alpha，阅读列只剩 8–13% 墨色，旧值实测只差 2 luma，
+  表现为"完全平板"；新值在同口径 on/off 差分下把背景贡献从 2.2 luma 提到 4.2–4.3
+  （std 0.33 → 0.54–0.68），纹理出现但仍低饱和、不发脏。
+- **档位文案改为「关闭 / 字符 / 光影」（Round 2）**：面板不再把实现名词摆到用户
+  面前（原「WebGL」）；说明改成"整页铺一层很淡的背景动效，垫在内容下面，不挡任何
+  操作"；帧率滑块的 `fps` 单位去掉（标签已写「帧率」）；回退 toast 与玻璃关闭提示
+  同步改写。
 
 - **构建与测试队列切到 dsh 0.2.1-rc.5**：九个 `@deepseek-ai/dsh-*` devDependencies
   从 0.2.1-rc.3 升到 0.2.1-rc.5；`pnpm-workspace.yaml` 为同日发布的 35 个
@@ -151,6 +172,25 @@ follow [Semantic Versioning](https://semver.org/).
 - Phase 3b 后：`pnpm check:readme`、`pnpm typecheck`、`pnpm test`（280，30 个文件，
   新增 `bg-shader` 20 项、`bg-layer` 档位判定与先建后拆 8 项、`state` 跨档收窄）、
   `pnpm build`（`lib/client.js` 264.65 kB / gzip 69.75 kB）、`pnpm smoke` 全绿。
+- Round 2（无感融入，Desktop 0.2.2-rc.1 / 1280×822 / DPR 1.5 实测）：
+  - 面板几何：新 build 下 `774..1204 × 74..692`，composer 文本 top=702 →
+    `overlapH = −10`；拖到 (1250,700) 被夹成 `bottom ≤ composerTop − 9`；窄窗
+    (420) 收成 396 宽。`Escape` 关闭后 `activeElement` 是 `.vx-header-btn`；点
+    (320,400) 空白处关闭后同样回到触发按钮；Tab 连按 18 次焦点未离开面板。
+  - 切换中间帧（CDP screencast 逐帧采样）：关→字符 `232.6→231.5`（单帧 1.1）、
+    字符→光影 `231.5→232.1`（单帧 1.0，切换帧 diff 3.71 后回落 0.02/帧）、
+    光影→关 diff 全 0；色板 天青灰→淡金 单帧 4.9；主题 浅→深 单帧 209.3→32.4、
+    无中间值帧。所有帧 `mainStd ≥ 10.2`，没有空白帧、没有"深色底 + 浅色画布"
+    残留帧。
+  - 采样 20 组色板（浅色 6 组 ΔL .110–.126，深色 6 组 .174–.185，浅色 meanSat
+    .004–.068）。现有 20 组色板全部低饱和，没有真正的高对比极端色板，该极端项
+    无从抽样——结论如实记为"不存在"，不用人工高饱和组合去补数。
+  - 原生确认框（临时工作区 `删除工作区` → 取消，用户工作区未删）与 `vx-confirm`
+    叠在背景上的像素采样：遮罩前后亮度比 0.764（原生）/ 0.762（插件）；遮罩下
+    背景纹理保留 `range 66` vs `65.1`（差 2.7%）；原生对话框面 211.2、正文最低
+    16.9，插件玻璃框面 226.2、正文最低 35.9。临时文件夹已删净。
+  - `pnpm check:readme`、`pnpm typecheck`、`pnpm test`、`pnpm build`、
+    `pnpm smoke` 全绿。
 
 ## 0.9.3 — 2026-10-26
 

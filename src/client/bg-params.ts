@@ -42,7 +42,7 @@ export interface BgParamMeta {
 export const BG_PARAM_META: Record<BgParamKey, BgParamMeta> = {
   density: { key: 'density', cfgKey: 'bgDensity', label: '密度', unit: '', step: 0.05, decimals: 2 },
   speed: { key: 'speed', cfgKey: 'bgSpeed', label: '速度', unit: '', step: 0.05, decimals: 2 },
-  fps: { key: 'fps', cfgKey: 'bgFps', label: '帧率', unit: ' fps', step: 1, decimals: 0 },
+  fps: { key: 'fps', cfgKey: 'bgFps', label: '帧率', unit: '', step: 1, decimals: 0 },
   fontPx: { key: 'fontPx', cfgKey: 'bgFontPx', label: '字号', unit: ' px', step: 1, decimals: 0 },
   opacity: { key: 'opacity', cfgKey: 'bgOpacity', label: '浓度', unit: '', step: 0.05, decimals: 2 },
   intensity: { key: 'intensity', cfgKey: 'bgIntensity', label: '强度', unit: '', step: 0.05, decimals: 2 },

@@ -60,6 +60,7 @@ import { mermaidLiveUrl } from './mermaid-url.ts'
 import { mermaidCodeKey, reuseTimelineItems } from './timeline-diff.ts'
 import { renderMermaid } from './mermaid-render.ts'
 import { createMermaidScanner } from './mermaid-scan.ts'
+import { COMPOSER_CLEARANCE, panelFrame, pickComposerTop, type PanelBox, type PanelFrame, type PanelSize } from './panel-bounds.ts'
 import { STATIC_CSS } from './styles.ts'
 
 /** Minimal input-state face the input dock owner provides. */
@@ -688,8 +689,8 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     if (bgFxFallbackNotice) return
     bgFxFallbackNotice = true
     toast(contextLost
-      ? 'WebGL 背景上下文已丢失，已回退到字符动效。'
-      : '当前环境无法创建 WebGL 背景，已回退到字符动效。', 'info')
+      ? '光影档的背景连接已断开，已回退到字符动效。'
+      : '当前环境不支持光影档背景，已回退到字符动效。', 'info')
   }
 
   /**
@@ -2142,9 +2143,9 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       ),
       React.createElement(Toggle, { label: '全局浮层玻璃', checked: cfg.globalGlass === true, onChange: (v) => set('globalGlass', v), hint: '对弹窗/菜单等浮层应用玻璃质感；液态玻璃模式下浮层同样位移折射' }),
       React.createElement('div', { className: 'vx-section-title' }, '背景动效'),
-      React.createElement('div', { className: 'vx-muted' }, '整页的背景层：字符档用字形网格绘制，WebGL 档用一张全屏着色器。选「关闭」不会创建任何图层。'),
+      React.createElement('div', { className: 'vx-muted' }, '整页铺一层很淡的背景动效，垫在内容下面，不挡任何操作。「字符」是细密的字符纹理，「光影」是缓慢流动的明暗；选「关闭」不创建任何图层。'),
       React.createElement('div', { className: 'vx-row wrap', role: 'group', 'aria-label': '背景动效档位' },
-        ([['none', '关闭'], ['ascii', '字符'], ['shader', 'WebGL']] as const).map(([id, label]) => {
+        ([['none', '关闭'], ['ascii', '字符'], ['shader', '光影']] as const).map(([id, label]) => {
           const active = tier === id
           return React.createElement('button', {
             key: id,
@@ -2155,7 +2156,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
         }),
       ),
       tier === 'none'
-        ? React.createElement('div', { className: 'vx-muted' }, '背景动效已关闭，页面使用纯色画布。')
+        ? React.createElement('div', { className: 'vx-muted' }, '背景动效已关闭，页面只用当前色板的底色。')
         : React.createElement(React.Fragment, null,
             React.createElement('div', { className: 'vx-row wrap', role: 'group', 'aria-label': '背景动效预设' },
               tierPresets(tier).map((id) => {
@@ -2200,7 +2201,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
             // content surfaces are opaque without glass, so the layer sits
             // fully covered. Never flip the glass toggle for the user.
             cfg.glass !== true
-              ? React.createElement('div', { className: 'vx-note' }, '提示：玻璃效果已关闭。内容面板是不透明底色，会把背景动效完全盖住——看不到属正常现象。在上方打开「启用玻璃」后即可看到，这里不会替你自动打开。')
+              ? React.createElement('div', { className: 'vx-note' }, '提示：玻璃效果关着时，页面底色不透明，背景动效会被完全盖住，看不到属正常现象。打开上方「启用玻璃」就能看到；这里不会替你自动打开。')
               : null,
           ),
     )
@@ -3010,27 +3011,127 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     return React.createElement(AboutTab, null)
   }
 
+  /** Default anchor of the floating panel; the frame below only moves it when
+   *  the viewport or the input dock forces that. */
+  const PANEL_PLACEMENT = { preferred: { right: 76, top: 74 }, width: 430, maxHeight: 660, minHeight: 240, margin: 12 } as const
+  interface PanelEnv { viewport: PanelSize; safeBottom: number | null }
+  /**
+   * Measure what the panel must dodge. The composer is identified as the
+   * lowest editable text box on the page — it moves between the hero and
+   * session layouts and grows as the draft wraps, so it cannot be a constant.
+   */
+  function measurePanelEnv(): PanelEnv {
+    const w = typeof window !== 'undefined' ? window : null
+    const d = typeof document !== 'undefined' ? document : null
+    const viewport: PanelSize = { w: w === null ? 0 : w.innerWidth, h: w === null ? 0 : w.innerHeight }
+    if (d === null) return { viewport, safeBottom: null }
+    let boxes: PanelBox[] = []
+    try {
+      boxes = Array.from(d.querySelectorAll('[role="textbox"]'))
+        .filter((node) => node.getAttribute('contenteditable') !== 'false')
+        .map((node) => node.getBoundingClientRect() as unknown as PanelBox)
+        .filter((box) => box.width > 0 && box.height > 0)
+    } catch { boxes = [] }
+    const top = pickComposerTop(boxes, viewport)
+    return { viewport, safeBottom: top === null ? null : top - COMPOSER_CLEARANCE }
+  }
+  function frameFor(env: PanelEnv, pos: { x: number; y: number } | null): PanelFrame {
+    return panelFrame({
+      viewport: env.viewport,
+      preferred: PANEL_PLACEMENT.preferred,
+      width: PANEL_PLACEMENT.width,
+      maxHeight: PANEL_PLACEMENT.maxHeight,
+      minHeight: PANEL_PLACEMENT.minHeight,
+      margin: PANEL_PLACEMENT.margin,
+      safeBottom: env.safeBottom,
+      pos,
+    })
+  }
+
   function PersonalizePanel(props: { useSessions: OverlayProps['useSessions']; useWorkspaces: OverlayProps['useWorkspaces'] }): React.ReactElement {
     const s = useS()
     const ref = React.useRef<HTMLDivElement | null>(null)
     const TABS: Array<[string, string, string]> = [['look', 'sliders', '外观'], ['folder', 'folder', '项目'], ['prompt', 'zap', '提示词'], ['search', 'search', '搜索'], ['export', 'download', '导出'], ['mermaid', 'gitBranch', 'Mermaid'], ['tools', 'wrench', '效率'], ['balance', 'wallet', '额度'], ['about', 'info', '关于']]
+    // A window resize and a session switch both move the composer without a
+    // store write; re-measure on those two only, so a streaming turn does not
+    // force a layout read on every store event.
+    const [viewportTick, setViewportTick] = React.useState(0)
+    React.useEffect(() => {
+      const w = typeof window !== 'undefined' ? window : null
+      if (w === null) return
+      const bump = (): void => setViewportTick((v) => v + 1)
+      w.addEventListener('resize', bump)
+      return () => { w.removeEventListener('resize', bump) }
+    }, [])
+    const env = React.useMemo(() => measurePanelEnv(), [viewportTick, s.sessionId])
+    const frame = frameFor(env, s.panelPos)
+    // Non-modal popover semantics: focus enters so Escape reaches the panel,
+    // Tab continues through the page (no trap), and closing hands focus back
+    // to the header button that opened it — but never steals focus from a
+    // surface the user just moved to.
+    React.useEffect(() => {
+      const node = ref.current
+      if (node === null) return
+      try { node.focus({ preventScroll: true }) } catch { node.focus() }
+      const onKey = (event: KeyboardEvent): void => {
+        if (event.key !== 'Escape' || event.defaultPrevented) return
+        event.preventDefault()
+        event.stopPropagation()
+        setS({ panelOpen: false })
+      }
+      const onDown = (event: MouseEvent): void => {
+        const target = event.target instanceof Node ? event.target : null
+        if (target === null || node.contains(target)) return
+        const el = target instanceof HTMLElement ? target : null
+        // The opener toggles the panel itself, and a plugin dialog opened
+        // from inside the panel must not close it on its first click.
+        if (el !== null && (el.closest('.vx-header-btn') !== null || el.closest('.vx-modal') !== null)) return
+        setS({ panelOpen: false })
+      }
+      node.addEventListener('keydown', onKey)
+      document.addEventListener('mousedown', onDown, true)
+      const restoreFocus = (): void => {
+        // The panel is closed and nothing else took focus: hand it back to the
+        // button that opened the panel. Re-checked after a task because a
+        // click that closed the panel also runs the browser's own focus shift
+        // (which lands on <body> after our capture handler returns).
+        if (document.querySelector('.vx-panel') !== null) return
+        const active = document.activeElement
+        if (!(active === null || active === document.body || active === document.documentElement || node.contains(active))) return
+        const opener = document.querySelector('.vx-header-btn[title="个性化中心"]')
+        if (opener instanceof HTMLElement) {
+          try { opener.focus({ preventScroll: true }) } catch { /* opener unmounted */ }
+        }
+      }
+      return () => {
+        node.removeEventListener('keydown', onKey)
+        document.removeEventListener('mousedown', onDown, true)
+        restoreFocus()
+        setTimeout(restoreFocus, 0)
+      }
+    }, [])
     const onHeadDown = (e: React.MouseEvent): void => {
       const target = e.target as HTMLElement
-      if (target.tagName === 'BUTTON' || target.tagName === 'A' || target.tagName === 'INPUT') return
+      if (target.closest('button,a,input') !== null) return
       const el = ref.current
       if (el === null) return
       const rect = el.getBoundingClientRect()
       const start = { mx: e.clientX, my: e.clientY, x: rect.left, y: rect.top }
       const d = typeof document !== 'undefined' ? document : null
       if (d === null) return
+      // One measurement for the whole drag: the composer does not move while
+      // the handle is held, and a per-move rect read would flush layout.
+      const dragEnv = measurePanelEnv()
       let final: { x: number; y: number } | null = null
       const move = (ev: MouseEvent): void => {
         // Direct DOM writes during the drag: publishing through the store
         // would re-render every subscriber at mousemove rate for one
         // element's position. The store only learns the resting place.
-        final = { x: start.x + ev.clientX - start.mx, y: start.y + ev.clientY - start.my }
-        el.style.left = `${final.x}px`
-        el.style.top = `${final.y}px`
+        const f = frameFor(dragEnv, { x: start.x + ev.clientX - start.mx, y: start.y + ev.clientY - start.my })
+        final = { x: f.left, y: f.top }
+        el.style.left = `${f.left}px`
+        el.style.top = `${f.top}px`
+        el.style.height = `${f.height}px`
         el.style.right = 'auto'
       }
       const up = (): void => {
@@ -3041,10 +3142,16 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       d.addEventListener('mousemove', move)
       d.addEventListener('mouseup', up)
     }
-    const style: React.CSSProperties = { top: 74, left: undefined, right: undefined }
-    if (s.panelPos !== null) { style.top = s.panelPos.y; style.left = s.panelPos.x; style.right = undefined }
-    else style.right = 76
-    return React.createElement('div', { ref, className: 'vx-glass vx-panel', style },
+    const style: React.CSSProperties = { top: frame.top, left: frame.left, right: undefined, width: frame.width, height: frame.height }
+    return React.createElement('div', {
+      ref,
+      className: 'vx-glass vx-panel',
+      style,
+      role: 'dialog',
+      'aria-modal': 'false',
+      'aria-label': '个性化中心',
+      tabIndex: -1,
+    },
       React.createElement('div', { className: 'vx-panel-head', onMouseDown: onHeadDown },
         React.createElement(Icon, { n: 'sliders', size: 14 }),
         React.createElement('span', { className: 'vx-panel-title' }, '个性化中心'),

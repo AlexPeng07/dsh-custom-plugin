@@ -54,7 +54,7 @@ Weather FX is shown in dark mode. Usage history, backup-import previews, session
 - **Background colors**: 20 muted low-saturation palettes (each with a matching tab color, `天青灰` by default) plus "no color" (follows the GUI default theme). Every palette works in both themes; dark mode derives the same family's dark variant (hue and low saturation kept, lightness dropped onto the dark ramp), and the swatch preview shows what the current theme will actually paint.
 - **Weather FX**: canvas-rendered, pointer-transparent one-click overlays — falling snow, cinematic rain (three depth layers with splashes), and drifting sakura petals; turning it off clears the canvas.
 - **Glass**: frosted glass on every Custom surface, or liquid glass (edge displacement refraction chained with a slight blur + saturation so text over large panels stays readable; engines without SVG-referencing backdrop filters fall back to frosted). A global-glass option extends the same treatment to dialogs, menus, tooltips, listboxes and the system settings window — displaced as well in liquid mode.
-- **Background motion**: a full-page animated layer beneath the content, in two independent tiers — ASCII glyph grids (`flow`, `rain`, `ocean`, `starfield`, `ripple`, plus the zero-animation `static`) and WebGL1 (one full-screen shader per style: `liquid`, `grain`; a page without WebGL falls back to the ASCII tier and says so). The panel switches tier and preset, tunes density, speed, frame rate, font size and opacity — intensity instead of font/opacity on the WebGL tier — and "restore defaults" resets only those six parameter overrides back to "follow the current preset"; the tier and preset themselves are never changed by that button, and the panel says so next to it. Every slider clamps to the active preset's declared range. **It is only visible with glass on**: without glass the content surfaces are opaque and cover the layer completely, and the panel states that instead of silently showing nothing.
+- **Background motion**: a full-page animated layer beneath the content, in two independent tiers — ASCII glyph grids (`flow`, `rain`, `ocean`, `starfield`, `ripple`, plus the zero-animation `static`) and 光影 (the shader tier: one full-screen WebGL1 shader per style, `liquid`, `grain`; a page without WebGL falls back to the ASCII tier and says so). The panel switches tier and preset, tunes density, speed, frame rate, font size and opacity — intensity instead of font/opacity on the shader tier — and "restore defaults" resets only those six parameter overrides back to "follow the current preset"; the tier and preset themselves are never changed by that button, and the panel says so next to it. Every slider clamps to the active preset's declared range. **It is only visible with glass on**: without glass the content surfaces are opaque and cover the layer completely, and the panel states that instead of silently showing nothing.
 
 <img src="https://github.com/AlexPeng07/dsh-custom-plugin/raw/main/docs/background-motion-panel.png" alt="Background motion panel with the character tier active" width="360">
 
@@ -106,7 +106,7 @@ A usage badge sits in the session header (clickable to pin): with an API key con
 
 ### Settings entry
 
-The Settings → 个性化 section provides the full appearance and tool-toggle page; the 个性化 buttons in the session header and the sidebar footer open the same panel as a popover.
+The Settings → 个性化 section provides the full appearance and tool-toggle page; the 个性化 buttons in the session header and the sidebar footer open the same panel as a popover. The popover never takes focus away from the page or covers the content: `Escape` or a click outside closes it and focus returns to the trigger button, and both its default position and its variable height yield the bottom composer (verified at 1280×822); dragging past an edge clamps it back into view.
 
 ### Agent integration
 
@@ -234,9 +234,9 @@ Appearance and feature toggles (the `cfg` field, all with defaults):
 | Key | Default | Meaning |
 |---|---|---|
 | `bg` | `天青灰` | `default` (no color) / one of the 20 palette names (both themes; a stored `aurora` migrates to `default`) |
-| `bgFx` | `none` | `none` / `ascii` / `shader`; the shader tier falls back to ASCII when the page has no WebGL |
-| `bgFxPreset` | `flow` | the active tier's preset: `flow`/`rain`/`ocean`/`starfield`/`ripple`/`static` for ASCII, `liquid`/`grain` for WebGL; an id from the other tier resets to that tier's default |
-| `bgDensity`, `bgSpeed`, `bgFps`, `bgFontPx`, `bgOpacity`, `bgIntensity` | `-1` | panel overrides; `-1` follows the preset, anything else is clamped to the active preset's declared range (ASCII uses five, WebGL uses density/speed/fps/intensity) |
+| `bgFx` | `none` | `none` / `ascii` / `shader` (labelled 关闭 / 字符 / 光影 in the panel); the shader tier falls back to ASCII when the page has no WebGL |
+| `bgFxPreset` | `flow` | the active tier's preset: `flow`/`rain`/`ocean`/`starfield`/`ripple`/`static` for ASCII, `liquid`/`grain` for the shader tier; an id from the other tier resets to that tier's default |
+| `bgDensity`, `bgSpeed`, `bgFps`, `bgFontPx`, `bgOpacity`, `bgIntensity` | `-1` | panel overrides; `-1` follows the preset, anything else is clamped to the active preset's declared range (ASCII uses five, shader uses density/speed/fps/intensity) |
 | `weather` | `none` | `none` / `snow` / `rain` / `sakura` |
 | `glass` | `true` | master glass toggle for Custom surfaces |
 | `glassMode` | `frost` | `frost` frosted / `liquid` displacement glass |

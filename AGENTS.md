@@ -88,8 +88,11 @@ daily token usage.
   `#vx-bg`. The effect contract is `(t, out: Uint8Array, cols, rows) => void`:
   pieces write ramp levels, never strings, into one reused buffer. Level 0 is
   blank in both themes and the ramps climb in ink density; the theme only swaps
-  the ink (single colour from `inkFor`, ΔL 0.13), never the glyph order or the
-  alpha ramp. Glyphs are pre-baked into one per-level atlas, so a frame is one
+  the ink (single colour from `inkFor`, ΔL −0.13 on a light surface and +0.20 on
+  a dark one — a dark surface under 0.5–0.7 alpha content leaves only 8–13% of
+  the ink, and the original +0.11 measured 2 luma of contrast, i.e. visually
+  flat), never the glyph order or the alpha ramp. Glyphs are pre-baked into one
+  per-level atlas, so a frame is one
   `fillRect` plus one `drawImage` per non-empty tile — no per-frame allocation.
   The atlas key is `charset|ink|dark|dpr|tileW|tileH|fontPx|opacity`, so a
   preset switch rebakes only when the ramp or the cell geometry changes. Grid
@@ -182,7 +185,9 @@ daily token usage.
   `useSSelector(selectAppearanceSlice)` (cfg + `dark` only), so no per-turn
   write re-renders it. With `glass:false` the layer is fully covered by design;
   the panel shows an explicit note explaining that and never flips the glass
-  toggle for the user.
+  toggle for the user. User-facing copy names the tiers 关闭 / 字符 / 光影 and
+  the fps slider is labelled 帧率 with no unit — implementation words (“WebGL”,
+  DPR, atlas, shader) never appear in the panel.
 - The client store fan-out stays a single listener set; per-turn hot paths
   (`TurnTailEntry`) and the FX canvas subscribe through `useSSelector` so an
   unrelated balance/toast write does not re-render every turn-tail row.
@@ -202,6 +207,26 @@ daily token usage.
   refreshes on return; every overlay uses `useDialogFocus` for
   `role="dialog"` / `aria-modal`, focus entry, a Tab trap, Escape and focus
   restore; icon-only buttons need `aria-label`.
+- The personalization popover is deliberately **non-modal**: placement is pure
+  geometry in `src/client/panel-bounds.ts` (`pickComposerTop` picks the lowest
+  plausible `[role="textbox"]` on the page, `panelFrame` clamps into the viewport
+  and caps height at `composerTop − COMPOSER_CLEARANCE`), so it never covers the
+  composer; at 1280×822 that yields `x774..1204, y74..692` against a composer at
+  y702. It closes on `Escape` (keydown on the panel node) and on an outside
+  `mousedown`, and the cleanup returns focus to
+  `.vx-header-btn[title="个性化中心"]` — both synchronously and once more on the
+  next task, because the browser's default mousedown focus lands on `<body>`
+  after the handler runs. It is `role="dialog"` + `aria-modal="false"` with
+  `tabIndex=-1`: no Tab trap, so the tab order stays in the panel only as long
+  as the user keeps tabbing. Drag measures the environment once per gesture
+  (never per `mousemove`) and only writes `panelPos` on mouseup.
+- The plugin's modal mask must stay at the shell's own dialog dim,
+  `rgba(8, 10, 16, .25)` in `src/client/styles.ts`. Measured on Desktop
+  1280×822: a native confirm dims the page to 0.764 of its background luma and
+  the plugin at `.25` dims to 0.762; the previous `.4` gave 0.616, which read as
+  an extra layer stacked on the app. Background texture survives both dims
+  (sidebar `range` 66 native vs 65.1 plugin), so parity here is a visual
+  consistency constraint, not a preference.
 - The only agent-facing surface is the `custom_plugin_status` tool; the
   plugin never injects system-prompt announcements.
 

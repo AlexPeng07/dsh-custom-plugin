@@ -255,13 +255,18 @@ export const STATIC_CSS = `/* dsh-custom-plugin static styles. Every rule is glo
   .vx-panel {
     position: absolute;
     width: 430px;
-    max-width: calc(100vw - 40px);
+    max-width: calc(100vw - 24px);
     height: min(660px, calc(100vh - 110px));
     display: flex;
     flex-direction: column;
     overflow: hidden;
     pointer-events: auto;
     color: #20242e;
+  }
+  /* The panel takes focus on open so Escape and Tab reach it; it is a
+     container, not a control, so programmatic focus must not draw a ring. */
+  .vx-panel:focus {
+    outline: none;
   }
   @media (prefers-color-scheme: dark) {
     .vx-panel, .vx-modal, .vx-folders {
@@ -642,11 +647,15 @@ export const STATIC_CSS = `/* dsh-custom-plugin static styles. Every rule is glo
     max-height: 72px;
     overflow: hidden;
   }
+  /* Match the shell's own dialog dim: a native confirm overlays the page at
+     rgba(8,10,16,.25) (measured luma ratio 176.6/231.7 = .762 on Desktop
+     1280×822). A darker mask here made plugin dialogs read as a separate
+     layer, so the alpha stays identical to the native one. */
   .vx-modal-mask {
     position: absolute;
     inset: 0;
     pointer-events: auto;
-    background: rgba(8, 10, 16, .4);
+    background: rgba(8, 10, 16, .25);
     display: flex;
     align-items: center;
     justify-content: center;
