@@ -109,6 +109,18 @@ describe('normalizeCfg', () => {
     expect(normalizeCfg({ bgFx: 'none', bgStrength: 'strong' }).bgStrength).toBe('strong')
     expect(normalizeCfg({ bgFx: 'shader', bgStrength: 'soft' }).bgStrength).toBe('soft')
   })
+
+  it('defaults the calm-zone toggle to on and only accepts a real boolean', () => {
+    // A document written before the toggle existed keeps the shipped
+    // behaviour, with no migration prompt and no write on first read.
+    expect(normalizeCfg({}).bgFocus).toBe(true)
+    expect(normalizeCfg({ bgFx: 'ascii' }).bgFocus).toBe(true)
+    expect(normalizeCfg({ bgFocus: false }).bgFocus).toBe(false)
+    // A hand-edited string or number is not a boolean: fall back to on rather
+    // than letting `'false'` read as truthy and `0` as off.
+    expect(normalizeCfg({ bgFocus: 'false' }).bgFocus).toBe(true)
+    expect(normalizeCfg({ bgFocus: 0 }).bgFocus).toBe(true)
+  })
 })
 
 describe('mergeState', () => {

@@ -66,6 +66,12 @@ export interface CustomPluginConfig {
   bgFontPx?: number
   bgOpacity?: number
   bgIntensity?: number
+  /** Calm zone toggle ("避让正文"): when true the reading column keeps a faint
+   * texture while the gutters stay at full strength; when false no mask is
+   * computed at all and the whole page is uniform. Flat boolean because
+   * `normalizeCfg` drops nested values; a document without the field is
+   * treated as `true` (the shipped behaviour) with no migration prompt. */
+  bgFocus?: boolean
   /** Weather overlay: 'none' | 'snow' | 'rain' | 'sakura'. */
   weather?: string
   /** Master glass toggle for the plugin's own surfaces. */
@@ -100,6 +106,7 @@ export const DEFAULT_CONFIG: CustomPluginConfig = {
   bgFontPx: -1,
   bgOpacity: -1,
   bgIntensity: -1,
+  bgFocus: true,
   weather: 'none',
   glass: true,
   glassMode: 'frost',

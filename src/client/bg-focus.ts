@@ -18,19 +18,26 @@ export interface BgFocusRect {
   h: number
 }
 
-/** Feather width of the fade, CSS px. 150 is the measured middle of the
- * 116/150/200 A/B (2026-11-08, 1280×822): at 116 the ink steps `@`→`%`→`*`
- * inside ~40 device px and the band reads as a seam at 1:1, while at 200 the
- * full-strength rim is pushed out of the 1280-wide margins entirely. 150
- * spreads the ramp over ~225 device px and still leaves a strong rim. */
+/** Feather width of the fade, CSS px. 150 is kept from rounds 2–3, but for a
+ * different reason now: with the composer-span rect the visible gutter is only
+ * ~141 px wide (x 280..421 at 1280), so the ramp has to finish *inside* it — at
+ * 150 the weight reaches 0.97 at the gutter's outer edge and 1.0 a few px
+ * further out, which is the strongest "edge strong → body faint" the layout
+ * allows. Round 4 A/B'd 220 and rejected it: a band wider than the gutter
+ * dilutes the one region the user can actually see (canvas gutter mean 0.0141
+ * vs sidebar 0.0744, i.e. the gutter sat at 19% of full strength while the
+ * paragraph area was already down at 0.0060 — ratio 2.37×). */
 export const FOCUS_FEATHER_PX = 150
 
 /** Ink retained at the middle of the reading column, as a fraction of full
- * strength. Not zero on purpose: the column keeps a faint texture instead of
- * turning into a clean hole. 0.45 is the measured pick — at 0.3 the column
- * read as a clean page at 1:1 (`+`/`*` only, 4.2% of canvas pixels touched),
- * at 0.6 the glyphs start competing with body copy. */
-export const FOCUS_FLOOR = 0.45
+ * strength. Round 4 lowered this from 0.45 to 0.15: the canvas already showed
+ * a 3.96× mean ratio at 0.45 (column 0.0151 vs gutter 0.0599), yet the
+ * page-scale A/B read as one flat wash — a uniform 45% inside a zone that
+ * covers almost the whole content area has nothing to be compared against.
+ * 0.15 leaves a barely-there texture behind the copy while the gutter keeps
+ * full strength, and the text contrast measured 14.32:1 at 0.45, so it can
+ * only improve here. */
+export const FOCUS_FLOOR = 0.15
 
 /** Reject geometry that cannot describe a real column. */
 export function normalizeFocusRect(rect: BgFocusRect | null | undefined): BgFocusRect | null {
@@ -39,6 +46,17 @@ export function normalizeFocusRect(rect: BgFocusRect | null | undefined): BgFocu
   if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(w) || !Number.isFinite(h)) return null
   if (w <= 0 || h <= 0) return null
   return { x, y, w, h }
+}
+
+/**
+ * The "避让正文" gate: the rect the renderers get. `false` means the mask does
+ * not participate at all — `null` reaches `setFocus`, so the ASCII tier never
+ * allocates caps and the shader never uploads `u_focus`. This is deliberately
+ * not "weight every cell by 1": that would keep the whole pipeline running
+ * for a page the user asked to be uniform.
+ */
+export function focusRectFor(bgFocus: boolean | undefined, rect: BgFocusRect | null): BgFocusRect | null {
+  return bgFocus === false ? null : normalizeFocusRect(rect)
 }
 
 /** True when two rects describe the same zone; used to skip mask rebuilds. */

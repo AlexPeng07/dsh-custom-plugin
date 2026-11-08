@@ -1,16 +1,43 @@
 import { describe, expect, it } from 'vitest'
-import { buildFocusCaps, FOCUS_FEATHER_PX, FOCUS_FLOOR, focusWeight, normalizeFocusRect, sameFocusRect } from '../src/client/bg-focus.ts'
+import { buildFocusCaps, FOCUS_FEATHER_PX, FOCUS_FLOOR, focusRectFor, focusWeight, normalizeFocusRect, sameFocusRect } from '../src/client/bg-focus.ts'
+
+const ZONE = { x: 421, y: 116, w: 708, h: 586 }
+
+describe('focusRectFor (the 避让正文 gate)', () => {
+  it('passes the rect through unless the toggle is explicitly off', () => {
+    // Undefined covers documents written before the field existed: the shipped
+    // behaviour (mask on) is the default, with no migration.
+    expect(focusRectFor(undefined, ZONE)).toEqual(ZONE)
+    expect(focusRectFor(true, ZONE)).toEqual(ZONE)
+    // Off means the renderers get nothing at all, so `buildFocusCaps` is never
+    // called and `u_focus` is never uploaded — not "weighted by 1".
+    expect(focusRectFor(false, ZONE)).toBeNull()
+    expect(focusRectFor(false, null)).toBeNull()
+    expect(focusRectFor(true, null)).toBeNull()
+  })
+
+  it('keeps the column faint and the gutter near full strength', () => {
+    const caps = buildFocusCaps(40, 20, 40, 40, ZONE, FOCUS_FEATHER_PX, FOCUS_FLOOR, 9)
+    // Cell (20,10) is the middle of the zone → 9 × 0.15 ≈ 1 (dither ±0.375).
+    expect(caps[10 * 40 + 20]).toBeLessThanOrEqual(2)
+    // A cell in the left gutter, far outside the feather band → full ramp.
+    expect(caps[10 * 40 + 2]).toBe(9)
+  })
+})
 
 describe('calm-zone calibration', () => {
   it('keeps the shipped floor and feather inside the measured band', () => {
-    // Both values were picked from live A/B shots (2026-11-08): a floor below
-    // 0.4 read as a clean page at 1:1 and one above 0.5 started competing with
-    // body copy; a feather under 120 left a visible seam at the column edge and
-    // one over 180 pushed the full-strength rim out of the 1280-wide margins.
-    // Pin the band, not the exact numbers, so a deliberate retune still passes
-    // while a drive-by "make it fainter" edit fails.
-    expect(FOCUS_FLOOR).toBeGreaterThanOrEqual(0.4)
-    expect(FOCUS_FLOOR).toBeLessThanOrEqual(0.5)
+    // Round 4 re-took both values live (2026-11-08, 1280×822). With the
+    // viewport-wide rect the mask was numerically present and visually absent:
+    // the canvas read 3.96× (column 0.0151 vs gutter 0.0599) while the page
+    // A/B looked like one wash, because the whole content area sat at the
+    // floor. The zone is now the composer span, the floor drops to a
+    // barely-there 0.15 and the feather stays at 150 — the visible gutter is
+    // only ~141 px wide, so a wider band dilutes the one region the user can
+    // see (measured: gutter 0.0141 vs sidebar 0.0744 at feather 220). Pin the
+    // band, not the exact numbers, so a deliberate retune still passes. 
+    expect(FOCUS_FLOOR).toBeGreaterThanOrEqual(0.1)
+    expect(FOCUS_FLOOR).toBeLessThanOrEqual(0.2)
     expect(FOCUS_FEATHER_PX).toBeGreaterThanOrEqual(120)
     expect(FOCUS_FEATHER_PX).toBeLessThanOrEqual(180)
   })

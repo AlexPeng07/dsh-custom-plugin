@@ -114,32 +114,57 @@ daily token usage.
   through `--vx-bg-tint` (`bgLayerTint` uses `toDarkRamp`).
 - The calm zone (内容区感应淡出) is the second half of that contract:
   `src/client/bg-focus.ts` is the pure geometry both renderers share. The zone
-  is the reading column — the **transcript viewport's content box** horizontally
-  (`scrollLeft + clientWidth`), from that viewport's top down to the composer
-  top — measured live every 350 ms (`measureFocusRect` in `custom.tsx`, poll
-  owned by the disposer) plus once per appearance repaint, so resize, sidebar
-  collapse/expand, panel open/close and full-screen all move the mask with
-  the text. The horizontal span must come from the viewport, **not** the
-  composer: at 1280×822 the transcript runs `x 280..1273` (993 px) while the
-  composer is `420..1129` (708 px), so a composer-shaped mask leaves the first
-  and last characters of every line on full-strength ink (measured
-  2026-11-08; the ellipse A/B below makes that visible as `@`/`#` behind the
-  corner glyphs). The composer is still the *anchor* — the lowest wide
-  `[role="textbox"]` is what locates the transcript and supplies the bottom
-  edge; with no scroll ancestor (hero layout) the zone falls back to the
-  composer's own span.
+  is the reading column — the **composer's span** horizontally, from the
+  transcript viewport's top down to the composer top — measured live every
+  350 ms (`measureFocusRect` in `custom.tsx`, poll owned by the disposer) plus
+  once per appearance repaint, so resize, sidebar collapse/expand, panel
+  open/close and full-screen all move the mask with the text. Round 4 corrected
+  the horizontal rule after the user reported "内容区感应淡出好像并未生效": the
+  round-2/3 rect took the transcript viewport's content box (`x 280..1273`,
+  993 px), but the body copy measures only `x 437..1112` (675 px) and the
+  composer `421..1129` (708 px) — the 157/161 px on each side are visible
+  **gutters** of the content surface with no text in them. With the viewport
+  rect the whole content area sat at the floor and the only full-strength bands
+  were under the header (y < 116) and the sidebar (x < 280): the mask was
+  numerically present (canvas column mean ink 0.0151 vs sidebar 0.0599, 3.96×,
+  coverage 9.6% vs 24.2%) and visually absent — a page-scale A/B of mask on vs
+  floor 1 read as one flat wash. The composer span matches the text measure
+  within 16 px on each side, so no glyph ever lands outside the zone and the
+  gutter keeps the texture. The composer is the anchor *and* the horizontal
+  source — the lowest wide `[role="textbox"]` locates the transcript and
+  supplies the bottom edge; with no scroll ancestor (hero layout) the zone
+  falls back to the composer's own span with the viewport top at 0.
   `focusWeight` uses the *diagonal* distance outside the rect (`hypot` of
   per-axis overflow, not `min`), normalises by `FOCUS_FEATHER_PX = 150` and
-  smoothsteps from `FOCUS_FLOOR = 0.45` to 1, so the edge is a feathered band
-  and the centre keeps a faint texture rather than going blank.
-  Both numbers are measured, not taste: floor 0.3 read as a clean page at 1:1
-  (`+`/`*` only, 4.2% of canvas pixels touched), floor 0.6 made the glyphs
-  compete with body copy, 0.45 is the pick; feather 116 left the ink stepping
-  `@`→`%`→`*` inside ~40 device px and readable as a seam, 200 pushed the
-  full-strength rim out of the 1280-wide margins, 150 spreads the ramp over
-  ~225 device px and still leaves a strong rim. A **shallow ellipse** was
-  A/B'd and rejected: at the same floor it put 25.9% ink coverage in the
-  column's top-left 120 px corner against 11.1% for the soft rectangle
+  smoothsteps from `FOCUS_FLOOR = 0.15` to 1, so the edge is a feathered band
+  and the centre keeps a barely-there texture rather than going blank.
+  Both numbers are measured, not taste. Round 4 lowered the floor 0.45 → 0.15:
+  a uniform 45% inside a zone that covers the reading area has nothing to be
+  compared against, and the 0.3/0.6/0.45 A/B above was taken while the rect
+  covered the whole viewport. At 0.15 the paragraph area measures 0.0060 mean
+  ink (4.75% coverage, static flow) against 0.0744 in the sidebar, and the text
+  contrast can only improve from the 14.32:1 measured at 0.45. The feather stays
+  150 for the opposite reason: it was A/B'd at 220 and rejected — a band wider
+  than the 141 px gutter pushes full strength outside the visible content
+  surface (gutter mean 0.0141, ratio to the column 2.37×, i.e. the effect
+  shrinks again). At 150 the weight reaches 0.97 at the gutter's outer edge,
+  so the gutter ramps 0.15 → ~1 across the width the eye can see. Round 4's
+  final numbers were re-taken on a harness that mounts the real `bg-ascii`
+  module into a real DOM at 1280×822 / DPR 1.5, because the live host stopped
+  booting mid-round (Desktop auto-updated to 0.2.2-rc.1 and its shell aborts
+  with `desktop welcome: Web authentication failed`, leaving the page on
+  "Loading plugins…"). The harness reproduces the live column reading exactly
+  (0.00597 mean / 4.75% coverage) and at feather 150 reports sidebar/column
+  **12.39×** and left-gutter/column **3.83×**; the x 281→461 profile is flat
+  without the mask (0.023–0.046, only the piece's own variance) and collapses
+  monotonically inside the zone with it (0.0455 → 0.0097). With
+  `bgFocus:false` the same region reads 0.0567 mean / 23.08% coverage — 9.5×
+  the masked value — while the sidebar stays bit-identical at 0.0740, i.e. the
+  mask is out of the pipeline rather than neutralised. Preset survival at this
+  floor (masked/unmasked coverage): flow & static 0.21, rain 0.43, ocean 0.44,
+  starfield 0.21, ripple 0.54 — none is flattened to a blank page.
+  A **shallow ellipse** was A/B'd and rejected: at the same floor it put 25.9% ink coverage
+  in the column's top-left 120 px corner against 11.1% for the soft rectangle
   (16.0% vs 8.4% bottom-right), i.e. full-strength `@` behind the first
   lines. A rectangle with diagonal corners keeps the fade band parallel to
   the text edges, which is the property that matters — the zone is a
@@ -149,8 +174,16 @@ daily token usage.
   in the blit); shader passes `u_focus` (vec4 CSS px) with `u_focusFeather` /
   `u_focusFloor` and multiplies the ink by the same `focusWeight()` in GLSL,
   `u_focus.z <= 0` disabling it. `tests/bg-focus.spec.ts` pins the shipped
-  floor into 0.40–0.50 and the feather into 120–180 so a drive-by retune
-  fails while a deliberate one still passes.
+  floor into 0.10–0.20 and the feather into 120–180 so a drive-by retune fails
+  while a deliberate one still passes, and pins `focusRectFor` (below) so the
+  off state can never quietly fall back to "weight 1 everywhere".
+  The toggle contract: `bgFocus` is one flat cfg boolean (default `true`; a
+  document written before the field existed reads as `true` with no migration).
+  When it is `false`, `focusRectFor` returns `null` and that is the *only*
+  thing the renderers receive — no `buildFocusCaps` allocation, no `u_focus`
+  upload, no 350 ms measure poll (the appearance repaint pushes `null` and
+  stops the timer). It is deliberately not "set the floor to 1": that would
+  keep the whole pipeline running to produce a page identical to no mask.
   Live A/B with the backdrop token set (flow, light, standard ink, corrected
   rect, 2026-11-08): the page moved >2 luma on **31.0%** of pixels (p99 47,
   mean 4.25), the commit sidebar on 94.6% (mean 7.8) and the header on
@@ -351,7 +384,12 @@ daily token usage.
   and the disposer cancels it too. "恢复默认参数" clears only the six overrides
   (`resetBgParams`) — tier and preset stay put on purpose (one click must not
   swap the picture), and the button's label, title tooltip and the muted hint
-  beside it say exactly that. Above the sliders sits the **ink-strength**
+  beside it say exactly that. Below the strength row sits the **avoid-the-copy**
+  switch — `bgFocus` (避让正文, default on, hint "打开时内容区域会更淡、四周更浓；
+  关掉则整页均匀。"). It is discrete like tier/preset (one save, pending
+  debounce cancelled) and is deliberately *not* one of the six params
+  `resetBgParams` clears, so "恢复默认参数" never turns the mask back on behind
+  the user's back. Above the sliders sits the **ink-strength**
   choice — `bgStrength: 'soft' | 'standard' | 'strong'` (柔和 / 标准 / 明显,
   default `'standard'`), one flat field, three buttons, `aria-pressed`, saved
   discretely like tier/preset. It scales the ink step, not the density:

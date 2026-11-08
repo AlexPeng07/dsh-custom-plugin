@@ -19,7 +19,7 @@ import { createUsageRow, dayKey, mergeUsageRow } from '../usage.ts'
 import { DEEPSEEK_PRICING_CHECKED_ON, DEEPSEEK_PRICING_SOURCE_URL, estimateUsageCostCny, usageCostBreakdown } from '../pricing.ts'
 import { appearanceTokenKey, BACKDROP_ALPHA_BASE, BACKDROP_ALPHA_LAYER1, BACKDROP_ALPHA_SIDEBAR, DARK_CANVAS_LIGHTNESS, hexToRgb, PALETTE, toDarkRamp } from './palette.ts'
 import { bgLayerTint, decideBgFxLayer, mountBgLayer, swapBgRenderer, unmountBgLayer, type BgFxCaps, type BgFxVerdict, type BgLayerDocLike } from './bg-layer.ts'
-import type { BgFocusRect } from './bg-focus.ts'
+import { focusRectFor, type BgFocusRect } from './bg-focus.ts'
 import { createAsciiBackdrop, resolveAsciiPreset, type AsciiBackdrop, type AsciiDocLike, type AsciiWinLike } from './bg-ascii.ts'
 import { createShaderBackdrop, resolveShaderStyle, type ShaderBackdrop, type ShaderDocLike, type ShaderHostLike, type ShaderWinLike } from './bg-shader.ts'
 import {
@@ -819,14 +819,23 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
   let bgFocusTimer: ReturnType<typeof setInterval> | null = null
 
   /**
-   * The calm zone is the reading column: the transcript viewport's content box
-   * horizontally, from that viewport's top down to the composer's top edge.
-   * The horizontal span must come from the *viewport*, not the composer — at
-   * 1280×822 the transcript runs 280..1273 while the composer is 420..1129,
-   * so a composer-shaped mask leaves the first and last characters of every
-   * line sitting on full-strength ink (measured 2026-11-08). Every edge comes
-   * from live layout, so a window resize, a sidebar collapse or an open panel
-   * moves the mask with the text instead of leaving a boot-time rect on screen.
+   * The calm zone is the reading column: the composer's span horizontally,
+   * from the transcript viewport's top down to the composer's top edge.
+   *
+   * Round 4 corrected the horizontal rule: it used to take the transcript
+   * viewport's content box (993 px at 1280×822), which covers the *gutters*
+   * too. Measured live 2026-11-08, the body copy (`xMeOpW_body` blocks) spans
+   * x 437..1112 (675 px) while the viewport is 280..1273 — the visible gutter
+   * belongs to the content surface but carries no text. With the viewport-wide
+   * rect the whole content area sat at the floor and the full-strength band
+   * lived under the header and the sidebar, so the mask was numerically
+   * present (canvas 3.96× ratio) and visually absent. The composer span
+   * (421..1129) matches the text measure within 16 px on each side, so no
+   * glyph ever lands outside the calm zone, and the gutter keeps the texture.
+   *
+   * Every edge comes from live layout, so a window resize, a sidebar collapse
+   * or an open panel moves the mask with the text instead of leaving a
+   * boot-time rect on screen.
    */
   function measureFocusRect(): BgFocusRect | null {
     const d = typeof document !== 'undefined' ? document : null
@@ -849,41 +858,45 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       }
     }
     if (anchor === null || box === null) return null
-    // The transcript's scroll viewport is the nearest tall scrollable ancestor;
-    // its top is where the reading column starts and its content box is where
-    // the text ends. When the page shows no transcript (hero layout), the calm
-    // zone falls back to the composer's own span.
+    // The transcript's scroll viewport supplies the top edge; its *content box*
+    // does not supply the horizontal span (see above). When the page shows no
+    // transcript (hero layout) the zone still falls back to the composer span,
+    // with the viewport top at 0.
     let top = 0
-    let scroll: HTMLElement | null = null
     let node: HTMLElement | null = anchor.parentElement
     while (node !== null && node !== d.body) {
       const cs = w !== null && w.getComputedStyle !== undefined ? w.getComputedStyle(node) : null
       if (cs !== null && (cs.overflowY === 'auto' || cs.overflowY === 'scroll')
         && node.clientHeight > 200 && node.clientWidth > 300) {
         top = node.getBoundingClientRect().top
-        scroll = node
         break
       }
       node = node.parentElement
     }
     const height = box.top - top
     if (height <= 0 || height > vh) return null
-    if (scroll === null) return { x: box.left, y: top, w: box.width, h: height }
-    const sr = scroll.getBoundingClientRect()
-    return { x: sr.left + scroll.clientLeft, y: top, w: scroll.clientWidth, h: height }
+    return { x: box.left, y: top, w: box.width, h: height }
   }
 
   /** Hand the current zone to whichever renderer is live. `setFocus` is cheap:
    * it short-circuits on the same rect and rebuilds the caps only when the
-   * geometry moved. */
+   * geometry moved. With the "避让正文" toggle off we pass `null`, which is the
+   * renderers' "no zone" path: no `buildFocusCaps` allocation, no `u_focus`
+   * uniform — the page is uniform instead of every cell being weighted 1. */
   function pushBgFocus(): void {
     if (bgRenderer === null) return
-    const rect = measureFocusRect()
+    const rect = focusRectFor(S.cfg.bgFocus, measureFocusRect())
     try { bgRenderer.handle.setFocus(rect) } catch { /* renderer torn down */ }
   }
 
   function ensureBgFocusTracking(): void {
     pushBgFocus()
+    // The mask is off: nothing to re-measure, so no poll is started (and a
+    // previous one stops here, since this runs on every appearance repaint).
+    if (S.cfg.bgFocus === false) {
+      stopBgFocusTracking()
+      return
+    }
     if (bgFocusTimer !== null) return
     bgFocusTimer = setInterval(() => {
       if (disposed) return
@@ -2279,6 +2292,15 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       setS({ cfg: setStrengthInCfg(S.cfg, next) })
       saveCfg()
     }
+    // "避让正文" is discrete like tier/preset: one save, no debounce. It is
+    // deliberately *not* one of the six params "恢复默认参数" resets, so a
+    // reset never turns the mask back on behind the user's back.
+    const pickFocus = (next: boolean): void => {
+      if ((S.cfg.bgFocus !== false) === next) return
+      bgSaveDebounced.cancel()
+      setS({ cfg: { ...S.cfg, bgFocus: next } })
+      saveCfg()
+    }
     const restoreDefaults = (): void => {
       bgSaveDebounced.cancel()
       setS({ cfg: resetBgParams(S.cfg) })
@@ -2367,6 +2389,14 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
               }),
             ),
             React.createElement('div', { className: 'vx-muted' }, '「墨色强度」只改整片墨色的深浅：觉得淡就点「明显」，觉得抢眼就点「柔和」；密度、帧率与预设都不变。'),
+            // The calm zone as a user-facing choice: on = the reading column
+            // stays faint while the gutters keep the texture.
+            React.createElement(Toggle, {
+              label: '避让正文',
+              checked: cfg.bgFocus !== false,
+              onChange: pickFocus,
+              hint: '打开时内容区域会更淡、四周更浓；关掉则整页均匀。',
+            }),
             // A still preset paints exactly one frame, so switching to it looks
             // like nothing happened. Say so inside the panel — never a toast.
             stillNote === null ? null : React.createElement('div', { className: 'vx-note' }, stillNote),
@@ -3469,7 +3499,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       d.addEventListener('keydown', onKey)
       return () => d.removeEventListener('keydown', onKey)
     }, [])
-    React.useEffect(() => { if (booted) applyAppearance() }, [booted, cfg.bg, cfg.bgFx, cfg.bgFxPreset, cfg.bgStrength, cfg.bgDensity, cfg.bgSpeed, cfg.bgFps, cfg.bgFontPx, cfg.bgOpacity, cfg.bgIntensity, cfg.glass, cfg.glassMode, cfg.globalGlass, dark])
+    React.useEffect(() => { if (booted) applyAppearance() }, [booted, cfg.bg, cfg.bgFx, cfg.bgFxPreset, cfg.bgStrength, cfg.bgDensity, cfg.bgSpeed, cfg.bgFps, cfg.bgFontPx, cfg.bgOpacity, cfg.bgIntensity, cfg.bgFocus, cfg.glass, cfg.glassMode, cfg.globalGlass, dark])
     React.useEffect(() => {
       syncAntiScroll(cfg.antiScroll === true)
       // Unmount/disable must restore scroll-behavior on every element this
