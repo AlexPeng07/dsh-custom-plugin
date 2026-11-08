@@ -114,32 +114,57 @@ daily token usage.
   through `--vx-bg-tint` (`bgLayerTint` uses `toDarkRamp`).
 - The calm zone (内容区感应淡出) is the second half of that contract:
   `src/client/bg-focus.ts` is the pure geometry both renderers share. The zone
-  is the reading column — the composer's x-span, from the top of the nearest
-  tall scrollable ancestor (the transcript viewport) down to the composer top —
-  measured live every 350 ms (`measureFocusRect` in `custom.tsx`, poll owned by
-  the disposer) plus once per appearance repaint, so resize, sidebar
+  is the reading column — the **transcript viewport's content box** horizontally
+  (`scrollLeft + clientWidth`), from that viewport's top down to the composer
+  top — measured live every 350 ms (`measureFocusRect` in `custom.tsx`, poll
+  owned by the disposer) plus once per appearance repaint, so resize, sidebar
   collapse/expand, panel open/close and full-screen all move the mask with
-  the text. `focusWeight` uses the *diagonal* distance outside the rect
-  (`hypot` of per-axis overflow, not `min`), normalises by
-  `FOCUS_FEATHER_PX = 116` and smoothsteps from `FOCUS_FLOOR = 0.3` to 1, so
-  the edge is a feathered band and the centre keeps a faint texture rather
-  than going blank. ASCII caps every cell's level with
-  `buildFocusCaps` (`cap = round(lastLevel × weight + dither)`, one reused
-  `Uint8Array`, rebuilt only on grid/zone change, read once per cell in the
-  blit); shader passes `u_focus` (vec4 CSS px) with `u_focusFeather` /
+  the text. The horizontal span must come from the viewport, **not** the
+  composer: at 1280×822 the transcript runs `x 280..1273` (993 px) while the
+  composer is `420..1129` (708 px), so a composer-shaped mask leaves the first
+  and last characters of every line on full-strength ink (measured
+  2026-11-08; the ellipse A/B below makes that visible as `@`/`#` behind the
+  corner glyphs). The composer is still the *anchor* — the lowest wide
+  `[role="textbox"]` is what locates the transcript and supplies the bottom
+  edge; with no scroll ancestor (hero layout) the zone falls back to the
+  composer's own span.
+  `focusWeight` uses the *diagonal* distance outside the rect (`hypot` of
+  per-axis overflow, not `min`), normalises by `FOCUS_FEATHER_PX = 150` and
+  smoothsteps from `FOCUS_FLOOR = 0.45` to 1, so the edge is a feathered band
+  and the centre keeps a faint texture rather than going blank.
+  Both numbers are measured, not taste: floor 0.3 read as a clean page at 1:1
+  (`+`/`*` only, 4.2% of canvas pixels touched), floor 0.6 made the glyphs
+  compete with body copy, 0.45 is the pick; feather 116 left the ink stepping
+  `@`→`%`→`*` inside ~40 device px and readable as a seam, 200 pushed the
+  full-strength rim out of the 1280-wide margins, 150 spreads the ramp over
+  ~225 device px and still leaves a strong rim. A **shallow ellipse** was
+  A/B'd and rejected: at the same floor it put 25.9% ink coverage in the
+  column's top-left 120 px corner against 11.1% for the soft rectangle
+  (16.0% vs 8.4% bottom-right), i.e. full-strength `@` behind the first
+  lines. A rectangle with diagonal corners keeps the fade band parallel to
+  the text edges, which is the property that matters — the zone is a
+  rectangle because the text is a rectangle. ASCII caps every cell's level
+  with `buildFocusCaps` (`cap = round(lastLevel × weight + dither)`, one
+  reused `Uint8Array`, rebuilt only on grid/zone change, read once per cell
+  in the blit); shader passes `u_focus` (vec4 CSS px) with `u_focusFeather` /
   `u_focusFloor` and multiplies the ink by the same `focusWeight()` in GLSL,
-  `u_focus.z <= 0` disabling it. Live A/B with the backdrop token set (flow,
-  light, standard ink, 2026-11-08): the page moved >2 luma on 32.5% of pixels
-  (p99 53, mean 5.5), the right margin peaked at 74 and the sidebar at 61, while
-  the reading column stayed at 3.2% / max 50 / mean 1.05 — at 1:1 the margins
-  read as an unmistakable character field and the column as an extremely faint
-  texture. Measured directly on the renderer's own canvas (text never lands
-  there): 0.86% of column pixels are level-capped ink against 7.0% in the right
-  margin and 9.8% in the sidebar, and the cap moves with the composer on
-  resize (1280×822 → 1600×1000 → back) and survives panel open/close. Round-1
-  verdict: `liquid` moved 77.6% of the page at intensity 0.70; its feather
-  shape and the calm-zone floor (0.3 is possibly too faint for "极淡纹理")
-  stay open for round 2.
+  `u_focus.z <= 0` disabling it. `tests/bg-focus.spec.ts` pins the shipped
+  floor into 0.40–0.50 and the feather into 120–180 so a drive-by retune
+  fails while a deliberate one still passes.
+  Live A/B with the backdrop token set (flow, light, standard ink, corrected
+  rect, 2026-11-08): the page moved >2 luma on **31.0%** of pixels (p99 47,
+  mean 4.25), the commit sidebar on 94.6% (mean 7.8) and the header on
+  48.9%, while the reading column stayed at 9.4% moved / mean 3.0 / max 96 —
+  at 1:1 the edges read as an unmistakable character field and the column as
+  a faint texture that never obscures the copy. Measured directly on the
+  renderer's own canvas: the column sits at 10.2% ink coverage against 25.9%
+  in the sidebar and 11.0% above the column, and the cap follows the composer
+  across 1280×822 → 1600×1000 → back, survives a sidebar collapse (mask moves
+  to `x 0`, width 1273) and a panel open/close (composer top 702 → 482 → 702).
+  `liquid` at intensity 0.70 moves 74.4% of the page with the column at
+  77.1% moved / mean 9.6 — it is a continuous field, so the floor reads as a
+  full-surface wash rather than glyph texture; that is the honest shape of
+  the tier, not a mask bug.
 - The renderer is `src/client/bg-ascii.ts`, mounted as one canvas inside
   `#vx-bg`. The effect contract is `(t, out: Uint8Array, cols, rows) => void`:
   pieces write ramp levels, never strings, into one reused buffer. Level 0 is

@@ -1,5 +1,20 @@
 import { describe, expect, it } from 'vitest'
-import { buildFocusCaps, FOCUS_FLOOR, focusWeight, normalizeFocusRect, sameFocusRect } from '../src/client/bg-focus.ts'
+import { buildFocusCaps, FOCUS_FEATHER_PX, FOCUS_FLOOR, focusWeight, normalizeFocusRect, sameFocusRect } from '../src/client/bg-focus.ts'
+
+describe('calm-zone calibration', () => {
+  it('keeps the shipped floor and feather inside the measured band', () => {
+    // Both values were picked from live A/B shots (2026-11-08): a floor below
+    // 0.4 read as a clean page at 1:1 and one above 0.5 started competing with
+    // body copy; a feather under 120 left a visible seam at the column edge and
+    // one over 180 pushed the full-strength rim out of the 1280-wide margins.
+    // Pin the band, not the exact numbers, so a deliberate retune still passes
+    // while a drive-by "make it fainter" edit fails.
+    expect(FOCUS_FLOOR).toBeGreaterThanOrEqual(0.4)
+    expect(FOCUS_FLOOR).toBeLessThanOrEqual(0.5)
+    expect(FOCUS_FEATHER_PX).toBeGreaterThanOrEqual(120)
+    expect(FOCUS_FEATHER_PX).toBeLessThanOrEqual(180)
+  })
+})
 
 describe('normalizeFocusRect', () => {
   it('rejects absent and non-finite geometry', () => {

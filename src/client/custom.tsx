@@ -819,11 +819,14 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
   let bgFocusTimer: ReturnType<typeof setInterval> | null = null
 
   /**
-   * The calm zone is the reading column: the composer's horizontal span, from
-   * the top of the transcript viewport down to the composer's top edge. Both
-   * edges come from live layout, so a window resize, a sidebar collapse or an
-   * open panel moves the mask with the text instead of leaving a rect computed
-   * at boot on screen.
+   * The calm zone is the reading column: the transcript viewport's content box
+   * horizontally, from that viewport's top down to the composer's top edge.
+   * The horizontal span must come from the *viewport*, not the composer — at
+   * 1280×822 the transcript runs 280..1273 while the composer is 420..1129,
+   * so a composer-shaped mask leaves the first and last characters of every
+   * line sitting on full-strength ink (measured 2026-11-08). Every edge comes
+   * from live layout, so a window resize, a sidebar collapse or an open panel
+   * moves the mask with the text instead of leaving a boot-time rect on screen.
    */
   function measureFocusRect(): BgFocusRect | null {
     const d = typeof document !== 'undefined' ? document : null
@@ -847,22 +850,27 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     }
     if (anchor === null || box === null) return null
     // The transcript's scroll viewport is the nearest tall scrollable ancestor;
-    // its top is where the reading column starts. When the page shows no
-    // transcript (hero layout), the calm zone starts at the viewport top.
+    // its top is where the reading column starts and its content box is where
+    // the text ends. When the page shows no transcript (hero layout), the calm
+    // zone falls back to the composer's own span.
     let top = 0
+    let scroll: HTMLElement | null = null
     let node: HTMLElement | null = anchor.parentElement
     while (node !== null && node !== d.body) {
       const cs = w !== null && w.getComputedStyle !== undefined ? w.getComputedStyle(node) : null
       if (cs !== null && (cs.overflowY === 'auto' || cs.overflowY === 'scroll')
         && node.clientHeight > 200 && node.clientWidth > 300) {
         top = node.getBoundingClientRect().top
+        scroll = node
         break
       }
       node = node.parentElement
     }
     const height = box.top - top
     if (height <= 0 || height > vh) return null
-    return { x: box.left, y: top, w: box.width, h: height }
+    if (scroll === null) return { x: box.left, y: top, w: box.width, h: height }
+    const sr = scroll.getBoundingClientRect()
+    return { x: sr.left + scroll.clientLeft, y: top, w: scroll.clientWidth, h: height }
   }
 
   /** Hand the current zone to whichever renderer is live. `setFocus` is cheap:

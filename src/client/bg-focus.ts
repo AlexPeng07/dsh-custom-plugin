@@ -18,14 +18,19 @@ export interface BgFocusRect {
   h: number
 }
 
-/** Feather width of the fade, CSS px. Wide enough that the edge never reads as
- * a cut, narrow enough that the calm zone stays the size of the column. */
-export const FOCUS_FEATHER_PX = 116
+/** Feather width of the fade, CSS px. 150 is the measured middle of the
+ * 116/150/200 A/B (2026-11-08, 1280×822): at 116 the ink steps `@`→`%`→`*`
+ * inside ~40 device px and the band reads as a seam at 1:1, while at 200 the
+ * full-strength rim is pushed out of the 1280-wide margins entirely. 150
+ * spreads the ramp over ~225 device px and still leaves a strong rim. */
+export const FOCUS_FEATHER_PX = 150
 
 /** Ink retained at the middle of the reading column, as a fraction of full
  * strength. Not zero on purpose: the column keeps a faint texture instead of
- * turning into a clean hole. */
-export const FOCUS_FLOOR = 0.3
+ * turning into a clean hole. 0.45 is the measured pick — at 0.3 the column
+ * read as a clean page at 1:1 (`+`/`*` only, 4.2% of canvas pixels touched),
+ * at 0.6 the glyphs start competing with body copy. */
+export const FOCUS_FLOOR = 0.45
 
 /** Reject geometry that cannot describe a real column. */
 export function normalizeFocusRect(rect: BgFocusRect | null | undefined): BgFocusRect | null {
