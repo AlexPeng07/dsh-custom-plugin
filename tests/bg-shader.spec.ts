@@ -256,6 +256,10 @@ describe('shader style table', () => {
       expect(spec.seed).toBeLessThanOrEqual(spec.ranges.seed.max)
       expect(spec.fps).toBeGreaterThanOrEqual(spec.ranges.fps.min)
       expect(spec.fps).toBeLessThanOrEqual(spec.ranges.fps.max)
+      // Both styles share `inkFor`, whose delta is calibrated per theme; the
+      // per-style scale only compensates ink coverage, so it stays near 1.
+      expect(spec.inkScale).toBeGreaterThanOrEqual(0.8)
+      expect(spec.inkScale).toBeLessThanOrEqual(1.6)
     }
   })
 
@@ -302,6 +306,22 @@ describe('shaderUniforms', () => {
       expect(channel).toBeLessThanOrEqual(1)
     }
     expect(values.ink).not.toEqual(values.surface)
+  })
+
+  it('scales the ink step with the piece ink scale, staying inside RGB', () => {
+    const luma = ([r, g, b]: readonly number[]): number => 0.2126 * r + 0.7152 * g + 0.0722 * b
+    const surfaceLuma = luma(shaderUniforms(base).surface)
+    const normal = surfaceLuma - luma(shaderUniforms(base).ink)
+    const stronger = surfaceLuma - luma(shaderUniforms({
+      ...base,
+      spec: { ...SHADER_STYLES.liquid, inkScale: 2 },
+    }).ink)
+    expect(normal).toBeGreaterThan(0)
+    expect(stronger).toBeGreaterThan(normal)
+    for (const channel of shaderUniforms({ ...base, spec: { ...SHADER_STYLES.liquid, inkScale: 2 } }).ink) {
+      expect(channel).toBeGreaterThanOrEqual(0)
+      expect(channel).toBeLessThanOrEqual(1)
+    }
   })
 
   it('clamps speed, density and intensity at the uniform contract edges', () => {

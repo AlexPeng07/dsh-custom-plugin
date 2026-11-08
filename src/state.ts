@@ -61,6 +61,9 @@ export function normalizeCfg(raw: unknown): CustomPluginConfig {
   const fallback: BgFxPreset = shaderTier ? 'liquid' : 'flow'
   const preset = cfg.bgFxPreset
   if (typeof preset !== 'string' || !allowed.includes(preset)) cfg.bgFxPreset = fallback
+  // Ink strength is a closed set regardless of tier: it scales the same
+  // per-theme delta both renderers use, so an unknown value is the default.
+  if (cfg.bgStrength !== 'soft' && cfg.bgStrength !== 'standard' && cfg.bgStrength !== 'strong') cfg.bgStrength = 'standard'
   // Background tunables are overrides, not absolute values: -1 means "follow
   // the preset". A negative or non-finite hand-edited value is that sentinel;
   // everything else stays as written and the renderer clamps it into the

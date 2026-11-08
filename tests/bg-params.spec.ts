@@ -12,6 +12,8 @@ import { ASCII_PRESETS, resolveAsciiSpec } from '../src/client/bg-ascii.ts'
 import { SHADER_STYLES, resolveShaderSpec } from '../src/client/bg-shader.ts'
 import {
   BG_PARAM_UNSET,
+  BG_STRENGTH_META,
+  BG_STRENGTH_SCALE,
   asciiParamsFromCfg,
   createDebouncedSaver,
   effectiveParam,
@@ -23,7 +25,9 @@ import {
   resetBgParams,
   selectAppearanceSlice,
   setParamInCfg,
+  setStrengthInCfg,
   shaderParamsFromCfg,
+  strengthFromCfg,
   tierFromCfg,
   tierPresets,
 } from '../src/client/bg-params.ts'
@@ -209,6 +213,50 @@ describe('debounced slider saves', () => {
     vi.advanceTimersByTime(100)
     expect(save).toHaveBeenCalledTimes(2)
     vi.useRealTimers()
+  })
+})
+
+describe('ink strength', () => {
+  it('defaults to standard and falls back for unknown values', () => {
+    expect(strengthFromCfg(cfgWith({}))).toBe('standard')
+    expect(strengthFromCfg(cfgWith({ bgStrength: 'strong' }))).toBe('strong')
+    // Hand-edited / older documents: unknown or missing values must never leak
+    // a multiplier into the renderer.
+    expect(strengthFromCfg({ ...cfgWith({}), bgStrength: 'loud' as never })).toBe('standard')
+    expect(setStrengthInCfg(cfgWith({}), 'bogus' as never).bgStrength).toBe('standard')
+  })
+
+  it('maps the three tiers to measured multipliers in ascending order', () => {
+    expect(BG_STRENGTH_SCALE.standard).toBe(1)
+    expect(BG_STRENGTH_SCALE.soft).toBeLessThan(1)
+    expect(BG_STRENGTH_SCALE.strong).toBeGreaterThan(1)
+    expect(BG_STRENGTH_META.map((item) => item.value)).toEqual(['soft', 'standard', 'strong'])
+    expect(BG_STRENGTH_META.map((item) => item.label)).toEqual(['柔和', '标准', '明显'])
+  })
+
+  it('rides along on both renderer param sets', () => {
+    const cfg = cfgWith({ bgStrength: 'strong' })
+    expect(asciiParamsFromCfg(cfg, 'flow').strength).toBe(BG_STRENGTH_SCALE.strong)
+    expect(shaderParamsFromCfg(cfg, 'liquid').strength).toBe(BG_STRENGTH_SCALE.strong)
+    expect(asciiParamsFromCfg(cfgWith({}), 'flow').strength).toBe(1)
+  })
+
+  it('multiplies the piece ink scale on both tiers', () => {
+    const ocean = resolveAsciiSpec('ocean', { strength: BG_STRENGTH_SCALE.strong })
+    expect(ocean.inkScale).toBeCloseTo(ASCII_PRESETS.ocean.inkScale * BG_STRENGTH_SCALE.strong, 5)
+    const liquid = resolveShaderSpec('liquid', { strength: BG_STRENGTH_SCALE.soft })
+    expect(liquid.inkScale).toBeCloseTo(SHADER_STYLES.liquid.inkScale * BG_STRENGTH_SCALE.soft, 5)
+    // Without the override the resolved spec is the base object itself, so a
+    // slider tick on flow does not allocate a new spec.
+    expect(resolveAsciiSpec('flow', { strength: 1 })).toBe(ASCII_PRESETS.flow)
+    expect(resolveShaderSpec('liquid', { strength: 1 })).toBe(SHADER_STYLES.liquid)
+  })
+
+  it('is one flat field: restore-defaults leaves it alone', () => {
+    const cfg = cfgWith({ bgStrength: 'strong', bgDensity: 1.2 })
+    const restored = resetBgParams(cfg)
+    expect(restored.bgDensity).toBe(BG_PARAM_UNSET)
+    expect(restored.bgStrength).toBe('strong')
   })
 })
 

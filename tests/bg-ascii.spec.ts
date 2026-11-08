@@ -33,7 +33,7 @@ import {
   type AsciiResizeObserverLike,
   type AsciiWinLike,
 } from '../src/client/bg-ascii.ts'
-import { hexToRgb, inkFor } from '../src/client/palette.ts'
+import { hexToRgb, INK_SCALE_MAX, INK_SCALE_MIN, inkFor, inkScaleFor } from '../src/client/palette.ts'
 
 /**
  * A 2D context that records the calls the draw contract cares about: how many
@@ -324,6 +324,10 @@ describe('preset pieces', () => {
     const blank = buf.reduce((count, value) => count + (value === 0 ? 1 : 0), 0)
     expect(blank / buf.length).toBeGreaterThan(0.5)
     expect(buf.some((value) => value >= 3)).toBe(true)
+    // Sparse is not empty: the primary band plus its companions must light at
+    // least 4% of cells, which is what the 2026-11-08 host measurement read as
+    // "there are stars" instead of "a blank backdrop".
+    expect(1 - blank / buf.length).toBeGreaterThan(0.04)
   })
 
   it('draws the same field for static at t=0 as flow at t=0', () => {
@@ -345,7 +349,29 @@ describe('preset pieces', () => {
       expect(spec.fontPx).toBeLessThanOrEqual(spec.ranges.fontPx.max)
       expect(spec.opacity).toBeGreaterThanOrEqual(spec.ranges.opacity.min)
       expect(spec.opacity).toBeLessThanOrEqual(spec.ranges.opacity.max)
+      // Ink scale is calibrated per piece (dot glyphs carry far less ink per
+      // cell), not a free knob: the band keeps it inside a readable range.
+      expect(spec.inkScale).toBeGreaterThanOrEqual(0.8)
+      expect(spec.inkScale).toBeLessThanOrEqual(1.6)
     }
+  })
+
+  it('pins the per-piece visibility calibration', () => {
+    // Measured 2026-11-08 on a live host (see AGENTS.md). These are the values
+    // that bring every piece inside one perceived-strength band; `rain` stays
+    // below the dots pieces because its 13.3% inter-frame change carries it,
+    // and `starfield` pays for its sparse field with the brightest points.
+    const ink: Record<AsciiPreset, number> = {
+      flow: 1, static: 1, rain: 1.1, ripple: 1.25, ocean: 1.4, starfield: 1.6,
+    }
+    for (const [preset, value] of Object.entries(ink)) {
+      expect(ASCII_PRESETS[preset as AsciiPreset].inkScale).toBe(value)
+    }
+    // The two dot pieces needed cell-level fixes on top of the ink step:
+    // ocean's swell was 1/3 of flow's ink mass at density 0.5, and starfield's
+    // 12 px dots read as nothing at 0.23% coverage.
+    expect(ASCII_PRESETS.ocean.density).toBe(0.65)
+    expect(ASCII_PRESETS.starfield.fontPx).toBe(14)
   })
 })
 
@@ -426,23 +452,54 @@ describe('inkFor', () => {
     expect(isDarkSurface(light)).toBe(false)
   })
 
-  it('keeps the composited ink above the just-noticeable band', () => {
-    // Content surfaces sit at 0.5–0.7 alpha, so only ~19% of the raw canvas
-    // ink survives into the reading column. Measured on a live 1280×822 host
-    // (0.2.2-rc.1): the old −0.13 left a 2.9-luma range / 0.64% Michelson
-    // patch, below the ~1% JND, i.e. "on but invisible"; −0.31 lands at
-    // 6.3 luma / 1.39%. Dark mode's ~37-luma surface needs the larger +0.38
-    // (3.8 luma before, 7.6 luma now). These floors pin the raw canvas step
-    // that produces those composited numbers — a smaller delta is a
-    // regression to "visually flat", not a taste adjustment.
+  it('calibrates each theme to its own delta, not one shared number', () => {
+    // Ink reaches the reading column at ~9% strength (content surfaces at
+    // 0.5–0.7 alpha), so an 80-luma ink step shows as a 6.9-luma composited
+    // peak. Measured on a live 1280×822 dpr-1.5 host (0.2.2-rc.1, backdrop
+    // pixels only, text masked out): −0.31 gives 0.15% mean ink mass / 2.99%
+    // peak, just above the ~1% just-noticeable band, where the old −0.13 read
+    // as "on but invisible". The dark surface is perceptually different rather
+    // than merely darker: DeVries-Rose puts its threshold contrast at
+    // sqrt(234.8/29.8) ≈ 2.8× the light one, so +0.15 (a 38-luma step, 0.34%
+    // mass / 8.17% peak) is the equal-strength point — 2.1–2.7× the light
+    // figure across all pieces. The old +0.38 measured 6.7× and glared. These
+    // bounds pin both calibrations: shrinking the light side is a visibility
+    // regression, growing the dark side is the "steals attention" regression.
     const brightness = (hex: string): number => {
       const [r, g, b] = hexToRgb(hex)
       return 0.2126 * r + 0.7152 * g + 0.0722 * b
     }
     const light = '#e9ebee'
     const dark = '#1c1e21'
-    expect(brightness(light) - brightness(inkFor(light, false))).toBeGreaterThanOrEqual(70)
-    expect(brightness(inkFor(dark, true)) - brightness(dark)).toBeGreaterThanOrEqual(90)
+    const lightStep = brightness(light) - brightness(inkFor(light, false))
+    const darkStep = brightness(inkFor(dark, true)) - brightness(dark)
+    expect(lightStep).toBeGreaterThanOrEqual(70)
+    expect(lightStep).toBeLessThanOrEqual(95)
+    expect(darkStep).toBeGreaterThanOrEqual(28)
+    expect(darkStep).toBeLessThanOrEqual(48)
+    // The dark step stays smaller in magnitude than the light one: equal
+    // numbers would make the dark layer either invisible or glaring.
+    expect(darkStep).toBeLessThan(lightStep / 1.5)
+  })
+
+  it('scales the ink step linearly and clamps the multiplier', () => {
+    const brightness = (hex: string): number => {
+      const [r, g, b] = hexToRgb(hex)
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b
+    }
+    const surface = '#e9ebee'
+    const base = brightness(surface) - brightness(inkFor(surface, false))
+    const half = brightness(surface) - brightness(inkFor(surface, false, 0.5))
+    const double = brightness(surface) - brightness(inkFor(surface, false, 2))
+    expect(half).toBeCloseTo(base / 2, 0)
+    // 2× is clamped into the light delta's own headroom (L ≥ 0.04), so the
+    // step can never exceed the surface's full lightness range.
+    expect(double).toBeGreaterThan(base * 1.5)
+    // Missing / non-finite / out-of-band multipliers fall back to the
+    // calibrated value rather than producing an unreadable ink.
+    expect(inkFor(surface, false, Number.NaN)).toBe(inkFor(surface, false))
+    expect(inkFor(surface, false, 0)).toBe(inkFor(surface, false, INK_SCALE_MIN))
+    expect(inkScaleFor(9)).toBe(INK_SCALE_MAX)
   })
 })
 
@@ -479,7 +536,7 @@ describe('createAsciiBackdrop', () => {
     backdrop.destroy()
   })
 
-  it('reuses the canvas, grid and atlas when switching presets that share a ramp', () => {
+  it('reuses the canvas, grid and atlas across presets that share ramp, geometry and ink', () => {
     const doc = fakeDoc()
     const win = fakeWin(1)
     const host = fakeHost()
@@ -490,26 +547,59 @@ describe('createAsciiBackdrop', () => {
     expect(backdrop.stats.frames).toBe(1)
     expect(backdrop.stats.atlasBuilds).toBe(1)
 
-    // flow → ripple → static → flow all use blocks at density 0.75 / 12 px,
-    // so the atlas key never moves: zero rebakes, one immediate repaint each.
-    backdrop.setPreset('ripple')
-    expect(backdrop.stats.atlasBuilds).toBe(1)
-    expect(backdrop.stats.frames).toBe(2)
-
+    // flow ↔ static use blocks at density 0.75 / 12 px and the same calibrated
+    // ink scale, so their atlas key never moves: zero rebakes, one repaint each.
     backdrop.setPreset('static')
     expect(backdrop.stats.atlasBuilds).toBe(1)
-    expect(backdrop.stats.frames).toBe(3)
+    expect(backdrop.stats.frames).toBe(2)
     expect(win.rafCallbacks.size).toBe(0)
 
     backdrop.setPreset('flow')
     expect(backdrop.stats.atlasBuilds).toBe(1)
-    expect(backdrop.stats.frames).toBe(4)
+    expect(backdrop.stats.frames).toBe(3)
     expect(win.rafCallbacks.size).toBe(1)
+
+    // ripple shares the geometry too, but its calibrated ink step is higher,
+    // so the key moves once per crossing of that pair.
+    backdrop.setPreset('ripple')
+    expect(backdrop.stats.atlasBuilds).toBe(2)
+    expect(backdrop.stats.frames).toBe(4)
+    backdrop.setPreset('flow')
+    expect(backdrop.stats.atlasBuilds).toBe(3)
+    expect(backdrop.stats.frames).toBe(5)
 
     // One canvas stayed attached; the switch never recreated it.
     expect(host.children).toHaveLength(1)
     expect(doc.created[0]).toBe(main)
-    expect(main.ctx.fillRectCount).toBe(4)
+    expect(main.ctx.fillRectCount).toBe(5)
+    backdrop.destroy()
+  })
+
+  it('rebakes exactly once when the strength multiplier moves the ink', () => {
+    const doc = fakeDoc()
+    const win = fakeWin(1)
+    const host = fakeHost()
+    host.attrs.set('data-vx-bg-motion', 'animated')
+    const backdrop = createAsciiBackdrop({ doc, win, host })
+    backdrop.sync()
+    expect(backdrop.stats.atlasBuilds).toBe(1)
+    expect(backdrop.stats.frames).toBe(1)
+
+    const params = { density: 0.75, speed: 1, fps: 24, fontPx: 12, opacity: 1 }
+    // "明显": one rebake, one immediate repaint.
+    backdrop.setParams({ ...params, strength: 1.4 })
+    expect(backdrop.stats.atlasBuilds).toBe(2)
+    expect(backdrop.stats.frames).toBe(2)
+
+    // Same multiplier again: params compare equal, so nothing rebakes or repaints.
+    backdrop.setParams({ ...params, strength: 1.4 })
+    expect(backdrop.stats.atlasBuilds).toBe(2)
+    expect(backdrop.stats.frames).toBe(2)
+
+    // "柔和": another single rebake.
+    backdrop.setParams({ ...params, strength: 0.62 })
+    expect(backdrop.stats.atlasBuilds).toBe(3)
+    expect(backdrop.stats.frames).toBe(3)
     backdrop.destroy()
   })
 
@@ -523,23 +613,25 @@ describe('createAsciiBackdrop', () => {
     expect(backdrop.stats.atlasBuilds).toBe(1)
     expect(backdrop.stats.frames).toBe(1)
 
-    // rain: 16-level classic ramp at density 1 (new grid) → one rebake.
+    // rain: 16-level classic ramp at density 1 (new grid, new ink scale) → one
+    // rebake.
     backdrop.setPreset('rain')
     expect(backdrop.stats.atlasBuilds).toBe(2)
     expect(backdrop.stats.frames).toBe(2)
 
-    // ocean: dots ramp at density 0.5 → one more rebake.
+    // ocean: dots ramp at density 0.65, 12 px, own ink step → one more rebake.
     backdrop.setPreset('ocean')
     expect(backdrop.stats.atlasBuilds).toBe(3)
 
-    // starfield shares the dots ramp and the 0.5 density with ocean.
+    // starfield: still the dots ramp, but 14 px cells and its own ink step, so
+    // its atlas key differs from ocean's and it rebakes once too.
     backdrop.setPreset('starfield')
-    expect(backdrop.stats.atlasBuilds).toBe(3)
+    expect(backdrop.stats.atlasBuilds).toBe(4)
     expect(backdrop.stats.frames).toBe(4)
 
-    // ripple returns to blocks at density 0.75 → one rebake.
+    // ripple returns to blocks at density 0.75 with its own ink step → one rebake.
     backdrop.setPreset('ripple')
-    expect(backdrop.stats.atlasBuilds).toBe(4)
+    expect(backdrop.stats.atlasBuilds).toBe(5)
     backdrop.destroy()
   })
 

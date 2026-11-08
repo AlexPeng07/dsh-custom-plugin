@@ -12,7 +12,7 @@
 
 import { ASCII_PRESETS, resolveAsciiPreset, type AsciiParams, type AsciiPreset } from './bg-ascii.ts'
 import { SHADER_STYLES, resolveShaderStyle, type ShaderParams, type ShaderStyle } from './bg-shader.ts'
-import { BG_FX_ASCII_PRESETS, BG_FX_SHADER_STYLES, type BgFxPreset, type CustomPluginConfig } from '../protocol.ts'
+import { BG_FX_ASCII_PRESETS, BG_FX_SHADER_STYLES, BG_STRENGTHS, type BgFxPreset, type BgStrength, type CustomPluginConfig } from '../protocol.ts'
 
 /** Stored value meaning "follow the active preset's own default". */
 export const BG_PARAM_UNSET = -1
@@ -66,6 +66,39 @@ export function panelParamKeys(tier: BgTier): readonly BgParamKey[] {
 export function tierFromCfg(cfg: CustomPluginConfig): BgTier {
   const mode = cfg.bgFx
   return mode === 'ascii' || mode === 'shader' ? mode : 'none'
+}
+
+/**
+ * Ink-strength multipliers on top of each piece's calibrated ink step.
+ *
+ * The values are the measured Michelson ratios from the round-6 calibration
+ * (composited content-column patch, 1280×822): soft ≈ 0.62× and strong ≈ 1.4×
+ * of the calibrated standard. They scale only the ink's lightness step; the
+ * grid geometry, speed and frame pacing are untouched.
+ */
+export const BG_STRENGTH_SCALE: Record<BgStrength, number> = {
+  soft: 0.62,
+  standard: 1,
+  strong: 1.4,
+}
+
+/** Presentation order and labels of the three strength choices. */
+export const BG_STRENGTH_META: ReadonlyArray<{ readonly value: BgStrength, readonly label: string }> = [
+  { value: 'soft', label: '柔和' },
+  { value: 'standard', label: '标准' },
+  { value: 'strong', label: '明显' },
+]
+
+/** Read the strength from a config snapshot; unknown values are 'standard'. */
+export function strengthFromCfg(cfg: CustomPluginConfig): BgStrength {
+  const value = cfg.bgStrength
+  return value !== undefined && (BG_STRENGTHS as readonly string[]).includes(value) ? value : 'standard'
+}
+
+/** Write the strength into a config snapshot (shallow copy, like every panel
+ * edit). The value space is closed, so an unknown input lands on 'standard'. */
+export function setStrengthInCfg(cfg: CustomPluginConfig, value: BgStrength): CustomPluginConfig {
+  return { ...cfg, bgStrength: (BG_STRENGTHS as readonly string[]).includes(value) ? value : 'standard' }
 }
 
 /**
@@ -159,7 +192,8 @@ export function resetBgParams(cfg: CustomPluginConfig): CustomPluginConfig {
 }
 
 /** ASCII renderer overrides for the current config. All five knobs are
- * resolved, so a preset switch is handled by passing the new preset too. */
+ * resolved, so a preset switch is handled by passing the new preset too; the
+ * strength multiplier rides along as `strength`. */
 export function asciiParamsFromCfg(cfg: CustomPluginConfig, preset: AsciiPreset): AsciiParams {
   return {
     density: effectiveParam(cfg, 'ascii', preset, 'density'),
@@ -167,6 +201,7 @@ export function asciiParamsFromCfg(cfg: CustomPluginConfig, preset: AsciiPreset)
     fps: effectiveParam(cfg, 'ascii', preset, 'fps'),
     fontPx: effectiveParam(cfg, 'ascii', preset, 'fontPx'),
     opacity: effectiveParam(cfg, 'ascii', preset, 'opacity'),
+    strength: BG_STRENGTH_SCALE[strengthFromCfg(cfg)],
   }
 }
 
@@ -177,6 +212,7 @@ export function shaderParamsFromCfg(cfg: CustomPluginConfig, style: ShaderStyle)
     speed: effectiveParam(cfg, 'shader', style, 'speed'),
     intensity: effectiveParam(cfg, 'shader', style, 'intensity'),
     fps: effectiveParam(cfg, 'shader', style, 'fps'),
+    strength: BG_STRENGTH_SCALE[strengthFromCfg(cfg)],
   }
 }
 

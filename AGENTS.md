@@ -88,22 +88,30 @@ daily token usage.
   `#vx-bg`. The effect contract is `(t, out: Uint8Array, cols, rows) => void`:
   pieces write ramp levels, never strings, into one reused buffer. Level 0 is
   blank in both themes and the ramps climb in ink density; the theme only swaps
-  the ink (single colour from `inkFor`, ΔL −0.31 on a light surface and +0.38 on
-  a dark one), never the glyph order or the alpha ramp. The deltas are sized
-  from the *composited* page, not the raw canvas: content surfaces sit at
-  0.5–0.7 alpha, so only ~19% of the ink reaches the reading column. The old
-  −0.13/+0.20 left 2.9 luma (0.64% Michelson) light and 3.8 luma dark — below
-  the ~1% just-noticeable band, so users reported the layer as "on but
-  invisible"; −0.31/+0.38 measures 6.3 / 7.6 luma (1.39% / 9.37% Michelson) on
-  a live 1280×822 host (0.2.2-rc.1). Do not shrink a delta back toward the
-  old numbers: that is a visibility regression, not a taste adjustment. Glyphs
+  the ink (single colour from `inkFor`, `LIGHT_INK_DELTA −0.31` on a light
+  surface and `DARK_INK_DELTA +0.15` on a dark one), never the glyph order or
+  the alpha ramp. The two deltas are **independent constants**, calibrated
+  2026-11-08 on a live 1280×822 dpr-1.5 host with a backdrop-only ruler (text
+  ink masked out with a 3 px dilation, so nothing is sampled from a glyph or a
+  text halo). Ink reaches the reading column at ~9% strength (surfaces at
+  0.5–0.7 alpha), so light's 80-luma step shows as a 6.9-luma peak: 0.15% mean
+  ink mass and a 2.99% peak, just above the ~1% just-noticeable band (the old
+  −0.13 read as "on but invisible"). On dark the eye is also less sensitive
+  (DeVries-Rose: threshold contrast ∝ 1/√L), so 234.8 vs 29.8 luma puts the
+  equal-perception point at ~2.5–2.8× the *relative* modulation, not the same
+  number: +0.15 measures 0.34% mass / 8.17% peak, i.e. 2.1–2.7× light across
+  all eight pieces, while the old +0.38 measured 6.7× (9.37% Michelson) and
+  read as the loudest thing on screen. +0.10 only reaches 1.4× and reads
+  weaker than light. Do not shrink the light delta or grow the dark one: those
+  are the two visibility regressions, not taste adjustments. Glyphs
   are pre-baked into one per-level atlas, so a frame is one
   `fillRect` plus one `drawImage` per non-empty tile — no per-frame allocation.
   The atlas key is `charset|ink|dark|dpr|tileW|tileH|fontPx|opacity`, so a
-  preset switch rebakes only when the ramp or the cell geometry changes. Grid
-  cell comes from measuring 50 `M` advances (`cellH = fontPx × 1.15`), DPR is
-  capped at 2, `density` multiplies the cell size, and `MAX_COLS = 240` /
-  `MAX_ROWS = 96` widen the cell rather than truncating the grid.
+  preset switch rebakes only when the ramp, the ink string or the cell geometry
+  changes. Grid cell comes from measuring 50 `M` advances (`cellH = fontPx ×
+  1.15`), DPR is capped at 2, `density` multiplies the cell size, and
+  `MAX_COLS = 240` / `MAX_ROWS = 96` widen the cell rather than truncating the
+  grid.
 - The degradation ladder is fixed and only moves down: L1 fps 24→15, L2
   density ×0.75, L3 mono (already satisfied by the single-ink atlas), L4 dither
   off, L5 one static frame and `cancelAnimationFrame`, L6 surface only. A rung
@@ -123,13 +131,29 @@ daily token usage.
   noise field (`blocks`, dither, 0.75/24 fps); `rain` per-column falling trails
   with a bright head and a quadratic fade tail, 14% dormant columns, 16-level
   `classic` ramp and no dither (1/24 fps); `ocean` low-frequency horizontal
-  swells plus fixed foam at hash hotspots (`dots`, dither, 0.5/20 fps);
-  `starfield` sparse depth-parallax stars, >50% blank cells, no dither
-  (0.5/15 fps); `ripple` three fixed concentric-ring origins with a
+  swells plus fixed foam at hash hotspots (`dots`, dither, 0.65/20 fps);
+  `starfield` sparse depth-parallax stars, >50% blank cells, no dither at
+  fontPx 14 (0.5/15 fps); `ripple` three fixed concentric-ring origins with a
   `CELL_ASPECT = 1.9` y-correction and dither off to keep the contours
   (0.75/20 fps); `static` the deterministic flow frame at zero rAF. Ink always
   derives from the surface brightness, so every preset reads on both themes
   and all palettes; nothing neon or saturated is allowed in.
+- Every piece carries its own `inkScale` on top of the theme's base ΔL
+  (`1.0 flow/static`, `1.1 rain`, `1.25 ripple`, `1.4 ocean`, `1.6 starfield`),
+  because the same ΔL on a block glyph and on a dot glyph are not the same
+  picture: a `dots` cell carries ~1/6 of a `blocks` cell's ink. Per-piece
+  calibration 2026-11-08 (light, standard strength, coverage / mean ink mass /
+  peak): flow 9.78% / 0.15% / 2.99%, rain 4.76%/0.08%/3.08%, ocean was
+  4.03%/0.12%/4.37% and is 6.25%/0.17%/4.37% at density 0.65, starfield was
+  0.23%/0.01%/3.94% and is 0.37%/0.03%/5.15% at fontPx 14, ripple 6.98%/0.11%
+  /3.11%, static tracks flow. Rain and grain deliberately stay put: rain's peak
+  already matches flow's and motion is its signal (13.3% of cells change in
+  1.2 s, the highest of all six), and grain already measures the highest ink
+  mass of the eight pieces (0.55% light / 1.34% dark = 2.4×, dead centre of the
+  dark target) — raising either pushes dark into the competing band for a
+  table that looks prettier. Starfield stays sparse on purpose (>50% blank
+  cells); only its glyph size and ink step were lifted so "sparse" stops
+  meaning "absent".
 - Each spec carries `ranges` (`density`/`speed`/`fps`/`fontPx`/`opacity` min +
   max) next to its defaults, for the Phase 3b custom panel; defaults must stay
   inside those bounds (pinned by `tests/bg-ascii.spec.ts`). `fps` is the
@@ -137,9 +161,11 @@ daily token usage.
   20 are deliberate and measured with 0 dropped frames and 0 long tasks on a
   1440×900 live host, so lowering them is not a degradation signal.
 - Preset switching reuses the same canvas, grid buffer and piece factory; only
-  the atlas rebuilds, and only when its key changes (e.g. flow ↔ ripple ↔ static
-  share `blocks`/0.75/12 px, rain's `classic`/1.0 and ocean's `dots`/0.5 do
-  not). `setPreset` resets the ladder to L0, then either stops the loop and
+  the atlas rebuilds, and only when its key changes. Only `flow` ↔ `static`
+  now share a key (`blocks`/dither/12 px/ink 1.0); `ripple` shares the ramp
+  and cell geometry but carries its own ink step (1.25), so it rebakes, and
+  `rain` (`classic`, 1.1), `ocean` (`dots`, 0.65/20, 1.4) and `starfield`
+  (`dots`, 14 px, 1.6) differ on ramp, geometry and ink. `setPreset` resets the ladder to L0, then either stops the loop and
   paints one frame (paused/static/reduced/L5) or draws an immediate frame and
   restarts rAF, so no blank frame or leftover preset frame is left behind. The
   custom panel stays deferred.
@@ -148,15 +174,22 @@ daily token usage.
   style, no library. The uniform contract is fixed: `u_time` (seconds, frozen
   while hidden), `u_resolution` (CSS px, never backing px), `u_dpr` (≤2),
   `u_surface` / `u_ink` (0..1 vec3 from `--vx-bg-tint` and
-  `inkFor(surface, isDarkSurface(surface))`, so the ink keeps the same fixed
-  ΔL the ASCII tier uses), `u_speed`, `u_density`, `u_intensity`, `u_seed`;
+  `inkFor(surface, isDarkSurface(surface), spec.inkScale)`, so the ink keeps
+  the same per-theme ΔL and the same strength multiplier the ASCII tier uses),
+  `u_speed`, `u_density`, `u_intensity`, `u_seed`;
   `shaderUniforms` clamps every value to `SHADER_UNIFORM_RANGES` so a
   hand-edited state file cannot push the GPU outside the documented band.
   Styles self-declare motion: `liquid` is an animated 3-octave domain-warped
   ink cloud at 24 fps, `grain` is a static CSS-pixel speck field with an edge
   falloff and `animated:false` — that declaration is how the zero-rAF path is
   reached without pixel sniffing. Each style carries `ranges` next to its
-  defaults (pinned by `tests/bg-shader.spec.ts`).
+  defaults (pinned by `tests/bg-shader.spec.ts`). Rechecked with the ASCII
+  ruler on 2026-11-08: `liquid` at intensity 0.48 measured 0.14% mass / 0.48%
+  Michelson against flow's 0.15% / 0.65% and read a notch weak, so it is
+  `0.56` (0.18% / 0.65%, upper edge of its 0.6 range); `grain` already
+  measures the highest ink mass of all eight pieces and stays at 0.6 — its
+  1.64% light peak is the honest shape of a static speck field, not a
+  calibration miss, and lifting it would push dark past the parity band.
 - The two tiers never coexist: `swapBgRenderer` builds the replacement first
   and only then destroys the old handle, and leaving the shader tier deletes
   its program/buffer, removes the canvas and calls `WEBGL_lose_context` (an
@@ -186,7 +219,16 @@ daily token usage.
   and the disposer cancels it too. "恢复默认参数" clears only the six overrides
   (`resetBgParams`) — tier and preset stay put on purpose (one click must not
   swap the picture), and the button's label, title tooltip and the muted hint
-  beside it say exactly that. `AppearanceTab` subscribes via
+  beside it say exactly that. Above the sliders sits the **ink-strength**
+  choice — `bgStrength: 'soft' | 'standard' | 'strong'` (柔和 / 标准 / 明显,
+  default `'standard'`), one flat field, three buttons, `aria-pressed`, saved
+  discretely like tier/preset. It scales the ink step, not the density:
+  `BG_STRENGTH_SCALE` = 0.62 / 1 / 1.4, measured on light flow as 0.10% /
+  0.15% / 0.20% ink mass (0.63× / 1× / 1.34×) against 1.73% / 2.99% / 3.85%
+  peaks. The sliders remain a separate axis on purpose — density changes how
+  many cells are lit, strength changes how lit they are; shipping one linear
+  "visibility" knob instead of both is what left the first round with no
+  direct answer to "it still looks faint". `AppearanceTab` subscribes via
   `useSSelector(selectAppearanceSlice)` (cfg + `dark` only), so no per-turn
   write re-renders it. With `glass:false` the layer is fully covered by design;
   the panel shows an explicit note explaining that and never flips the glass

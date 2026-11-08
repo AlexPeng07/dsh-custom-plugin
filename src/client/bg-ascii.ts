@@ -22,7 +22,7 @@
  * @module @alexpeng/dsh-custom-plugin/client/bg-ascii
  */
 
-import { hexToRgb, inkFor } from './palette.ts'
+import { hexToRgb, inkFor, inkScaleFor } from './palette.ts'
 
 /** Upper bound for the backing-store scale. */
 export const DPR_CAP = 2
@@ -74,6 +74,11 @@ export interface AsciiPresetSpec {
   readonly dither: boolean
   readonly opacity: number
   readonly fontPx: number
+  /** Per-piece ink multiplier on the theme's base ΔL. The dense `blocks`
+   * pieces need none (1.0); the `dots` pieces carry far less ink per cell, so
+   * they lift the ink to reach the same perceived strength. Also multiplied by
+   * the user's soft/standard/strong strength choice. */
+  readonly inkScale: number
   readonly ranges: AsciiPresetRanges
 }
 
@@ -81,41 +86,61 @@ export interface AsciiPresetSpec {
  * System presets. `flow` is the default animated tier; `static` draws one
  * deterministic flow frame (zero rAF). The other four are genuinely different
  * pieces: vertical falling trails, horizontal swells, sparse parallax stars
- * and concentric rings. `density` varies the cell size, so presets that share
- * a charset and a density also share one baked atlas across a switch.
+ * and concentric rings. `density` varies the cell size, so only `flow` and
+ * `static` share one baked atlas today.
+ *
+ * `inkScale` is the per-piece visibility calibration (measurements in
+ * AGENTS.md, 2026-11-08, 1280×822 dpr 1.5, reading column over the composited
+ * page): a dot glyph carries ~1/6 of a block glyph's ink, so the dots pieces
+ * need a bigger per-cell step to be seen at all, and the sparse starfield
+ * needs a brighter point rather than more area. These numbers are measured,
+ * not taste: `flow` at 1.0 reads 0.15% mean ink mass / 2.99% peak; `ocean` at
+ * 1.4 with density 0.65 reads 0.17% / 4.37%; `ripple` at 1.25 reads 0.11% /
+ * 3.11%; `starfield` at 1.6 reads a 5.15% star peak while staying <0.4%
+ * covered; `rain` stays at 1.1 because its 13.3% inter-frame change (the
+ * highest of the six) is what carries it, not its ink mass.
  */
 export const ASCII_PRESETS: Record<AsciiPreset, AsciiPresetSpec> = {
   // Ink alpha stays 1: the subtlety comes from `inkFor`'s ΔL, not from fading
   // the whole canvas (which is what made the first live pass read as flat grey).
   flow: {
-    density: 0.75, speed: 1, fps: 24, charset: 'blocks', dither: true, opacity: 1, fontPx: 12,
+    density: 0.75, speed: 1, fps: 24, charset: 'blocks', dither: true, opacity: 1, fontPx: 12, inkScale: 1,
     ranges: { density: { min: 0.5, max: 1.5 }, speed: { min: 0, max: 2 }, fps: { min: 15, max: 30 }, fontPx: { min: 10, max: 16 }, opacity: { min: 0.6, max: 1 } },
   },
   rain: {
     // Classic is the 16-level ramp: a long trail needs the extra steps, and
     // at 16 levels ordered dithering adds grain instead of removing banding.
-    density: 1, speed: 1, fps: 24, charset: 'classic', dither: false, opacity: 1, fontPx: 12,
+    density: 1, speed: 1, fps: 24, charset: 'classic', dither: false, opacity: 1, fontPx: 12, inkScale: 1.1,
     ranges: { density: { min: 0.75, max: 1.5 }, speed: { min: 0.5, max: 2 }, fps: { min: 15, max: 30 }, fontPx: { min: 10, max: 16 }, opacity: { min: 0.6, max: 1 } },
   },
   ocean: {
-    // Bigger cells (density 0.5) and the 5-level dot ramp keep the swell slow
-    // and wide; it shares that geometry + ramp with starfield.
-    density: 0.5, speed: 0.8, fps: 20, charset: 'dots', dither: true, opacity: 1, fontPx: 12,
+    // The swell stays wide and slow in *cells* (0.045/0.11/0.21 rad per cell);
+    // density 0.65 is the calibrated cell size. At 0.5 the dot field was
+    // 4.03% covered / 0.12% mean ink mass while `flow` sat at 9.78% / 0.15% —
+    // the wide swell looked like it was absent. 0.65 keeps the wavelength in
+    // CSS px within 1.3× of the old look and lands at 6.25% / 0.17%.
+    density: 0.65, speed: 0.8, fps: 20, charset: 'dots', dither: true, opacity: 1, fontPx: 12, inkScale: 1.4,
     ranges: { density: { min: 0.5, max: 1.25 }, speed: { min: 0.3, max: 1.5 }, fps: { min: 15, max: 24 }, fontPx: { min: 10, max: 16 }, opacity: { min: 0.6, max: 1 } },
   },
   starfield: {
     // Almost all cells stay blank; low fps is invisible on a 0.12-cell/s drift.
-    density: 0.5, speed: 0.3, fps: 15, charset: 'dots', dither: false, opacity: 1, fontPx: 12,
+    // Sparse by design — but sparse is not absent: at fontPx 12 / inkScale 1.25
+    // the star peak measured 3.94% over 0.23% coverage and read as nothing
+    // (zoom inspection 2026-11-08). fontPx 14 enlarges the dot glyph itself
+    // (same cell spacing is not kept — bigger glyph, same density), the 0.95
+    // threshold adds companions that are actually above level 0, and 1.6 lifts
+    // the point: 5.15% peak at 0.37% coverage, still mostly empty.
+    density: 0.5, speed: 0.3, fps: 15, charset: 'dots', dither: false, opacity: 1, fontPx: 14, inkScale: 1.6,
     ranges: { density: { min: 0.5, max: 1.25 }, speed: { min: 0, max: 1 }, fps: { min: 10, max: 20 }, fontPx: { min: 10, max: 16 }, opacity: { min: 0.6, max: 1 } },
   },
   ripple: {
-    // Same ramp + geometry as flow, so switching between the two never rebakes
-    // the atlas. No dither: it would speckle the contour bands.
-    density: 0.75, speed: 0.6, fps: 20, charset: 'blocks', dither: false, opacity: 1, fontPx: 12,
+    // Same ramp + geometry as flow, but its own ink step, so a switch between
+    // the two rebakes once. No dither: it would speckle the contour bands.
+    density: 0.75, speed: 0.6, fps: 20, charset: 'blocks', dither: false, opacity: 1, fontPx: 12, inkScale: 1.25,
     ranges: { density: { min: 0.5, max: 1.5 }, speed: { min: 0.2, max: 1.2 }, fps: { min: 15, max: 24 }, fontPx: { min: 10, max: 16 }, opacity: { min: 0.6, max: 1 } },
   },
   static: {
-    density: 0.75, speed: 0, fps: 24, charset: 'blocks', dither: true, opacity: 1, fontPx: 12,
+    density: 0.75, speed: 0, fps: 24, charset: 'blocks', dither: true, opacity: 1, fontPx: 12, inkScale: 1,
     ranges: { density: { min: 0.5, max: 1.5 }, speed: { min: 0, max: 0 }, fps: { min: 10, max: 30 }, fontPx: { min: 10, max: 16 }, opacity: { min: 0.6, max: 1 } },
   },
 }
@@ -131,8 +156,11 @@ export function resolveAsciiPreset(preset: string | undefined): AsciiPreset {
 
 /** Panel overrides for one ASCII preset. Every value is clamped into the
  * preset's own `ranges` before it is used, so an out-of-range value (a stale
- * state file, a slider crossing a preset switch) never reaches the grid. */
-export type AsciiParams = Partial<Record<'density' | 'speed' | 'fps' | 'fontPx' | 'opacity', number>>
+ * state file, a slider crossing a preset switch) never reaches the grid.
+ * `strength` is the user's soft/standard/strong multiplier, applied on top of
+ * the piece's own `inkScale`; it is clamped to the ink scale band, not to a
+ * preset range. */
+export type AsciiParams = Partial<Record<'density' | 'speed' | 'fps' | 'fontPx' | 'opacity' | 'strength', number>>
 
 /** Clamp one override into a preset range; `undefined`/non-finite means "use
  * the preset default". */
@@ -144,8 +172,10 @@ function clampOverride(value: number | undefined, range: AsciiRange, fallback: n
 /**
  * Resolve overrides against one preset. Missing or invalid keys fall back to
  * the preset's own default, so a preset switch never inherits a value the new
- * piece cannot honour. Returns the base spec object itself when nothing is
- * overridden (no allocation until the user actually moves a slider).
+ * piece cannot honour. The returned `inkScale` is the piece's calibrated value
+ * times the user's strength multiplier. Returns the base spec object itself
+ * when nothing is overridden (no allocation until the user actually moves a
+ * slider).
  */
 export function resolveAsciiSpec(preset: AsciiPreset, params: AsciiParams): AsciiPresetSpec {
   const base = ASCII_PRESETS[preset]
@@ -154,10 +184,11 @@ export function resolveAsciiSpec(preset: AsciiPreset, params: AsciiParams): Asci
   const fps = clampOverride(params.fps, base.ranges.fps, base.fps)
   const fontPx = clampOverride(params.fontPx, base.ranges.fontPx, base.fontPx)
   const opacity = clampOverride(params.opacity, base.ranges.opacity, base.opacity)
-  if (density === base.density && speed === base.speed && fps === base.fps && fontPx === base.fontPx && opacity === base.opacity) {
+  const inkScale = inkScaleFor(base.inkScale * inkScaleFor(params.strength))
+  if (density === base.density && speed === base.speed && fps === base.fps && fontPx === base.fontPx && opacity === base.opacity && inkScale === base.inkScale) {
     return base
   }
-  return { ...base, density, speed, fps, fontPx, opacity }
+  return { ...base, density, speed, fps, fontPx, opacity, inkScale }
 }
 
 /** Resize debounce before the grid is rebuilt. */
@@ -350,6 +381,10 @@ export function createOceanPiece(levels: number, dither: boolean): AsciiPiece {
  * The `starfield` piece: sparse stars on a mostly blank field, drifting one
  * cell every ~8 s and twinkling slowly. The cells below the star thresholds
  * stay at level 0, so the blit loop skips them and the tier is the cheapest.
+ * The primary threshold and the companion value are calibrated (see
+ * `ASCII_PRESETS.starfield`): at 0.962 / 0.16 the companions quantised to
+ * level 0 and only 3.8% of cells carried a star, which read as an empty
+ * backdrop on a live host.
  */
 export function createStarfieldPiece(levels: number, _dither: boolean): AsciiPiece {
   return (t, out, cols, rows) => {
@@ -360,12 +395,12 @@ export function createStarfieldPiece(levels: number, _dither: boolean): AsciiPie
       const sourceRow = row - base
       for (let col = 0; col < cols; col++, i++) {
         const h = hash2(col, sourceRow)
-        if (h > 0.962) {
+        if (h > 0.95) {
           const twinkle = 0.5 + 0.5 * Math.sin(t * 0.6 + h * 120)
           shade(out, i, 0.62 + 0.3 * twinkle, levels, false, row, col)
         } else if (h > 0.9) {
           const twinkle = 0.5 + 0.5 * Math.sin(t * 0.25 + h * 90)
-          shade(out, i, 0.16 + 0.14 * twinkle, levels, false, row, col)
+          shade(out, i, 0.2 + 0.14 * twinkle, levels, false, row, col)
         }
       }
     }
@@ -687,7 +722,8 @@ export function createAsciiBackdrop(options: AsciiBackdropOptions): AsciiBackdro
   let levels: Uint8Array | null = null
   let piece: AsciiPiece | null = null
   let surface = FALLBACK_SURFACE
-  let ink = inkFor(FALLBACK_SURFACE, false)
+  let ink = inkFor(FALLBACK_SURFACE, false, current.inkScale)
+  let inkScale = current.inkScale
   let dark = false
   let atlas: Atlas | null = null
   let atlasKey = ''
@@ -707,7 +743,7 @@ export function createAsciiBackdrop(options: AsciiBackdropOptions): AsciiBackdro
   function normalizeParams(next: AsciiParams | undefined): AsciiParams {
     const out: AsciiParams = {}
     if (next === undefined) return out
-    for (const key of ['density', 'speed', 'fps', 'fontPx', 'opacity'] as const) {
+    for (const key of ['density', 'speed', 'fps', 'fontPx', 'opacity', 'strength'] as const) {
       const value = next[key]
       if (typeof value === 'number' && Number.isFinite(value)) out[key] = value
     }
@@ -716,7 +752,17 @@ export function createAsciiBackdrop(options: AsciiBackdropOptions): AsciiBackdro
 
   function paramsEqual(a: AsciiParams, b: AsciiParams): boolean {
     return a.density === b.density && a.speed === b.speed && a.fps === b.fps
-      && a.fontPx === b.fontPx && a.opacity === b.opacity
+      && a.fontPx === b.fontPx && a.opacity === b.opacity && a.strength === b.strength
+  }
+
+  /** Re-derive the ink when the piece or the strength choice moved it. The
+   * atlas key carries the ink string, so a changed ink rebakes exactly once. */
+  function refreshInk(): void {
+    const scale = spec().inkScale
+    if (scale === inkScale) return
+    inkScale = scale
+    ink = inkFor(surface, dark, scale)
+    atlasKey = ''
   }
 
   function resetLadder(): void {
@@ -974,9 +1020,11 @@ export function createAsciiBackdrop(options: AsciiBackdropOptions): AsciiBackdro
     if (nextSurface !== surface) {
       surface = nextSurface
       dark = isDarkSurface(surface)
-      ink = inkFor(surface, dark)
+      inkScale = spec().inkScale
+      ink = inkFor(surface, dark, inkScale)
       atlasKey = ''
     }
+    refreshInk()
     if (!layoutDone) layout()
     if (!layoutDone) return
     const motion = computeMotion()
@@ -1001,6 +1049,7 @@ export function createAsciiBackdrop(options: AsciiBackdropOptions): AsciiBackdro
     // The overrides travel with the switch: each value re-clamps against the
     // new preset's own ranges, so nothing the new piece cannot honour leaks in.
     current = resolveAsciiSpec(preset, params)
+    refreshInk()
     resetLadder()
     // Re-derive the grid for the new density/fontPx. When the geometry did not
     // move, `layout` keeps the existing `levels` buffer and the atlas key
@@ -1030,6 +1079,7 @@ export function createAsciiBackdrop(options: AsciiBackdropOptions): AsciiBackdro
     if (paramsEqual(normalized, params)) return
     params = normalized
     current = resolveAsciiSpec(preset, params)
+    refreshInk()
     resetLadder()
     // Density/fontPx move the grid, opacity/font feed the atlas key; a change
     // in either must relayout before the immediate repaint. `layout` keeps the

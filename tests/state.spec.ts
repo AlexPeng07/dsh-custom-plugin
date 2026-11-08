@@ -96,6 +96,19 @@ describe('normalizeCfg', () => {
     expect(normalizeCfg({ bgFx: 'ascii', bgFxPreset: 'grain' }).bgFxPreset).toBe('flow')
     expect(normalizeCfg({ bgFxPreset: 'liquid' }).bgFxPreset).toBe('flow')
   })
+
+  it('accepts only the strength enum and defaults it to standard', () => {
+    // Documents written before the strength knob land on the calibrated value.
+    expect(normalizeCfg({}).bgStrength).toBe('standard')
+    for (const level of ['soft', 'standard', 'strong']) {
+      expect(normalizeCfg({ bgStrength: level }).bgStrength).toBe(level)
+    }
+    expect(normalizeCfg({ bgStrength: 'loud' }).bgStrength).toBe('standard')
+    expect(normalizeCfg({ bgStrength: 2 }).bgStrength).toBe('standard')
+    // Strength is tier-independent: it scales the same per-theme ink delta.
+    expect(normalizeCfg({ bgFx: 'none', bgStrength: 'strong' }).bgStrength).toBe('strong')
+    expect(normalizeCfg({ bgFx: 'shader', bgStrength: 'soft' }).bgStrength).toBe('soft')
+  })
 })
 
 describe('mergeState', () => {

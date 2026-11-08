@@ -21,7 +21,7 @@
  */
 
 import { DEGRADE_MAX, DPR_CAP, createLadder, isDarkSurface, observeFrame, type LadderState } from './bg-ascii.ts'
-import { hexToRgb, inkFor } from './palette.ts'
+import { hexToRgb, inkFor, inkScaleFor } from './palette.ts'
 
 /** Every shader style id. */
 export type ShaderStyle = 'liquid' | 'grain'
@@ -50,6 +50,9 @@ export interface ShaderStyleSpec {
   readonly seed: number
   readonly fps: number
   readonly animated: boolean
+  /** Per-style multiplier on the theme's base ΔL (see `inkFor`). The user's
+   * soft/standard/strong strength choice multiplies this again. */
+  readonly inkScale: number
   readonly ranges: ShaderStyleRanges
 }
 
@@ -61,11 +64,12 @@ export interface ShaderStyleSpec {
  */
 export const SHADER_STYLES: Record<ShaderStyle, ShaderStyleSpec> = {
   liquid: {
-    // 0.48 of the ink at the cloud peaks. The ink delta comes from `inkFor`
-    // (0.31 light / 0.38 dark), so the cloud reads at 1x instead of looking
-    // like a flat tint (measured p95 luminance spread ~5 levels at the old
-    // 0.13; the stronger delta lifts that without touching the intensity).
-    speed: 1, density: 1.1, intensity: 0.48, seed: 7.3, fps: 24, animated: true,
+    // 0.56 of the ink at the cloud peaks. The ink delta comes from `inkFor`
+    // (0.31 light / 0.15 dark, one per-theme calibration). Calibrated
+    // 2026-11-08 against the ASCII tier's ruler: at 0.48 the cloud measured
+    // 0.14% mean ink mass (Michelson 0.48%) while `flow` sat at 0.15% / 0.65%,
+    // so the softest tier read as the weakest one; 0.56 lands at 0.18%/0.65%.
+    speed: 1, density: 1.1, intensity: 0.56, seed: 7.3, fps: 24, animated: true, inkScale: 1,
     ranges: {
       speed: { min: 0.2, max: 1.2 },
       density: { min: 0.8, max: 1.6 },
@@ -79,7 +83,12 @@ export const SHADER_STYLES: Record<ShaderStyle, ShaderStyleSpec> = {
     // It also gives reduced-motion users a texture that never moves. The
     // fine speck is the main signal, so its ceiling sits higher than liquid's
     // while the mean stays low (most cells are near the surface colour).
-    speed: 0, density: 1.2, intensity: 0.6, seed: 41.7, fps: 30, animated: false,
+    // Deliberately left at 0.60/ink 1.0 after the 2026-11-08 review: it already
+    // measures the highest mean ink mass of any piece (0.55% light / 1.34%
+    // dark, i.e. 2.4× the light figure on a dark surface — exactly the target
+    // ratio), so boosting it would push the dark theme into the distracting
+    // band; its shallow 1.64% peak is a property of a fine static speck.
+    speed: 0, density: 1.2, intensity: 0.6, seed: 41.7, fps: 30, animated: false, inkScale: 1,
     ranges: {
       speed: { min: 0, max: 0 },
       density: { min: 0.75, max: 1.75 },
@@ -100,8 +109,9 @@ export function resolveShaderStyle(preset: string | undefined): ShaderStyle {
 }
 
 /** Panel overrides for one shader style. Values are clamped into the style's
- * own `ranges` before they reach a uniform. */
-export type ShaderParams = Partial<Record<'speed' | 'density' | 'intensity' | 'fps', number>>
+ * own `ranges` before they reach a uniform; `strength` is the user's
+ * soft/standard/strong multiplier on the ink step (clamped to the ink band). */
+export type ShaderParams = Partial<Record<'speed' | 'density' | 'intensity' | 'fps' | 'strength', number>>
 
 /** Clamp one override into a style range; `undefined`/non-finite means "use
  * the style default". */
@@ -121,10 +131,11 @@ export function resolveShaderSpec(style: ShaderStyle, params: ShaderParams): Sha
   const density = clampOverride(params.density, base.ranges.density, base.density)
   const intensity = clampOverride(params.intensity, base.ranges.intensity, base.intensity)
   const fps = clampOverride(params.fps, base.ranges.fps, base.fps)
-  if (speed === base.speed && density === base.density && intensity === base.intensity && fps === base.fps) {
+  const inkScale = inkScaleFor(base.inkScale * inkScaleFor(params.strength))
+  if (speed === base.speed && density === base.density && intensity === base.intensity && fps === base.fps && inkScale === base.inkScale) {
     return base
   }
-  return { ...base, speed, density, intensity, fps }
+  return { ...base, speed, density, intensity, fps, inkScale }
 }
 
 /** Hard bounds the uniform contract promises, independent of a style. */
@@ -299,7 +310,7 @@ export function shaderUniforms(input: ShaderUniformInput): ShaderUniformValues {
     height: Math.max(1, finite(input.height, 1)),
     dpr,
     surface: rgb01(surfaceHex),
-    ink: rgb01(inkFor(surfaceHex, isDarkSurface(surfaceHex))),
+    ink: rgb01(inkFor(surfaceHex, isDarkSurface(surfaceHex), input.spec.inkScale)),
     speed: clamp(input.spec.speed, SHADER_UNIFORM_RANGES.speed.min, SHADER_UNIFORM_RANGES.speed.max, 0),
     density,
     intensity: clamp(input.spec.intensity, SHADER_UNIFORM_RANGES.intensity.min, SHADER_UNIFORM_RANGES.intensity.max, 0),
@@ -611,7 +622,7 @@ export function createShaderBackdrop(options: ShaderBackdropOptions): ShaderBack
   function normalizeParams(next: ShaderParams | undefined): ShaderParams {
     const out: ShaderParams = {}
     if (next === undefined) return out
-    for (const key of ['speed', 'density', 'intensity', 'fps'] as const) {
+    for (const key of ['speed', 'density', 'intensity', 'fps', 'strength'] as const) {
       const value = next[key]
       if (typeof value === 'number' && Number.isFinite(value)) out[key] = value
     }
@@ -619,7 +630,8 @@ export function createShaderBackdrop(options: ShaderBackdropOptions): ShaderBack
   }
 
   function paramsEqual(a: ShaderParams, b: ShaderParams): boolean {
-    return a.speed === b.speed && a.density === b.density && a.intensity === b.intensity && a.fps === b.fps
+    return a.speed === b.speed && a.density === b.density && a.intensity === b.intensity
+      && a.fps === b.fps && a.strength === b.strength
   }
 
   function resetLadder(): void {

@@ -14,7 +14,7 @@ import * as React from 'react'
 import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ThemeRuntime } from '@deepseek-ai/dsh-client-ui-theme/client'
 import type { Context } from '@deepseek-ai/cordis'
-import { DEFAULT_CONFIG, type BgFxPreset, type ConversationSearchItem, type ConversationSearchKind, type CredentialStorage, type CustomPluginConfig, type FolderNode, type PromptItem, type TimelineItem, type UsageRow } from '../protocol.ts'
+import { DEFAULT_CONFIG, type BgFxPreset, type BgStrength, type ConversationSearchItem, type ConversationSearchKind, type CredentialStorage, type CustomPluginConfig, type FolderNode, type PromptItem, type TimelineItem, type UsageRow } from '../protocol.ts'
 import { createUsageRow, dayKey, mergeUsageRow } from '../usage.ts'
 import { DEEPSEEK_PRICING_CHECKED_ON, DEEPSEEK_PRICING_SOURCE_URL, estimateUsageCostCny, usageCostBreakdown } from '../pricing.ts'
 import { appearanceTokenKey, DARK_CANVAS_LIGHTNESS, hexToRgb, PALETTE, toDarkRamp } from './palette.ts'
@@ -24,6 +24,7 @@ import { createShaderBackdrop, resolveShaderStyle, type ShaderBackdrop, type Sha
 import {
   BG_PARAM_META,
   BG_PARAM_SAVE_MS,
+  BG_STRENGTH_META,
   asciiParamsFromCfg,
   createDebouncedSaver,
   effectiveParam,
@@ -34,7 +35,9 @@ import {
   resetBgParams,
   selectAppearanceSlice,
   setParamInCfg,
+  setStrengthInCfg,
   shaderParamsFromCfg,
+  strengthFromCfg,
   tierFromCfg,
   tierPresets,
   type BgParamKey,
@@ -2132,6 +2135,14 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       setS({ cfg: setParamInCfg(S.cfg, tier, preset, key, value) })
       bgSaveDebounced.push()
     }
+    const strength = strengthFromCfg(cfg)
+    // Discrete like tier/preset: one save, no debounce.
+    const pickStrength = (next: BgStrength): void => {
+      if (next === strength) return
+      bgSaveDebounced.cancel()
+      setS({ cfg: setStrengthInCfg(S.cfg, next) })
+      saveCfg()
+    }
     const restoreDefaults = (): void => {
       bgSaveDebounced.cancel()
       setS({ cfg: resetBgParams(S.cfg) })
@@ -2205,6 +2216,21 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
                 }, PRESET_LABELS[id] ?? id)
               }),
             ),
+            // The intuitive "it looks too faint / too loud" outlet: scales the
+            // ink step only, so density, speed and frame rate stay put.
+            React.createElement('div', { className: 'vx-row wrap', role: 'group', 'aria-label': '背景墨色强度' },
+              React.createElement('span', { className: 'vx-param-label' }, '墨色强度'),
+              BG_STRENGTH_META.map((item) => {
+                const active = strength === item.value
+                return React.createElement('button', {
+                  key: item.value,
+                  className: 'vx-btn' + (active ? ' on' : ''),
+                  'aria-pressed': active,
+                  onClick: () => pickStrength(item.value),
+                }, item.label)
+              }),
+            ),
+            React.createElement('div', { className: 'vx-muted' }, '「墨色强度」只改整片墨色的深浅：觉得淡就点「明显」，觉得抢眼就点「柔和」；密度、帧率与预设都不变。'),
             // A still preset paints exactly one frame, so switching to it looks
             // like nothing happened. Say so inside the panel — never a toast.
             stillNote === null ? null : React.createElement('div', { className: 'vx-note' }, stillNote),
@@ -3308,7 +3334,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       d.addEventListener('keydown', onKey)
       return () => d.removeEventListener('keydown', onKey)
     }, [])
-    React.useEffect(() => { if (booted) applyAppearance() }, [booted, cfg.bg, cfg.bgFx, cfg.bgFxPreset, cfg.bgDensity, cfg.bgSpeed, cfg.bgFps, cfg.bgFontPx, cfg.bgOpacity, cfg.bgIntensity, cfg.glass, cfg.glassMode, cfg.globalGlass, dark])
+    React.useEffect(() => { if (booted) applyAppearance() }, [booted, cfg.bg, cfg.bgFx, cfg.bgFxPreset, cfg.bgStrength, cfg.bgDensity, cfg.bgSpeed, cfg.bgFps, cfg.bgFontPx, cfg.bgOpacity, cfg.bgIntensity, cfg.glass, cfg.glassMode, cfg.globalGlass, dark])
     React.useEffect(() => {
       syncAntiScroll(cfg.antiScroll === true)
       // Unmount/disable must restore scroll-behavior on every element this

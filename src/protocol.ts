@@ -25,6 +25,14 @@ export const BG_FX_SHADER_STYLES = ['liquid', 'grain'] as const
  * `normalizeCfg` narrows it to the set that matches the active `bgFx` mode. */
 export type BgFxPreset = (typeof BG_FX_ASCII_PRESETS)[number] | (typeof BG_FX_SHADER_STYLES)[number]
 
+/** Background ink-strength choices, soft → standard → strong. This is the
+ * intuitive "it looks too faint / too loud" outlet; it only scales the ink's
+ * lightness step and never touches density, speed or frame rate. */
+export const BG_STRENGTHS = ['soft', 'standard', 'strong'] as const
+
+/** One of {@link BG_STRENGTHS}. */
+export type BgStrength = (typeof BG_STRENGTHS)[number]
+
 /** Plugin appearance and behavior configuration, persisted in the host state file. */
 export interface CustomPluginConfig {
   /** Background preset: 'default' (no color) or one of the 20 palette names.
@@ -42,6 +50,10 @@ export interface CustomPluginConfig {
    * `normalizeCfg` resets it into the set that matches `bgFx`. Unknown values
    * fall back to the tier default (`'flow'` / `'liquid'`). */
   bgFxPreset?: BgFxPreset
+  /** Ink strength: 'soft' | 'standard' | 'strong'. Default 'standard' (the
+   * calibrated value). It scales the per-piece ink step only; density, speed
+   * and frame rate are unaffected. Unknown values fall back to 'standard'. */
+  bgStrength?: BgStrength
   /** Background tunable overrides. One flat numeric field per knob because
    * `normalizeCfg` drops nested values. `BG_PARAM_UNSET` (-1) means "follow
    * the active preset"; any other value is clamped into that preset's
@@ -81,6 +93,7 @@ export const DEFAULT_CONFIG: CustomPluginConfig = {
   bg: '天青灰',
   bgFx: 'none',
   bgFxPreset: 'flow',
+  bgStrength: 'standard',
   bgDensity: -1,
   bgSpeed: -1,
   bgFps: -1,

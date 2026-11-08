@@ -102,33 +102,63 @@ export function toDarkRamp(hex: string, lightness: number): string {
 /**
  * Character ink for the ASCII backdrop: the surface keeps its hue, saturation
  * is compressed the same way the dark ramp compresses it, and lightness moves
- * by a fixed delta (up on dark surfaces, down on light ones). The target is
- * "visible but not competing with body text", not WCAG text contrast.
+ * by a fixed per-theme delta (up on dark surfaces, down on light ones), scaled
+ * by the caller (`inkScale`: one value per piece plus the user's strength
+ * choice). The target is "visible but not competing with body text", not
+ * WCAG text contrast.
  *
- * The deltas are sized from the composited page, not from the raw canvas.
- * Content surfaces sit at 0.5–0.7 alpha, so only ~19% of the ink reaches the
- * reading column: the old 0.13 left a 2.9-luma range (0.64% Michelson) in a
- * content-column patch, i.e. below the ~1% just-noticeable band, so the layer
- * read as "on but nothing happened" even while it was animating. 0.31 puts
- * that same patch at 6.3 luma / 1.39%, comfortably above the band, while the
- * canvas ink is still far below body-text contrast (measured 1280×822,
- * 0.2.2-rc.1). Dark mode is not the same number because its surface sits at
- * ~37 luma: 0.20 read flat (3.8 luma) and 0.38 now lands at 7.6 luma, the
- * matching perceived step rather than the same HSL delta.
+ * The two deltas are calibrated independently, from the composited page rather
+ * than the raw canvas. Ink reaches the reading column at ~9% strength: the
+ * glyphs sit under content surfaces at 0.5–0.7 alpha, so an 80-luma ink step
+ * (light) lands a 6.9-luma composited peak. On the light canvas (#e9ebee,
+ * 234.8 luma) −0.31 measures 0.15% mean ink mass and a 2.99% peak — just above
+ * the ~1% just-noticeable band, where the old −0.13 read as "on but nothing
+ * happened".
+ *
+ * On the dark canvas (#1c1e21, 29.8 luma) the same *relative* step is
+ * perceptually much stronger, and the eye is also less sensitive at low
+ * luminance: the DeVries-Rose law puts the threshold contrast at roughly
+ * sqrt(234.8 / 29.8) ≈ 2.8× the light one, so a dark patch needs ~2.5–2.8× the
+ * light relative modulation to feel equal — not the same number. +0.38
+ * delivered 6.7× (9.37% Michelson) and read as the loudest thing on screen;
+ * +0.15 measures 2.1–2.7× on mean ink mass across all eight pieces (0.34% dark
+ * vs 0.15% light for `flow`; 8.17% vs 2.99% peak), i.e. inside that band.
+ * Going lower misses it: +0.10 only reaches 1.4×. Equalising the raw Michelson
+ * instead would need a ~1-luma step on dark, which is invisible.
  */
-export function inkFor(surfaceHex: string, dark: boolean): string {
+export function inkFor(surfaceHex: string, dark: boolean, scale = 1): string {
+  const k = inkScaleFor(scale)
   const [h, s, l] = rgbToHsl(hexToRgb(surfaceHex))
-  const targetL = Math.max(0.04, Math.min(0.96, l + (dark ? DARK_INK_DELTA : LIGHT_INK_DELTA)))
+  const targetL = Math.max(0.04, Math.min(0.96, l + (dark ? DARK_INK_DELTA : LIGHT_INK_DELTA) * k))
   const [r, g, b] = hslToRgb(h, Math.max(0, Math.min(1, s * DARK_SATURATION_SCALE)), targetL)
   return '#' + [r, g, b].map((v) => v.toString(16).padStart(2, '0')).join('')
 }
 
-/** Ink lightness drop from a light surface. */
+/** Lower bound of the ink-strength multiplier. */
+export const INK_SCALE_MIN = 0.4
+
+/** Upper bound of the ink-strength multiplier. */
+export const INK_SCALE_MAX = 2.2
+
+/** Clamp an ink-strength multiplier; missing/non-finite means 1 (the
+ * calibrated per-theme delta). */
+export function inkScaleFor(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value)) return 1
+  return value < INK_SCALE_MIN ? INK_SCALE_MIN : value > INK_SCALE_MAX ? INK_SCALE_MAX : value
+}
+
+/** Ink lightness drop from a light surface. Calibrated 2026-11-08 on the
+ * `天青灰` canvas (#e9ebee): 0.15% mean ink mass / 2.99% peak in the reading
+ * column, just above the 1% just-noticeable band. */
 export const LIGHT_INK_DELTA = -0.31
 
-/** Ink lightness lift from a dark surface; see {@link inkFor} for why it is
- *  larger than the light delta. */
-export const DARK_INK_DELTA = 0.38
+/** Ink lightness lift from a dark surface. Smaller in magnitude than the
+ * light drop on purpose: the DeVries-Rose threshold contrast at 29.8 luma is
+ * ~2.8× the light one, so dark needs a bigger *relative* step but a smaller
+ * absolute one. +0.15 measures 0.34% mean ink mass / 8.17% peak, i.e. 2.1–2.7×
+ * the light figure across pieces; the old +0.38 measured 6.7× and glared.
+ * See {@link inkFor}. */
+export const DARK_INK_DELTA = 0.15
 
 /** Body-canvas lightness for the dark variant of a palette family. */
 export const DARK_CANVAS_LIGHTNESS = 0.12
