@@ -19,6 +19,7 @@ import {
   paramDefault,
   paramRange,
   presetForTier,
+  presetStillNote,
   resetBgParams,
   selectAppearanceSlice,
   setParamInCfg,
@@ -50,6 +51,24 @@ describe('tier and preset fallbacks', () => {
     expect(tierPresets('none')).toEqual([])
     expect(tierPresets('ascii')).toEqual(['flow', 'rain', 'ocean', 'starfield', 'ripple', 'static'])
     expect(tierPresets('shader')).toEqual(['liquid', 'grain'])
+  })
+
+  it('explains a still preset in place instead of firing a toast', () => {
+    // Only the zero-rAF presets need the note: the picture is the frame.
+    expect(presetStillNote('ascii', 'static')).toContain('只画一帧')
+    expect(presetStillNote('shader', 'grain')).toContain('只画一帧')
+    // Every animated preset stays silent, and the note follows the tier, so a
+    // cross-tier id (already re-homed upstream) never borrows the other tier's
+    // copy.
+    for (const preset of tierPresets('ascii')) {
+      if (preset === 'static') continue
+      expect(presetStillNote('ascii', preset)).toBeNull()
+    }
+    expect(presetStillNote('shader', 'liquid')).toBeNull()
+    expect(presetStillNote('none', 'static')).toBeNull()
+    // A shader id inside the ASCII tier falls back to `flow`, i.e. no note.
+    expect(presetStillNote('ascii', 'grain')).toBeNull()
+    expect(presetStillNote('shader', 'static')).toBeNull()
   })
 })
 

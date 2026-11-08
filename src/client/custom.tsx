@@ -30,6 +30,7 @@ import {
   panelParamKeys,
   paramRange,
   presetForTier,
+  presetStillNote,
   resetBgParams,
   selectAppearanceSlice,
   setParamInCfg,
@@ -2136,6 +2137,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       setS({ cfg: resetBgParams(S.cfg) })
       saveCfg()
     }
+    const stillNote = presetStillNote(tier, preset)
     return React.createElement('div', { className: 'vx-col' },
       React.createElement('div', { className: 'vx-muted' }, '主题背景、天气特效、背景动效与玻璃质感，选择后即时生效。'),
       React.createElement('div', { className: 'vx-section-title' }, '背景颜色'),
@@ -2203,6 +2205,9 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
                 }, PRESET_LABELS[id] ?? id)
               }),
             ),
+            // A still preset paints exactly one frame, so switching to it looks
+            // like nothing happened. Say so inside the panel — never a toast.
+            stillNote === null ? null : React.createElement('div', { className: 'vx-note' }, stillNote),
             React.createElement('div', { className: 'vx-param-list' },
               params.map((key) => {
                 const meta = BG_PARAM_META[key]

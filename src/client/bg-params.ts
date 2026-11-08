@@ -234,6 +234,22 @@ export function selectAppearanceSlice(state: { cfg: CustomPluginConfig, dark: bo
   return { cfg: state.cfg, dark: state.dark }
 }
 
+/**
+ * The one-line note the panel shows when the active preset draws exactly one
+ * frame and never animates. Switching to such a preset looks like "nothing
+ * happened" because the still picture is the whole point, so the panel says so
+ * in place instead of firing a toast. Returns null for every animated preset.
+ */
+export function presetStillNote(tier: BgTier, preset: BgFxPreset): string | null {
+  if (tier === 'ascii' && resolveAsciiPreset(preset) === 'static') {
+    return '静态：只画一帧、不占动画帧，所以切过来画面不会流动——这是设计如此，不是没生效。'
+  }
+  if (tier === 'shader' && SHADER_STYLES[resolveShaderStyle(preset)].animated === false) {
+    return '颗粒：静态纹理，同样只画一帧；看不到流动属正常。'
+  }
+  return null
+}
+
 /** Every preset id the active tier can show, in panel order. */
 export function tierPresets(tier: BgTier): readonly BgFxPreset[] {
   if (tier === 'shader') return BG_FX_SHADER_STYLES
