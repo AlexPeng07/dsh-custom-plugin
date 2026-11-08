@@ -165,6 +165,41 @@ daily token usage.
   77.1% moved / mean 9.6 — it is a continuous field, so the floor reads as a
   full-surface wash rather than glyph texture; that is the honest shape of
   the tier, not a mask bug.
+- Round-3 cross-check (2026-11-08, same host, 48 cells: six ASCII pieces +
+  two shader styles × light/dark × soft/standard/strong) fixed the *ruler* as
+  much as the values: **measure the renderer's own canvas** (hide every
+  `body > *` except `#vx-bg`) or read the fade band's profile. Neither
+  page-level ruler is universal — a page-level `|on−off|` mean is diluted by
+  the sidebar's opaque cards (that is how `grain` read 0.90 while its canvas
+  reads 0.46), and the ASCII canvas coverage ruler only holds on light (it
+  assumes ink darker than the surface; dark ink is lighter, so it reads
+  98–100% everywhere). `strength` is a second axis, not a mask knob: light
+  `flow` holds 0.39/0.40/0.40 across the three steps while ink mass climbs
+  2.49 → 3.85 luma. Per-piece survival on the light canvas (column vs left,
+  coverage/mean): flow & static 10.2%/0.017 vs 25.8%/0.065, rain 6.5 vs 7.8,
+  ocean 2.5%/0.004 vs 3.7%/0.010, ripple 8.3 vs 8.1 (the feather does not cut
+  the contours), starfield 0.1 vs 0.2 — starfield is the one 偏弱 cell: half
+  its grid is blank by design and it carries no dither, so `round()` takes
+  low levels to 0 inside the calm zone and ~10 bright stars are left. **No
+  per-piece focus floor was added** — an exemption lets any piece opt out of
+  the contract and invalidates the flat calibration table. Dark verdicts rest
+  on the page ruler (0.29–0.65 across all eight pieces): mask present,
+  granularity limited by the smaller ink. The shader tier's `u_focus`
+  multiply leaves no seam (text-free band y650..690: mean adjacent step 7.3,
+  max 8.0 luma/device px), and `grain` is masked on its single static frame —
+  column median 208.7 vs sidebar 178.9 against an un-inked surface of 234.7
+  is 0.46, three captures 1.2 s apart are pixel-identical, and the
+  1100×760 resize repaint is masked too, so it is not "one full-strength
+  frame and never again". Its 31-luma page-median darkening is the piece's
+  own shape, not a mask miss. Cost is one array read per cell inside the
+  existing blit (23,040 cells: −0.02 ns/cell, i.e. noise) plus one
+  `buildFocusCaps` rebuild per zone change (0.103 ms on a 350 ms cadence);
+  measured idle is ascii 48.1% CPU / 24 fps / 0 long tasks (the cost is the
+  pre-existing per-cell `drawImage`), shader 8.3% / 0.2 ms p95, and
+  `bgFx:'none'` 0.3% with no rAF at all. Text contrast 14.46 → 14.32 light
+  (all three strengths) and 2.29 → 2.30 dark. Off→on→off trips are
+  symmetric (nodes 1842/1844/1842, `#vx-bg` 0/1/0, canvases 1/2/1,
+  `setInterval` 2/3/2, listeners 31/31/31 and 36/37/36).
 - The renderer is `src/client/bg-ascii.ts`, mounted as one canvas inside
   `#vx-bg`. The effect contract is `(t, out: Uint8Array, cols, rows) => void`:
   pieces write ramp levels, never strings, into one reused buffer. Level 0 is
