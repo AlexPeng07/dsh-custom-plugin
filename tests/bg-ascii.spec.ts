@@ -17,6 +17,7 @@ import {
   createLadder,
   createPresetPiece,
   DEGRADE_MAX,
+  FLOW_LEVEL_FLOOR,
   isDarkSurface,
   LADDER_BAD_WINDOWS,
   LADDER_WINDOW,
@@ -251,6 +252,28 @@ describe('createFlowPiece', () => {
     // Same buffer, new contents: the loop never allocates a replacement.
     expect(Array.from(buf)).not.toEqual(first)
   })
+
+  it('never emits the blank / hairline half of the ramp — ink area is the visibility lever', () => {
+    // Value noise sits near 0.5, so without the lift most cells quantise onto
+    // the ramp's light glyphs (`+` / `*`, 5.5% / 4.4% ink area at 12 px) and the
+    // composited page reads as a flat wash. FLOW_LEVEL_FLOOR moves the darkest
+    // cell to the middle of the ramp, so `#`–`%` (12–17% ink area) carry the
+    // field. The floor is a *coverage* contract: asserting the minimum level
+    // (and the mean) is what stops a later "make it subtler" edit from silently
+    // putting the page back to the state the user rejected.
+    const cols = 40
+    const rows = 20
+    const buf = new Uint8Array(cols * rows)
+    createFlowPiece(10, false)(5.5, buf, cols, rows)
+    const levels = Array.from(buf)
+    const floorLevel = Math.floor(FLOW_LEVEL_FLOOR * 10)
+    expect(Math.min(...levels)).toBeGreaterThanOrEqual(floorLevel)
+    const mean = levels.reduce((sum, v) => sum + v, 0) / levels.length
+    // Average noise ≈ 0.5 → lifted ≈ 0.72 → level 7 (`#`); allow the field's
+    // own variation, but pin it above the old `+` band (level 5).
+    expect(mean).toBeGreaterThanOrEqual(6)
+    expect(Math.max(...levels)).toBeLessThan(10)
+  })
 })
 
 /** Render one preset frame into a fresh buffer at a fixed test grid. */
@@ -453,18 +476,18 @@ describe('inkFor', () => {
   })
 
   it('calibrates each theme to its own delta, not one shared number', () => {
-    // Ink reaches the reading column at ~9% strength (content surfaces at
-    // 0.5–0.7 alpha), so an 80-luma ink step shows as a 6.9-luma composited
-    // peak. Measured on a live 1280×822 dpr-1.5 host (0.2.2-rc.1, backdrop
-    // pixels only, text masked out): −0.31 gives 0.15% mean ink mass / 2.99%
-    // peak, just above the ~1% just-noticeable band, where the old −0.13 read
-    // as "on but invisible". The dark surface is perceptually different rather
-    // than merely darker: DeVries-Rose puts its threshold contrast at
-    // sqrt(234.8/29.8) ≈ 2.8× the light one, so +0.15 (a 38-luma step, 0.34%
-    // mass / 8.17% peak) is the equal-strength point — 2.1–2.7× the light
-    // figure across all pieces. The old +0.38 measured 6.7× and glared. These
-    // bounds pin both calibrations: shrinking the light side is a visibility
-    // regression, growing the dark side is the "steals attention" regression.
+    // Round 1 (2026-11-08) replaced the 1%-Michelson target with "关闭 vs 开启
+    // 一眼能分出来". Two independent findings from the live host: (1) the ink
+    // step is not the binding constraint — at −0.31 the raw step was already
+    // 89 luma, halved by the 0.5-alpha content surface; what kept the page
+    // looking flat was the *glyph ink area* (see FLOW_LEVEL_FLOOR), and (2)
+    // pushing the light step to −0.7 (179 luma, ink luma 55 on a 234.8 surface)
+    // is what makes the surviving glyph strokes read as texture at 1:1.
+    // The dark surface is perceptually different rather than merely darker:
+    // DeVries-Rose puts its threshold contrast at sqrt(234.8/29.8) ≈ 2.8× the
+    // light one, so +0.15 (a 38-luma step) stays the equal-strength point — do
+    // not grow it to match the light magnitude, that is the "steals attention"
+    // regression. These bounds pin both calibrations.
     const brightness = (hex: string): number => {
       const [r, g, b] = hexToRgb(hex)
       return 0.2126 * r + 0.7152 * g + 0.0722 * b
@@ -473,8 +496,8 @@ describe('inkFor', () => {
     const dark = '#1c1e21'
     const lightStep = brightness(light) - brightness(inkFor(light, false))
     const darkStep = brightness(inkFor(dark, true)) - brightness(dark)
-    expect(lightStep).toBeGreaterThanOrEqual(70)
-    expect(lightStep).toBeLessThanOrEqual(95)
+    expect(lightStep).toBeGreaterThanOrEqual(165)
+    expect(lightStep).toBeLessThanOrEqual(195)
     expect(darkStep).toBeGreaterThanOrEqual(28)
     expect(darkStep).toBeLessThanOrEqual(48)
     // The dark step stays smaller in magnitude than the light one: equal
@@ -491,10 +514,13 @@ describe('inkFor', () => {
     const base = brightness(surface) - brightness(inkFor(surface, false))
     const half = brightness(surface) - brightness(inkFor(surface, false, 0.5))
     const double = brightness(surface) - brightness(inkFor(surface, false, 2))
-    expect(half).toBeCloseTo(base / 2, 0)
-    // 2× is clamped into the light delta's own headroom (L ≥ 0.04), so the
-    // step can never exceed the surface's full lightness range.
-    expect(double).toBeGreaterThan(base * 1.5)
+    // HSL lightness is not linear in luma once the ink nears black, so the
+    // half step lands within 2% of base/2 rather than exactly on it.
+    expect(Math.abs(half - base / 2)).toBeLessThan(base * 0.02)
+    // 2× is clamped into the light delta's own headroom (L ≥ 0.04): the step
+    // grows but can never exceed the surface's own luma.
+    expect(double).toBeGreaterThan(base)
+    expect(double).toBeLessThanOrEqual(brightness(surface))
     // Missing / non-finite / out-of-band multipliers fall back to the
     // calibrated value rather than producing an unreadable ink.
     expect(inkFor(surface, false, Number.NaN)).toBe(inkFor(surface, false))

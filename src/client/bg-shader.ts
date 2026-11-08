@@ -21,6 +21,7 @@
  */
 
 import { DEGRADE_MAX, DPR_CAP, createLadder, isDarkSurface, observeFrame, type LadderState } from './bg-ascii.ts'
+import { FOCUS_FEATHER_PX, FOCUS_FLOOR, normalizeFocusRect, type BgFocusRect } from './bg-focus.ts'
 import { hexToRgb, inkFor, inkScaleFor } from './palette.ts'
 
 /** Every shader style id. */
@@ -64,16 +65,18 @@ export interface ShaderStyleSpec {
  */
 export const SHADER_STYLES: Record<ShaderStyle, ShaderStyleSpec> = {
   liquid: {
-    // 0.56 of the ink at the cloud peaks. The ink delta comes from `inkFor`
-    // (0.31 light / 0.15 dark, one per-theme calibration). Calibrated
-    // 2026-11-08 against the ASCII tier's ruler: at 0.48 the cloud measured
-    // 0.14% mean ink mass (Michelson 0.48%) while `flow` sat at 0.15% / 0.65%,
-    // so the softest tier read as the weakest one; 0.56 lands at 0.18%/0.65%.
-    speed: 1, density: 1.1, intensity: 0.56, seed: 7.3, fps: 24, animated: true, inkScale: 1,
+    // 0.70 of the ink at the cloud peaks. The ink delta comes from `inkFor`
+    // (0.7 light / 0.15 dark, one per-theme calibration). Round 1 re-tune
+    // 2026-11-08 after the user rejected the 1%-Michelson ruler as "根本看不
+    // 出来": the smoothstep window below now starts at 0.22, so the *typical*
+    // pixel (field ≈ 0.4) lands near 0.35 amount instead of 0.09 — the cloud
+    // covers area rather than owning a few bright cores — and the peak
+    // intensity moved 0.56 → 0.70 with the panel range widened to 1.0.
+    speed: 1, density: 1.1, intensity: 0.7, seed: 7.3, fps: 24, animated: true, inkScale: 1,
     ranges: {
       speed: { min: 0.2, max: 1.2 },
       density: { min: 0.8, max: 1.6 },
-      intensity: { min: 0.2, max: 0.6 },
+      intensity: { min: 0.2, max: 1 },
       seed: { min: 0, max: 9999 },
       fps: { min: 15, max: 30 },
     },
@@ -171,7 +174,26 @@ uniform float u_speed;
 uniform float u_density;
 uniform float u_intensity;
 uniform float u_seed;
+uniform vec4  u_focus;
+uniform float u_focusFeather;
+uniform float u_focusFloor;
 varying vec2 v_uv;
+
+// Reading-column focus: full ink outside the column, u_focusFloor inside it,
+// with a smoothstep feather on every side. The rect arrives in CSS px from the
+// top-left origin, so the flip has to happen here (v_uv.y runs bottom-up).
+// A zero-width rect (u_focus.z <= 0) means "no zone" and leaves the frame
+// untouched.
+float focusWeight() {
+  if (u_focus.z <= 0.0) return 1.0;
+  vec2 px = vec2(v_uv.x, 1.0 - v_uv.y) * u_resolution;
+  vec2 right = u_focus.xy + u_focus.zw;
+  float dx = px.x < u_focus.x ? u_focus.x - px.x : (px.x > right.x ? px.x - right.x : 0.0);
+  float dy = px.y < u_focus.y ? u_focus.y - px.y : (px.y > right.y ? px.y - right.y : 0.0);
+  float d = length(vec2(dx, dy));
+  float t = clamp(d / max(u_focusFeather, 1.0), 0.0, 1.0);
+  return u_focusFloor + (1.0 - u_focusFloor) * (t * t * (3.0 - 2.0 * t));
+}
 
 // The public seed range is 0..9999; fold it into 0..1 so every hash input
 // stays in a range both highp and mediump can resolve.
@@ -224,11 +246,11 @@ void main() {
     vnoise(q * scale + vec2(5.2 - t * 0.09, seed01 * 2.1 + 3.1))
   );
   float f = fbm(q * (scale * 1.44) + warp * 1.2 + vec2(t * 0.05, -t * 0.035));
-  f = smoothstep(0.32, 0.76, f);
+  f = smoothstep(0.22, 0.72, f);
   // A very low-frequency vertical breath keeps the cloud alive without
   // pushing the field into a fast, high-contrast band.
   f *= 0.82 + 0.18 * sin(q.y * 2.4 + t * 0.22 + seed01 * 6.0);
-  float amount = clamp(f * u_intensity, 0.0, 1.0);
+  float amount = clamp(f * u_intensity, 0.0, 1.0) * focusWeight();
   gl_FragColor = vec4(mix(u_surface, u_ink, amount), 1.0);
 }`,
   grain: `${SHADER_PRELUDE}
@@ -241,11 +263,10 @@ void main() {
   vec2 grid = floor(px / cell);
   float fine = hash21(grid * 0.061 + vec2(seed01 * 31.0, seed01 * 17.0));
   float cloud = vnoise(px / max(u_resolution.y, 1.0) * 2.1 + seed01 * 5.0);
-  float amount = (fine * 0.78 + cloud * 0.22) * u_intensity;
-  // Clear the middle of the viewport so the content column stays calm, and
-  // let the grain build toward the edges where the side panels sit.
-  vec2 d = (v_uv - 0.5) * vec2(u_resolution.x / max(u_resolution.y, 1.0), 1.0);
-  amount *= 0.4 + 0.6 * smoothstep(0.08, 0.62, length(d));
+  // The calm centre is now the shared reading-column mask (focusWeight), so
+  // the old hand-tuned radial term is gone: two overlapping fades on the same
+  // axis would have made the column's edge read twice as wide as it is.
+  float amount = (fine * 0.78 + cloud * 0.22) * u_intensity * focusWeight();
   gl_FragColor = vec4(mix(u_surface, u_ink, clamp(amount, 0.0, 1.0)), 1.0);
 }`,
 }
@@ -263,6 +284,10 @@ export interface ShaderUniformValues {
   density: number
   intensity: number
   seed: number
+  /** `[x, y, w, h]` in CSS px; `w <= 0` disables the mask. */
+  focus: [number, number, number, number]
+  focusFeather: number
+  focusFloor: number
 }
 
 /** Inputs for {@link shaderUniforms}; `dark` is derived from the surface. */
@@ -275,6 +300,8 @@ export interface ShaderUniformInput {
   surface: string
   /** Multiplier applied by the degradation ladder (L2). */
   densityScale?: number
+  /** Reading-column calm zone from the appearance painter. */
+  focus?: BgFocusRect | null
 }
 
 function finite(value: number, fallback: number): number {
@@ -289,6 +316,12 @@ function clamp(value: number, min: number, max: number, fallback: number): numbe
 function rgb01(hex: string): [number, number, number] {
   const [r, g, b] = hexToRgb(hex)
   return [r / 255, g / 255, b / 255]
+}
+
+/** `[0, 0, 0, 0]` means "no calm zone": the shader skips the fade entirely. */
+function focusRectUniform(rect: BgFocusRect | null | undefined): [number, number, number, number] {
+  const clean = normalizeFocusRect(rect)
+  return clean === null ? [0, 0, 0, 0] : [clean.x, clean.y, clean.w, clean.h]
 }
 
 /**
@@ -315,6 +348,9 @@ export function shaderUniforms(input: ShaderUniformInput): ShaderUniformValues {
     density,
     intensity: clamp(input.spec.intensity, SHADER_UNIFORM_RANGES.intensity.min, SHADER_UNIFORM_RANGES.intensity.max, 0),
     seed: clamp(input.spec.seed, SHADER_UNIFORM_RANGES.seed.min, SHADER_UNIFORM_RANGES.seed.max, 0),
+    focus: focusRectUniform(input.focus),
+    focusFeather: FOCUS_FEATHER_PX,
+    focusFloor: FOCUS_FLOOR,
   }
 }
 
@@ -353,6 +389,7 @@ export interface ShaderGL {
   uniform1f(location: object | null, value: number): void
   uniform2f(location: object | null, x: number, y: number): void
   uniform3f(location: object | null, x: number, y: number, z: number): void
+  uniform4f(location: object | null, x: number, y: number, z: number, w: number): void
   viewport(x: number, y: number, width: number, height: number): void
   drawArrays(mode: number, first: number, count: number): void
   clearColor(r: number, g: number, b: number, a: number): void
@@ -464,6 +501,8 @@ export interface ShaderBackdrop {
    * into that style's `ranges`; a style switch keeps the overrides and
    * re-clamps them. Repaints immediately so a dragging slider is visible. */
   setParams(params: ShaderParams): void
+  /** Move the calm zone (the reading column); `null` disables the mask. */
+  setFocus(rect: BgFocusRect | null): void
   destroy(): void
   readonly stats: ShaderBackdropStats
 }
@@ -478,6 +517,9 @@ interface UniformLocations {
   density: object | null
   intensity: object | null
   seed: object | null
+  focus: object | null
+  focusFeather: object | null
+  focusFloor: object | null
 }
 
 interface BuiltProgram {
@@ -553,6 +595,9 @@ function buildProgram(gl: ShaderGL, style: ShaderStyle): BuiltProgram | null {
       density: gl.getUniformLocation(program, 'u_density'),
       intensity: gl.getUniformLocation(program, 'u_intensity'),
       seed: gl.getUniformLocation(program, 'u_seed'),
+      focus: gl.getUniformLocation(program, 'u_focus'),
+      focusFeather: gl.getUniformLocation(program, 'u_focusFeather'),
+      focusFloor: gl.getUniformLocation(program, 'u_focusFloor'),
     },
   }
 }
@@ -614,6 +659,7 @@ export function createShaderBackdrop(options: ShaderBackdropOptions): ShaderBack
   let resizeTimer: ReturnType<typeof setTimeout> | null = null
   let resizeObserver: ShaderResizeObserverLike | null = null
   let dprMql: ShaderMediaQueryLike | null = null
+  let focusRect: BgFocusRect | null = null
 
   function spec(): ShaderStyleSpec {
     return current
@@ -680,6 +726,7 @@ export function createShaderBackdrop(options: ShaderBackdropOptions): ShaderBack
       spec: spec(),
       surface,
       densityScale,
+      focus: focusRect,
     })
     if (level >= DEGRADE_MAX) {
       gl.viewport(0, 0, canvas.width, canvas.height)
@@ -708,6 +755,9 @@ export function createShaderBackdrop(options: ShaderBackdropOptions): ShaderBack
     gl.uniform1f(u.density, values.density)
     gl.uniform1f(u.intensity, values.intensity)
     gl.uniform1f(u.seed, values.seed)
+    gl.uniform4f(u.focus, values.focus[0], values.focus[1], values.focus[2], values.focus[3])
+    gl.uniform1f(u.focusFeather, values.focusFeather)
+    gl.uniform1f(u.focusFloor, values.focusFloor)
     gl.drawArrays(gl.TRIANGLES, 0, 3)
     frames++
     stats.frames = frames
@@ -890,6 +940,18 @@ export function createShaderBackdrop(options: ShaderBackdropOptions): ShaderBack
     if (!running) startLoop()
   }
 
+  function setFocus(next: BgFocusRect | null): void {
+    if (destroyed || lost) return
+    const rect = normalizeFocusRect(next)
+    if (rect === null && focusRect === null) return
+    if (rect !== null && focusRect !== null && rect.x === focusRect.x && rect.y === focusRect.y && rect.w === focusRect.w && rect.h === focusRect.h) return
+    focusRect = rect
+    // The zone is just two extra uniforms: a running loop picks it up next
+    // frame, a stopped one paints once so the layout change is not stale.
+    if (computeMotion() === 'paused' || !layoutDone) return
+    if (!running) drawOnce()
+  }
+
   function onVisibility(): void {
     applyMotion()
   }
@@ -977,7 +1039,7 @@ export function createShaderBackdrop(options: ShaderBackdropOptions): ShaderBack
     stats.alive = false
   }
 
-  return { sync, setStyle, setParams, destroy, stats }
+  return { sync, setStyle, setParams, setFocus, destroy, stats }
 }
 
 /** Read the actual back-end string when the browser exposes it. Never used to

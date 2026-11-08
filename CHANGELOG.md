@@ -4,6 +4,61 @@ All notable changes to this project are documented here. The format loosely
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions
 follow [Semantic Versioning](https://semver.org/).
 
+## Unreleased — 2026-11-08
+
+### Fixed
+
+- **背景动效"看不见"的真瓶颈（第二轮定性）**：不是墨色不够黑，而是壳把墨色吃掉
+  了。实测（Desktop 1280×822 CSS / DPR 1.5、浅色 天青灰、玻璃开）：正文列叠了
+  **三层**半透明表面（`--dsw-alias-bg-base` 两次 + `--dsw-alias-bg-layer-1`
+  一次），透到眼睛的墨色是各层 alpha 补集的乘积 —— 0.5 × 0.5 × 0.6 = **10%**，
+  侧栏 24%。162 luma 的墨色阶复合后只剩 16，所以上一轮把 ΔL 从 −0.31 推到 −0.7
+  也只让观感从"几乎无"变成"很浅"；玻璃关时表面完全不透明，透过率为 0。
+- **背衬 token 组（替代上一版的纱）**：只要挂载了任意渲染器（玻璃开或关），外观
+  绘制就把上面三个 token 改成色板本色 + `BACKDROP_ALPHA_BASE = 0.25` /
+  `BACKDROP_ALPHA_LAYER1 = 0.27` / `BACKDROP_ALPHA_SIDEBAR = 0.27`。补集相乘后
+  正文列透射 ≈ 0.41、侧栏 ≈ 0.40（墨色可见度 4×），而 RGB 与画布底色一致，所以
+  页面色相一点不动，开关差异只剩墨色。卡片、弹窗、菜单、输入框使用自己的不透明
+  填充，不受影响；`-bg-layer-2` / `-bg-overlay` 刻意不碰（它们画菜单，实测没有
+  正文表面压在后面）。`appearanceTokenKey` 的第三维从 `veil` 改名 `backdrop`，
+  面板提示改为"动效开启时页面底色会调成半透明以便透出纹理（卡片和弹窗保持不
+  透明）"，仍然不会替用户打开玻璃。
+- **墨色不透明度定标**：`LIGHT_INK_DELTA = −0.7`（浅色表面 234.8 → 墨色 55，
+  179 luma 阶）；`DARK_INK_DELTA = +0.15` 不变（DeVries-Rose：暗面等感知点本来
+  就要相对更强的阶，不是同一个数）。
+- **`flow` / `static` 的覆盖面积**：新增 `FLOW_LEVEL_FLOOR = 0.45`，值噪声不再
+  压在 `+` / `*` 这两级（12 px 下每格只有 5.5% / 4.4% 的墨色面积），典型格子上移
+  到 `#`–`%`（12–17%），墨色质量 2–3×。这是"看得见"的主因，ΔL 只是次要项。
+
+### Added
+
+- **内容区感应淡出（空间遮罩）**：`src/client/bg-focus.ts` 提供两档渲染器共用的纯
+  几何。淡区是正文读取列（输入框的横向范围 × 从滚动视口顶到输入框顶），每 350 ms
+  重新实测一次并在每次外观重绘时推送，所以 resize、侧栏折叠/展开、面板开合、全屏
+  切换后都跟着文字走。`focusWeight` 用矩形外的对角距离（不是逐轴 `min`）、
+  `FOCUS_FEATHER_PX = 116` 羽化、`FOCUS_FLOOR = 0.3` 下限后 smoothstep，边缘是
+  渐变带而不是硬切；淡区不消失（正文背后仍有极淡纹理）。ASCII 档用
+  `buildFocusCaps` 一次性把每格等级压到 `round(lastLevel × weight + dither)`
+  （复用同一 `Uint8Array`，只在网格或淡区变化时重建，绘制循环每格一次查表）；
+  光影档新增 `u_focus`（CSS px vec4）+ `u_focusFeather` / `u_focusFloor`，在 GLSL
+  里乘同一个 `focusWeight()`，`u_focus.z <= 0` 即禁用。`grain` 原有径向淡出删除，
+  改由这一层统一（避免两套淡出叠加出双倍宽的边）。
+  实测（背衬 token 组 + `flow`、浅色、标准墨色、1:1 裁切）：整页 `>2` luma
+  32.5%（p99 53、均值 5.5），右留白峰值 74、侧栏 61，正文列 3.2%（最大 50、
+  均值 1.05）；在渲染器自己的画布上（文字不会落在那里）正文列达到等级上限的像素
+  只有 0.86%，右留白 7.0%、侧栏 9.8%，且随 1280×822 → 1600×1000 → 复原的 resize
+  跟着移动。`liquid` 整页 77.6%（p99 51）。
+
+### Tests
+
+- `tests/bg-focus.spec.ts`：矩形归一化/相等、对角羽化、零羽化硬边、
+  `buildFocusCaps` 的限幅与缓冲复用；`tests/bg-shader.spec.ts` 增加 `u_focus`
+  映射与 `setFocus` 只重绘一次的用例；`tests/palette.spec.ts` 覆盖 `backdrop`
+  维度的四种 key 形状；`tests/bg-ascii.spec.ts` 新增 `FLOW_LEVEL_FLOOR` 下限与
+  均值用例（防止后续"调淡"把格子压回空白半边），并把墨色阶定标带宽改到
+  −0.7（165–195 luma）；`tests/bg-params.spec.ts` / `tests/bg-layer.spec.ts`
+  跟随 liquid 强度上限与中性底色改动。
+
 ## Unreleased — 2026-11-06
 
 ### Added

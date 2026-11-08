@@ -17,8 +17,9 @@ import type { Context } from '@deepseek-ai/cordis'
 import { DEFAULT_CONFIG, type BgFxPreset, type BgStrength, type ConversationSearchItem, type ConversationSearchKind, type CredentialStorage, type CustomPluginConfig, type FolderNode, type PromptItem, type TimelineItem, type UsageRow } from '../protocol.ts'
 import { createUsageRow, dayKey, mergeUsageRow } from '../usage.ts'
 import { DEEPSEEK_PRICING_CHECKED_ON, DEEPSEEK_PRICING_SOURCE_URL, estimateUsageCostCny, usageCostBreakdown } from '../pricing.ts'
-import { appearanceTokenKey, DARK_CANVAS_LIGHTNESS, hexToRgb, PALETTE, toDarkRamp } from './palette.ts'
+import { appearanceTokenKey, BACKDROP_ALPHA_BASE, BACKDROP_ALPHA_LAYER1, BACKDROP_ALPHA_SIDEBAR, DARK_CANVAS_LIGHTNESS, hexToRgb, PALETTE, toDarkRamp } from './palette.ts'
 import { bgLayerTint, decideBgFxLayer, mountBgLayer, swapBgRenderer, unmountBgLayer, type BgFxCaps, type BgFxVerdict, type BgLayerDocLike } from './bg-layer.ts'
+import type { BgFocusRect } from './bg-focus.ts'
 import { createAsciiBackdrop, resolveAsciiPreset, type AsciiBackdrop, type AsciiDocLike, type AsciiWinLike } from './bg-ascii.ts'
 import { createShaderBackdrop, resolveShaderStyle, type ShaderBackdrop, type ShaderDocLike, type ShaderHostLike, type ShaderWinLike } from './bg-shader.ts'
 import {
@@ -199,6 +200,25 @@ const NEUTRAL_TOKENS: Record<string, { light: string; dark: string }> = {
   '--dsw-alias-bg-layer-2': { light: 'rgba(242,244,247,.66)', dark: 'rgba(28,31,40,.66)' },
   '--dsw-alias-bg-overlay': { light: 'rgba(255,255,255,.78)', dark: 'rgba(18,21,28,.78)' },
   '--dsw-specific-sidebar-fill': { light: 'rgba(245,247,250,.56)', dark: 'rgba(13,15,21,.56)' },
+}
+
+/**
+ * The backdrop token set: every shell fill token at a low alpha of its *own*
+ * RGB while a renderer is mounted. The layer sits behind all of them, so what
+ * survives is the product of the complements (see `BACKDROP_ALPHA_*`): the
+ * shell's glass values multiply out to 10% in the reading column and 24% in the
+ * sidebar, which is why the ink never became visible no matter how dark it was
+ * made. Cards, dialogs, menus and the composer keep their own untouched
+ * (opaque) layer tokens, so text-heavy surfaces never get texture behind them.
+ *
+ * The RGB values mirror the shell's own fills, so the page hue does not move at
+ * any alpha: only the ink becomes reachable. The neutral variant is the
+ * no-palette fallback and matches `bgLayerTint(undefined, …)`.
+ */
+const NEUTRAL_BACKDROP_TOKENS: Record<string, { light: string; dark: string }> = {
+  '--dsw-alias-bg-base': { light: `rgba(248,249,251,${BACKDROP_ALPHA_BASE})`, dark: `rgba(15,17,23,${BACKDROP_ALPHA_BASE})` },
+  '--dsw-alias-bg-layer-1': { light: `rgba(255,255,255,${BACKDROP_ALPHA_LAYER1})`, dark: `rgba(22,25,32,${BACKDROP_ALPHA_LAYER1})` },
+  '--dsw-specific-sidebar-fill': { light: `rgba(245,247,250,${BACKDROP_ALPHA_SIDEBAR})`, dark: `rgba(13,15,21,${BACKDROP_ALPHA_SIDEBAR})` },
 }
 
 /** SVG displacement map + filter for the liquid glass (single-channel, no color dispersion). */
@@ -597,10 +617,20 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       try { dEl.classList.toggle('vx-liquid', cfg.glass === true && cfg.glassMode === 'liquid') } catch { /* classList unavailable */ }
     }
     const theme = C.get('theme') as ThemeRuntime | undefined
+    // The layer verdict is computed before the token override: a layer behind
+    // the shell's stacked translucent surfaces only transmits ~10% of its ink,
+    // so the token set below is part of the renderer, not an appearance extra.
+    const requestedMode = cfg.bgFx ?? 'none'
+    const bgVerdict = decideBgFxLayer(requestedMode, bgFxCaps(requestedMode === 'shader'))
+    // A mounted renderer is behind every shell surface, and the stacked
+    // translucent surfaces multiply the ink away (see BACKDROP_ALPHA_*). The
+    // backdrop token set is what makes the layer visible at all — with or
+    // without glass. `glass` only matters when no renderer is mounted.
+    const backdrop = bgVerdict.mount
     // Slider ticks repaint the appearance dozens of times with an unchanged
     // palette + glass toggle; re-registering identical tokens would re-apply
     // the shell's variables and force a full-document recalc each time.
-    const tokenKey = appearanceTokenKey(cfg.bg, cfg.glass === true)
+    const tokenKey = appearanceTokenKey(cfg.bg, cfg.glass === true, backdrop)
     const themeUsable = theme !== undefined && typeof theme.overrideTokens === 'function'
     if (themeUsable && (tokenKey !== lastTokenKey || theme !== lastTokenTheme)) {
       if (tokenDisposer !== null) {
@@ -614,6 +644,10 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
         tokenDisposer = theme.overrideTokens('custom-plugin-appearance', NEUTRAL_TOKENS)
         lastTokenKey = tokenKey
         lastTokenTheme = theme
+      } else if (tokenKey === 'backdrop') {
+        tokenDisposer = theme.overrideTokens('custom-plugin-appearance', NEUTRAL_BACKDROP_TOKENS)
+        lastTokenKey = tokenKey
+        lastTokenTheme = theme
       } else {
         const entry = PALETTE.find((p) => p[0] === cfg.bg) ?? PALETTE[0]
         const base = entry[1]
@@ -624,13 +658,24 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
         // light pastels themselves would glare on a dark canvas).
         const darkBase = toDarkRamp(base, 0.14)
         const darkTab = toDarkRamp(tab, 0.18)
-        tokenDisposer = theme.overrideTokens('custom-plugin-appearance', {
-          '--dsw-alias-bg-base': { light: mk(base, 0.5), dark: mk(darkBase, 0.5) },
-          '--dsw-alias-bg-layer-1': { light: mk(tab, 0.6), dark: mk(darkTab, 0.6) },
-          '--dsw-alias-bg-layer-2': { light: mk(shade(base, 0.96), 0.7), dark: mk(shade(darkBase, 0.94), 0.7) },
-          '--dsw-alias-bg-overlay': { light: mk(shade(base, 1.04), 0.8), dark: mk(shade(darkBase, 0.86), 0.8) },
-          '--dsw-specific-sidebar-fill': { light: mk(tab, 0.62), dark: mk(darkTab, 0.62) },
-        })
+        if (backdrop) {
+          // The three tokens the shell stacks over the layer, lowered to the
+          // backdrop alphas but keeping the family RGB, so the page colour is
+          // unchanged while the ink becomes reachable.
+          tokenDisposer = theme.overrideTokens('custom-plugin-appearance', {
+            '--dsw-alias-bg-base': { light: rgbaOf(base, BACKDROP_ALPHA_BASE), dark: rgbaOf(darkBase, BACKDROP_ALPHA_BASE) },
+            '--dsw-alias-bg-layer-1': { light: rgbaOf(tab, BACKDROP_ALPHA_LAYER1), dark: rgbaOf(darkTab, BACKDROP_ALPHA_LAYER1) },
+            '--dsw-specific-sidebar-fill': { light: rgbaOf(tab, BACKDROP_ALPHA_SIDEBAR), dark: rgbaOf(darkTab, BACKDROP_ALPHA_SIDEBAR) },
+          })
+        } else {
+          tokenDisposer = theme.overrideTokens('custom-plugin-appearance', {
+            '--dsw-alias-bg-base': { light: mk(base, 0.5), dark: mk(darkBase, 0.5) },
+            '--dsw-alias-bg-layer-1': { light: mk(tab, 0.6), dark: mk(darkTab, 0.6) },
+            '--dsw-alias-bg-layer-2': { light: mk(shade(base, 0.96), 0.7), dark: mk(shade(darkBase, 0.94), 0.7) },
+            '--dsw-alias-bg-overlay': { light: mk(shade(base, 1.04), 0.8), dark: mk(shade(darkBase, 0.86), 0.8) },
+            '--dsw-specific-sidebar-fill': { light: mk(tab, 0.62), dark: mk(darkTab, 0.62) },
+          })
+        }
         lastTokenKey = tokenKey
         lastTokenTheme = theme
       }
@@ -643,10 +688,8 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     // The background layer paints its own opaque surface while mounted, so
     // `body` must stay transparent. With the layer off the body keeps the
     // family surface exactly as before — that is the "turn it off and the page
-    // fully reverts" contract. The verdict is computed once here and handed to
-    // the layer so the CSS and the DOM can never disagree on whether it mounts.
-    const requestedMode = cfg.bgFx ?? 'none'
-    const bgVerdict = decideBgFxLayer(requestedMode, bgFxCaps(requestedMode === 'shader'))
+    // fully reverts" contract. The verdict computed above is handed to the
+    // layer so the CSS and the DOM can never disagree on whether it mounts.
     let dyn = ''
     if (cfg.bg !== undefined && cfg.bg !== 'default') {
       const base = (PALETTE.find((p) => p[0] === cfg.bg) ?? PALETTE[0])[1]
@@ -768,7 +811,92 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       if (!disposed) applyAppearance()
     }, 0)
   }
+
+  /** How often the reading-column zone is re-measured, ms. A resize, a sidebar
+   * collapse or an open panel all land inside one poll, and the renderers only
+   * receive a new rect when the geometry actually changed. */
+  const BG_FOCUS_POLL_MS = 350
+  let bgFocusTimer: ReturnType<typeof setInterval> | null = null
+
+  /**
+   * The calm zone is the reading column: the composer's horizontal span, from
+   * the top of the transcript viewport down to the composer's top edge. Both
+   * edges come from live layout, so a window resize, a sidebar collapse or an
+   * open panel moves the mask with the text instead of leaving a rect computed
+   * at boot on screen.
+   */
+  function measureFocusRect(): BgFocusRect | null {
+    const d = typeof document !== 'undefined' ? document : null
+    const w = typeof window !== 'undefined' ? window : null
+    if (d === null) return null
+    const vh = w !== null ? w.innerHeight : 0
+    let anchor: HTMLElement | null = null
+    let box: { left: number; top: number; bottom: number; width: number } | null = null
+    const boxes = d.querySelectorAll('[role="textbox"]')
+    for (let k = 0; k < boxes.length; k++) {
+      const el = boxes[k] as HTMLElement
+      const r = el.getBoundingClientRect()
+      // The composer is the lowest wide editable box; a dialog field and the
+      // command palette's search input are narrower and/or higher.
+      if (r.width < 300 || r.height < 16) continue
+      if (r.top < 0 || r.bottom > vh + 1) continue
+      if (box === null || r.bottom > box.bottom) {
+        anchor = el
+        box = { left: r.left, top: r.top, bottom: r.bottom, width: r.width }
+      }
+    }
+    if (anchor === null || box === null) return null
+    // The transcript's scroll viewport is the nearest tall scrollable ancestor;
+    // its top is where the reading column starts. When the page shows no
+    // transcript (hero layout), the calm zone starts at the viewport top.
+    let top = 0
+    let node: HTMLElement | null = anchor.parentElement
+    while (node !== null && node !== d.body) {
+      const cs = w !== null && w.getComputedStyle !== undefined ? w.getComputedStyle(node) : null
+      if (cs !== null && (cs.overflowY === 'auto' || cs.overflowY === 'scroll')
+        && node.clientHeight > 200 && node.clientWidth > 300) {
+        top = node.getBoundingClientRect().top
+        break
+      }
+      node = node.parentElement
+    }
+    const height = box.top - top
+    if (height <= 0 || height > vh) return null
+    return { x: box.left, y: top, w: box.width, h: height }
+  }
+
+  /** Hand the current zone to whichever renderer is live. `setFocus` is cheap:
+   * it short-circuits on the same rect and rebuilds the caps only when the
+   * geometry moved. */
+  function pushBgFocus(): void {
+    if (bgRenderer === null) return
+    const rect = measureFocusRect()
+    try { bgRenderer.handle.setFocus(rect) } catch { /* renderer torn down */ }
+  }
+
+  function ensureBgFocusTracking(): void {
+    pushBgFocus()
+    if (bgFocusTimer !== null) return
+    bgFocusTimer = setInterval(() => {
+      if (disposed) return
+      pushBgFocus()
+    }, BG_FOCUS_POLL_MS)
+  }
+
+  function stopBgFocusTracking(): void {
+    if (bgFocusTimer === null) return
+    clearInterval(bgFocusTimer)
+    bgFocusTimer = null
+  }
+
   function syncBackgroundLayer(verdict: BgFxVerdict): void {
+    applyBackgroundLayer(verdict)
+    // A live renderer keeps a calm zone; without one there is nothing to mask.
+    if (verdict.mount) ensureBgFocusTracking()
+    else stopBgFocusTracking()
+  }
+
+  function applyBackgroundLayer(verdict: BgFxVerdict): void {
     const d = typeof document !== 'undefined' ? document : null
     if (d === null) return
     if (!verdict.mount) {
@@ -2262,12 +2390,11 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
                 title: '只把上面六项参数恢复为「跟随预设」，不改变动效档位与预设。',
               }, '恢复默认参数'),
               React.createElement('span', { className: 'vx-muted' }, '仅重置参数，不改档位与预设')),
-            // Explain a blank result instead of silently doing nothing: the
-            // content surfaces are opaque without glass, so the layer sits
-            // fully covered. Never flip the glass toggle for the user.
-            cfg.glass !== true
-              ? React.createElement('div', { className: 'vx-note' }, '提示：玻璃效果关着时，页面底色不透明，背景动效会被完全盖住，看不到属正常现象。打开上方「启用玻璃」就能看到；这里不会替你自动打开。')
-              : null,
+            // Say what the page does while a renderer is mounted: the shell's
+            // own background fills drop to a low alpha so the ink reaches the
+            // eye (cards and dialogs keep their opaque fills). This applies to
+            // both glass states and never flips the glass toggle for the user.
+            React.createElement('div', { className: 'vx-note' }, '提示：动效开启时，页面底色会调成半透明以便透出纹理（卡片和弹窗保持不透明）；你的玻璃设置不会被改动。'),
           ),
     )
   }
@@ -3517,6 +3644,9 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     // A slider burst may still be waiting to POST when the plugin is disabled;
     // drop it rather than writing after teardown.
     bgSaveDebounced.cancel()
+    // The calm-zone poll is a page-global timer owned by the background
+    // painter; it must not survive the plugin.
+    stopBgFocusTracking()
     // Slot teardown unmounts only the React surfaces; the appearance
     // painter's page-global side effects — theme token overrides, root
     // classes, the liquid-glass SVG filter, a pending balance retry — live

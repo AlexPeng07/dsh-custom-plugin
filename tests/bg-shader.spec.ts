@@ -86,6 +86,7 @@ function fakeGL(): FakeGL {
     uniform1f(location, value) { if (location !== null) gl.uniformCalls.push({ name: (location as { name: string }).name, args: [value] }) },
     uniform2f(location, x, y) { if (location !== null) gl.uniformCalls.push({ name: (location as { name: string }).name, args: [x, y] }) },
     uniform3f(location, x, y, z) { if (location !== null) gl.uniformCalls.push({ name: (location as { name: string }).name, args: [x, y, z] }) },
+    uniform4f(location, x, y, z, w) { if (location !== null) gl.uniformCalls.push({ name: (location as { name: string }).name, args: [x, y, z, w] }) },
     viewport() {},
     drawArrays() { gl.drawCount++ },
     clearColor() {},
@@ -335,6 +336,18 @@ describe('shaderUniforms', () => {
     const scaled = shaderUniforms({ ...base, spec: SHADER_STYLES.liquid, densityScale: 0.75 })
     expect(scaled.density).toBeCloseTo(SHADER_STYLES.liquid.density * 0.75, 5)
   })
+
+  it('carries the calm zone as a vec4 and disables it for unusable rects', () => {
+    // No zone: the shader's `u_focus.z <= 0` branch leaves the frame alone.
+    expect(shaderUniforms(base).focus).toEqual([0, 0, 0, 0])
+    expect(shaderUniforms({ ...base, focus: { x: 420.5, y: 116, w: 708, h: 578 } }).focus)
+      .toEqual([420.5, 116, 708, 578])
+    expect(shaderUniforms({ ...base, focus: { x: 0, y: 0, w: 0, h: 100 } }).focus).toEqual([0, 0, 0, 0])
+    // The feather and the floor are shared constants, not per-style knobs.
+    expect(shaderUniforms(base).focusFeather).toBeGreaterThan(0)
+    expect(shaderUniforms(base).focusFloor).toBeGreaterThan(0)
+    expect(shaderUniforms(base).focusFloor).toBeLessThan(1)
+  })
 })
 
 describe('createShaderBackdrop: capability gates', () => {
@@ -401,6 +414,21 @@ describe('createShaderBackdrop: motion lifecycle', () => {
     win.flush(5000)
     expect(gl.drawCount).toBe(1)
     expect(win.callbacks.size).toBe(0)
+  })
+
+  it('uploads a new calm zone and repaints a stopped frame exactly once', () => {
+    const { gl, backdrop } = harness({ style: 'grain' })
+    expect(gl.drawCount).toBe(1)
+    expect(lastUniform(gl, 'u_focus')).toEqual([0, 0, 0, 0])
+    backdrop?.setFocus({ x: 420, y: 116, w: 708, h: 578 })
+    expect(lastUniform(gl, 'u_focus')).toEqual([420, 116, 708, 578])
+    expect(gl.drawCount).toBe(2)
+    // The same zone again must not repaint: the poll runs every 350 ms.
+    backdrop?.setFocus({ x: 420, y: 116, w: 708, h: 578 })
+    expect(gl.drawCount).toBe(2)
+    backdrop?.setFocus(null)
+    expect(lastUniform(gl, 'u_focus')).toEqual([0, 0, 0, 0])
+    expect(gl.drawCount).toBe(3)
   })
 
   it('draws one frame and no rAF under prefers-reduced-motion', () => {

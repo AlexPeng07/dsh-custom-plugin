@@ -53,7 +53,8 @@ daily token usage.
   (theme token overrides, `<html>` root classes, the liquid-glass SVG filter,
   the `vx-bg` background layer, anti-scroll's
   `scroll-behavior`/`data-vx-anti` attributes, in-place Mermaid
-  wrappers, pending balance/load-retry/greeting timers); a new global effect
+  wrappers, pending balance/load-retry/greeting timers, the calm-zone measure
+  poll); a new global effect
   added to the appearance painter or the chat-DOM scanner needs a matching
   line in the disposer at the bottom of `src/client/custom.tsx`. `saveCfg`
   refuses to POST until a state read has succeeded (`cfgLoaded`) — unloaded
@@ -66,9 +67,36 @@ daily token usage.
   layer is `position:fixed; inset:0; z-index:-1; pointer-events:none;
   aria-hidden="true"`. `<html>` is transparent while `body` carries the opaque
   canvas fill, so a negative z-index child paints above the body fill and below
-  every content surface. Those surfaces are 0.5–0.62 alpha only with glass on,
-  so with `glass:false` the layer is fully covered — by design, not a bug.
-  `applyAppearance` creates/updates it through `src/client/bg-layer.ts`
+  every content surface. Those surfaces are translucent only with glass on,
+  and even then they are not "one" surface: the reading column stacks three of
+  them (`--dsw-alias-bg-base` twice and `--dsw-alias-bg-layer-1` once), so the
+  ink that reaches the eye is the product of their *complements*. At the
+  shell's glass values (0.5 / 0.5 / 0.6) that is **0.10** in the column and
+  0.24 in the sidebar — an ink step of 162 raw luma composited to 16 luma.
+  That, not the ink ΔL (already near-black), is the real "看不见" bottleneck:
+  every previous calibration measured its numbers through a 10% window and the
+  user was right that it read as a flat wash. Measured live 2026-11-08
+  (1280×822 CSS / DPR 1.5, light 天青灰, glass on); with `glass:false` the
+  shell paints the same surfaces fully opaque, i.e. 0% reachable.
+  - The **backdrop token set** is the fix, and it is part of the layer
+    contract: while *any* renderer is mounted — glass on or off —
+    `applyAppearance` overrides the three shell fill tokens above at
+    `BACKDROP_ALPHA_BASE = 0.25` / `BACKDROP_ALPHA_LAYER1 = 0.27` /
+    `BACKDROP_ALPHA_SIDEBAR = 0.27` (palette.ts), keeping each token's own RGB.
+    The complements multiply out to ≈0.41 in the column and ≈0.40 in the
+    sidebar — 4× the ink — and because the canvas tint equals the same family
+    colour, the page hue does not move at all: the on/off delta is pure ink.
+    Cards (`.GRgSLq_card`), dialogs, menus and the composer keep their own
+    untargeted opaque fills, so text-heavy surfaces never get texture behind
+    them; `-bg-layer-2` and `-bg-overlay` are deliberately left alone (they
+    paint menus, and no measured content surface sits behind them).
+    `appearanceTokenKey(bg, glass, backdrop)` folds the flag into the key
+    (`'backdrop'` for the neutral family, `|backdrop:1` for a palette), and the
+    panel note states that the page fills go translucent while the effect is
+    on; the glass toggle is never overridden. Do not raise these back toward
+    the shell's glass values — that is exactly the 10%-transmission state the
+    user rejected, and no ink delta can compensate for it.
+  `applyAppearance` creates/updates the layer through `src/client/bg-layer.ts`
   (`decideBgLayer` / `mountBgLayer`), and the disposer destroys the renderer and
   then calls `unmountBgLayer` because slot unmount can run after the disposer.
   Config is `bgFx: 'none' | 'ascii' | 'shader'` (default `'none'`) plus
@@ -84,26 +112,57 @@ daily token usage.
   layer does not mount and the body tint stays. `prefers-reduced-motion` →
   `data-vx-bg-motion="static"`; hidden → `"paused"`; theme palettes flow in
   through `--vx-bg-tint` (`bgLayerTint` uses `toDarkRamp`).
+- The calm zone (内容区感应淡出) is the second half of that contract:
+  `src/client/bg-focus.ts` is the pure geometry both renderers share. The zone
+  is the reading column — the composer's x-span, from the top of the nearest
+  tall scrollable ancestor (the transcript viewport) down to the composer top —
+  measured live every 350 ms (`measureFocusRect` in `custom.tsx`, poll owned by
+  the disposer) plus once per appearance repaint, so resize, sidebar
+  collapse/expand, panel open/close and full-screen all move the mask with
+  the text. `focusWeight` uses the *diagonal* distance outside the rect
+  (`hypot` of per-axis overflow, not `min`), normalises by
+  `FOCUS_FEATHER_PX = 116` and smoothsteps from `FOCUS_FLOOR = 0.3` to 1, so
+  the edge is a feathered band and the centre keeps a faint texture rather
+  than going blank. ASCII caps every cell's level with
+  `buildFocusCaps` (`cap = round(lastLevel × weight + dither)`, one reused
+  `Uint8Array`, rebuilt only on grid/zone change, read once per cell in the
+  blit); shader passes `u_focus` (vec4 CSS px) with `u_focusFeather` /
+  `u_focusFloor` and multiplies the ink by the same `focusWeight()` in GLSL,
+  `u_focus.z <= 0` disabling it. Live A/B with the backdrop token set (flow,
+  light, standard ink, 2026-11-08): the page moved >2 luma on 32.5% of pixels
+  (p99 53, mean 5.5), the right margin peaked at 74 and the sidebar at 61, while
+  the reading column stayed at 3.2% / max 50 / mean 1.05 — at 1:1 the margins
+  read as an unmistakable character field and the column as an extremely faint
+  texture. Measured directly on the renderer's own canvas (text never lands
+  there): 0.86% of column pixels are level-capped ink against 7.0% in the right
+  margin and 9.8% in the sidebar, and the cap moves with the composer on
+  resize (1280×822 → 1600×1000 → back) and survives panel open/close. Round-1
+  verdict: `liquid` moved 77.6% of the page at intensity 0.70; its feather
+  shape and the calm-zone floor (0.3 is possibly too faint for "极淡纹理")
+  stay open for round 2.
 - The renderer is `src/client/bg-ascii.ts`, mounted as one canvas inside
   `#vx-bg`. The effect contract is `(t, out: Uint8Array, cols, rows) => void`:
   pieces write ramp levels, never strings, into one reused buffer. Level 0 is
   blank in both themes and the ramps climb in ink density; the theme only swaps
-  the ink (single colour from `inkFor`, `LIGHT_INK_DELTA −0.31` on a light
+  the ink (single colour from `inkFor`, `LIGHT_INK_DELTA −0.7` on a light
   surface and `DARK_INK_DELTA +0.15` on a dark one), never the glyph order or
   the alpha ramp. The two deltas are **independent constants**, calibrated
   2026-11-08 on a live 1280×822 dpr-1.5 host with a backdrop-only ruler (text
   ink masked out with a 3 px dilation, so nothing is sampled from a glyph or a
-  text halo). Ink reaches the reading column at ~9% strength (surfaces at
-  0.5–0.7 alpha), so light's 80-luma step shows as a 6.9-luma peak: 0.15% mean
-  ink mass and a 2.99% peak, just above the ~1% just-noticeable band (the old
-  −0.13 read as "on but invisible"). On dark the eye is also less sensitive
-  (DeVries-Rose: threshold contrast ∝ 1/√L), so 234.8 vs 29.8 luma puts the
-  equal-perception point at ~2.5–2.8× the *relative* modulation, not the same
-  number: +0.15 measures 0.34% mass / 8.17% peak, i.e. 2.1–2.7× light across
-  all eight pieces, while the old +0.38 measured 6.7× (9.37% Michelson) and
-  read as the loudest thing on screen. +0.10 only reaches 1.4× and reads
-  weaker than light. Do not shrink the light delta or grow the dark one: those
-  are the two visibility regressions, not taste adjustments. Glyphs
+  text halo). The light side was re-taken on 2026-11-08 after the user rejected
+  the previous 1%-Michelson target as "根本看不出来": −0.31 measured 0.15%
+  mean ink mass / 2.99% peak *through a 10% transmission window*, so the
+  numbers described a picture nobody could see. −0.7 puts the ink at 179 luma
+  below the surface (ink luma 55 on 234.8), and **the ink step is not the
+  binding constraint once it is dark**: the glyph *area* is (see
+  `FLOW_LEVEL_FLOOR`). On dark the eye is also less sensitive (DeVries-Rose:
+  threshold contrast ∝ 1/√L), so 234.8 vs 29.8 luma puts the equal-perception
+  point at ~2.5–2.8× the *relative* modulation, not the same number: +0.15
+  measures 0.34% mass / 8.17% peak, i.e. 2.1–2.7× light across all eight
+  pieces, while the old +0.38 measured 6.7× (9.37% Michelson) and read as the
+  loudest thing on screen. +0.10 only reaches 1.4× and reads weaker than
+  light. Do not shrink the light delta or grow the dark one: those are the two
+  visibility regressions, not taste adjustments. Glyphs
   are pre-baked into one per-level atlas, so a frame is one
   `fillRect` plus one `drawImage` per non-empty tile — no per-frame allocation.
   The atlas key is `charset|ink|dark|dpr|tileW|tileH|fontPx|opacity`, so a
@@ -154,6 +213,17 @@ daily token usage.
   table that looks prettier. Starfield stays sparse on purpose (>50% blank
   cells); only its glyph size and ink step were lifted so "sparse" stops
   meaning "absent".
+- `flow` / `static` additionally lift their field before quantisation:
+  `FLOW_LEVEL_FLOOR = 0.45` (exported, pinned by `tests/bg-ascii.spec.ts`).
+  Value noise spends most of its area near 0.5, which quantises onto `+` / `*`
+  — measured at 12 px those glyphs carry only 5.5% / 4.4% of a cell's ink
+  *area*, against 12% for `#`, 17% for `%` and 23% for `@`. The lift moves the
+  typical cell to `#`–`%`, 2–3× the ink mass on screen, and it is the reason
+  the round-1 A/B reads as texture instead of a wash. The numbers in the
+  per-piece table above are pre-lift (they measure the *ink step*, not the
+  area) and stay valid for the other four pieces; do not "restore" the blank
+  half of the ramp to make the field subtler — that is the state the user
+  rejected, and it is now the calm zone's job to keep the reading column quiet.
 - Each spec carries `ranges` (`density`/`speed`/`fps`/`fontPx`/`opacity` min +
   max) next to its defaults, for the Phase 3b custom panel; defaults must stay
   inside those bounds (pinned by `tests/bg-ascii.spec.ts`). `fps` is the
@@ -183,13 +253,15 @@ daily token usage.
   ink cloud at 24 fps, `grain` is a static CSS-pixel speck field with an edge
   falloff and `animated:false` — that declaration is how the zero-rAF path is
   reached without pixel sniffing. Each style carries `ranges` next to its
-  defaults (pinned by `tests/bg-shader.spec.ts`). Rechecked with the ASCII
-  ruler on 2026-11-08: `liquid` at intensity 0.48 measured 0.14% mass / 0.48%
-  Michelson against flow's 0.15% / 0.65% and read a notch weak, so it is
-  `0.56` (0.18% / 0.65%, upper edge of its 0.6 range); `grain` already
-  measures the highest ink mass of all eight pieces and stays at 0.6 — its
-  1.64% light peak is the honest shape of a static speck field, not a
-  calibration miss, and lifting it would push dark past the parity band.
+  defaults (pinned by `tests/bg-shader.spec.ts`). Re-tuned 2026-11-08 in round
+  1: the smoothstep window starts at 0.22 (was 0.32), so the *typical* pixel
+  (field ≈ 0.4) lands near 0.35 amount instead of owning a few bright cores —
+  the cloud has to cover area — and `intensity` is 0.70 with the panel range
+  widened to 1.0 (was 0.56 / 0.6). With the backdrop token set that moves 77.6%
+  of the page by >2 luma (p99 51) instead of 34%. `grain` already measures the
+  highest ink mass of all eight pieces and stays at 0.6 — its 1.64% light peak
+  is the honest shape of a static speck field, not a calibration miss, and
+  lifting it would push dark past the parity band.
 - The two tiers never coexist: `swapBgRenderer` builds the replacement first
   and only then destroys the old handle, and leaving the shader tier deletes
   its program/buffer, removes the canvas and calls `WEBGL_lose_context` (an
@@ -230,9 +302,11 @@ daily token usage.
   "visibility" knob instead of both is what left the first round with no
   direct answer to "it still looks faint". `AppearanceTab` subscribes via
   `useSSelector(selectAppearanceSlice)` (cfg + `dark` only), so no per-turn
-  write re-renders it. With `glass:false` the layer is fully covered by design;
-  the panel shows an explicit note explaining that and never flips the glass
-  toggle for the user. User-facing copy names the tiers 关闭 / 字符 / 光影 and
+  write re-renders it. While a renderer is mounted the backdrop token set opens
+  the content column and the sidebar at any glass state (see the layer bullet),
+  and the panel shows a note saying exactly that — "卡片和弹窗保持不透明" — and
+  never flips the glass toggle for the user. User-facing copy names the tiers
+  关闭 / 字符 / 光影 and
   the fps slider is labelled 帧率 with no unit — implementation words (“WebGL”,
   DPR, atlas, shader) never appear in the panel.
 - The client store fan-out stays a single listener set; per-turn hot paths

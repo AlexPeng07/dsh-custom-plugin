@@ -67,16 +67,21 @@ describe('palette dark ramp', () => {
 })
 
 describe('appearance token key', () => {
-  it('separates the three override shapes and folds glass into the palette key', () => {
+  it('separates the override shapes and folds glass and backdrop into the palette key', () => {
     // No palette and no glass: the painter must leave the shell tokens alone.
     expect(appearanceTokenKey('default', false)).toBe('none')
     expect(appearanceTokenKey(undefined, false)).toBe('none')
     // Glass without a family overrides only the neutral surface tokens.
     expect(appearanceTokenKey('default', true)).toBe('neutral')
-    // A family always carries the glass flag, because glass changes the alpha
-    // form of the very same values.
-    expect(appearanceTokenKey('雾蓝', false)).toBe('palette:雾蓝|glass:0')
-    expect(appearanceTokenKey('雾蓝', true)).toBe('palette:雾蓝|glass:1')
+    // A mounted renderer needs the low-alpha backdrop set whether glass is on
+    // or off: the shell's stacked surfaces multiply the ink away otherwise.
+    expect(appearanceTokenKey('default', false, true)).toBe('backdrop')
+    expect(appearanceTokenKey('default', true, true)).toBe('backdrop')
+    // A family carries both flags, because glass and the backdrop each change
+    // the alpha form of the very same values.
+    expect(appearanceTokenKey('雾蓝', false)).toBe('palette:雾蓝|glass:0|backdrop:0')
+    expect(appearanceTokenKey('雾蓝', true)).toBe('palette:雾蓝|glass:1|backdrop:0')
+    expect(appearanceTokenKey('雾蓝', false, true)).toBe('palette:雾蓝|glass:0|backdrop:1')
   })
 
   it('is stable for an unchanged configuration and moves with every input it reads', () => {
@@ -84,11 +89,14 @@ describe('appearance token key', () => {
     // re-register tokens (that reparses the shell's variables).
     for (const [name] of PALETTE) {
       expect(appearanceTokenKey(name, true)).toBe(appearanceTokenKey(name, true))
+      expect(appearanceTokenKey(name, false, true)).toBe(appearanceTokenKey(name, false, true))
       const withoutGlass = appearanceTokenKey(name, false)
       expect(withoutGlass).not.toBe(appearanceTokenKey(name, true))
+      expect(withoutGlass).not.toBe(appearanceTokenKey(name, false, true))
       if (name !== PALETTE[0][0]) expect(withoutGlass).not.toBe(appearanceTokenKey(PALETTE[0][0], false))
     }
     expect(appearanceTokenKey('default', false)).not.toBe(appearanceTokenKey('default', true))
+    expect(appearanceTokenKey('default', false)).not.toBe(appearanceTokenKey('default', false, true))
     expect(appearanceTokenKey('默认以外的未知族', false)).not.toBe(appearanceTokenKey('default', false))
   })
 })

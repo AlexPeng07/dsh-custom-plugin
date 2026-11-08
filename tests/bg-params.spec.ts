@@ -94,7 +94,7 @@ describe('panel fields per tier', () => {
   it('reads bounds from the active preset, never a local copy', () => {
     expect(paramRange('ascii', 'flow', 'fps')).toEqual({ min: 15, max: 30 })
     expect(paramRange('ascii', 'rain', 'fps')).toEqual({ min: 15, max: 30 })
-    expect(paramRange('shader', 'liquid', 'intensity')).toEqual({ min: 0.2, max: 0.6 })
+    expect(paramRange('shader', 'liquid', 'intensity')).toEqual({ min: 0.2, max: 1 })
     expect(paramRange('shader', 'grain', 'speed')).toEqual({ min: 0, max: 0 })
     expect(paramRange('none', 'flow', 'density')).toBeNull()
     expect(paramRange('ascii', 'flow', 'intensity')).toBeNull()

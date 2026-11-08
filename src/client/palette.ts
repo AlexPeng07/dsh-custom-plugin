@@ -104,16 +104,19 @@ export function toDarkRamp(hex: string, lightness: number): string {
  * is compressed the same way the dark ramp compresses it, and lightness moves
  * by a fixed per-theme delta (up on dark surfaces, down on light ones), scaled
  * by the caller (`inkScale`: one value per piece plus the user's strength
- * choice). The target is "visible but not competing with body text", not
- * WCAG text contrast.
+ * choice). The target is "clearly on screen but not competing with body text",
+ * not WCAG text contrast.
  *
  * The two deltas are calibrated independently, from the composited page rather
- * than the raw canvas. Ink reaches the reading column at ~9% strength: the
- * glyphs sit under content surfaces at 0.5–0.7 alpha, so an 80-luma ink step
- * (light) lands a 6.9-luma composited peak. On the light canvas (#e9ebee,
- * 234.8 luma) −0.31 measures 0.15% mean ink mass and a 2.99% peak — just above
- * the ~1% just-noticeable band, where the old −0.13 read as "on but nothing
- * happened".
+ * than the raw canvas, and on 2026-11-08 the light side was re-taken because
+ * the previous target was wrong: −0.31 measured 0.15% mean ink mass / 2.99%
+ * peak — but through the shell's stacked surfaces (≈10% transmission, see
+ * `BACKDROP_ALPHA_*`) and onto the `+` / `*` half of the ramp, whose glyphs
+ * cover 5.5% / 4.4% of a cell. The numbers described a picture the user
+ * correctly called "根本看不出来". −0.7 lands the ink at 179 luma under the
+ * surface (ink luma 55 on 234.8), and with the backdrop alphas and
+ * `FLOW_LEVEL_FLOOR` the on/off A/B is now an unmistakable character field in
+ * the margins and a faint texture behind the reading column.
  *
  * On the dark canvas (#1c1e21, 29.8 luma) the same *relative* step is
  * perceptually much stronger, and the eye is also less sensitive at low
@@ -147,10 +150,14 @@ export function inkScaleFor(value: number | undefined): number {
   return value < INK_SCALE_MIN ? INK_SCALE_MIN : value > INK_SCALE_MAX ? INK_SCALE_MAX : value
 }
 
-/** Ink lightness drop from a light surface. Calibrated 2026-11-08 on the
- * `天青灰` canvas (#e9ebee): 0.15% mean ink mass / 2.99% peak in the reading
- * column, just above the 1% just-noticeable band. */
-export const LIGHT_INK_DELTA = -0.31
+/** Ink lightness drop from a light surface. Re-calibrated 2026-11-08 on the
+ * live Desktop host after the 1%-Michelson target was rejected by the user as
+ * "根本看不出来": the old −0.31 measured its numbers through the shell's ≈10%
+ * transmission window and on the light half of the ramp, which is "texture
+ * exists", not "texture is seen". −0.7 puts the ink at 179 luma under the
+ * surface; the live A/B target (关闭 vs 开启 一眼能分出来) is met together with
+ * the backdrop token alphas and `FLOW_LEVEL_FLOOR`. See {@link inkFor}. */
+export const LIGHT_INK_DELTA = -0.7
 
 /** Ink lightness lift from a dark surface. Smaller in magnitude than the
  * light drop on purpose: the DeVries-Rose threshold contrast at 29.8 luma is
@@ -170,6 +177,40 @@ export const DARK_CANVAS_LIGHTNESS = 0.12
 export const DARK_SATURATION_SCALE = 0.55
 
 /**
+ * Surface alpha of each shell background token while a backdrop renderer is
+ * mounted. The "veil" that makes the layer reachable at all.
+ *
+ * The layer is geometrically behind every content surface, so what the eye
+ * sees of it is the product of each stacked surface's *complement* alpha.
+ * Measured 2026-11-08 on the live Desktop host (1280×822 CSS, dpr 1.5,
+ * 天青灰 + glass): the reading column stacks three translucent surfaces
+ * (`--dsw-alias-bg-base` twice, `--dsw-alias-bg-layer-1` once) at the shell's
+ * glass values 0.5 / 0.5 / 0.6, so only **10%** of the ink reaches the eye —
+ * an ink step of 162 raw luma composites to 16 luma, which is why every ΔL
+ * calibration from the previous round measured "texture exists" and the user
+ * still saw nothing. The sidebar multiplied out to 24% the same way.
+ *
+ * These three values lower the alphas of the *same* RGB, so the page hue does
+ * not move at all (the canvas tint equals the family colour): the reading
+ * column now transmits ≈ 0.41 and the sidebar ≈ 0.40, i.e. 4× the ink, and
+ * cards / dialogs / the composer keep their own untouched opaque fills so
+ * text-heavy surfaces never get texture behind them. Only the three tokens
+ * measured in the live stack are overridden (`-bg-layer-2` and `-bg-overlay`
+ * are left alone: they paint menus and overlays, and no measured content
+ * surface sits behind them). Do not raise these back toward the shell values
+ * to "restore the glass look" — that is exactly the 10%-transmission state the
+ * user rejected.
+ */
+export const BACKDROP_ALPHA_BASE = 0.25
+
+/** `--dsw-alias-bg-layer-1` — the frame and the outer content shell. */
+export const BACKDROP_ALPHA_LAYER1 = 0.27
+
+/** `--dsw-specific-sidebar-fill` — the sidebar column (tab colour, a notch
+ * denser than the base). */
+export const BACKDROP_ALPHA_SIDEBAR = 0.27
+
+/**
  * Identity of the theme-token override an appearance repaint would install.
  *
  * Re-registering the very same variables through the theme service is a costly
@@ -178,10 +219,15 @@ export const DARK_SATURATION_SCALE = 0.55
  * compares this key and skips the registration when it has not changed.
  *
  * `'none'` means the painter leaves the shell's own tokens alone; `'neutral'`
- * is the glass-only override; `palette:<name>|glass:<0|1>` is a family override
- * (glass changes the alpha form of the same values, so it is part of the key).
+ * is the glass-only override; `'backdrop'` is the low-alpha override a mounted
+ * renderer needs (no palette); `palette:<name>|glass:<0|1>|backdrop:<0|1>` is a
+ * family override (glass changes the alpha form of the same values, and a
+ * mounted renderer replaces them with the backdrop alphas, so all three
+ * dimensions are part of the key).
  */
-export function appearanceTokenKey(bg: string | undefined, glass: boolean): string {
-  if (bg !== undefined && bg !== 'default') return `palette:${bg}|glass:${glass ? 1 : 0}`
-  return glass ? 'neutral' : 'none'
+export function appearanceTokenKey(bg: string | undefined, glass: boolean, backdrop = false): string {
+  if (bg !== undefined && bg !== 'default') return `palette:${bg}|glass:${glass ? 1 : 0}|backdrop:${backdrop ? 1 : 0}`
+  if (backdrop) return 'backdrop'
+  if (glass) return 'neutral'
+  return 'none'
 }

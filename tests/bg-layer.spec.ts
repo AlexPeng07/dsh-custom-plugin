@@ -172,7 +172,10 @@ describe('bgLayerTint', () => {
     expect(bgLayerTint('雾蓝', true)).toBe(toDarkRamp('#E8EDF2', DARK_CANVAS_LIGHTNESS))
   })
 
-  it('falls back to the neutral canvas for "default" and unknown names', () => {
+  it('falls back to the shell base fill for "default" and unknown names', () => {
+    // The neutral tint is the shell's own base fill (`#f8f9fb`): the backdrop
+    // token set paints that fill at a low alpha over this canvas, so any other
+    // tint shifts the whole page instead of only showing ink.
     expect(bgLayerTint('default', false)).toBe('#f8f9fb')
     expect(bgLayerTint('default', true)).toBe('#0f1117')
     expect(bgLayerTint('no-such-family', false)).toBe(PALETTE[0][1])

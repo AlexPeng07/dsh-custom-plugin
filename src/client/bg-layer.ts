@@ -103,6 +103,13 @@ export function decideBgLayer(enabled: boolean, caps: BgLayerCaps): BgLayerVerdi
  * uses the family's pastel; dark mode derives it through `toDarkRamp` with the
  * same body-canvas lightness the appearance painter uses, so a theme flip
  * re-paints the layer through the existing `applyAppearance` effect deps.
+ *
+ * The neutral tint must equal the shell's own no-palette base fill, because the
+ * backdrop token set paints that fill at a low alpha over this canvas: a
+ * mismatched tint would shift the whole page by the difference (measured −7
+ * luma on every content pixel while the tint was `#ffffff` against the shell's
+ * `#f8f9fb` — a tone change, not texture). Matching the canvas keeps the
+ * on/off difference purely ink.
  */
 export function bgLayerTint(bg: string | undefined, dark: boolean): string {
   if (bg === undefined || bg === 'default') return dark ? '#0f1117' : '#f8f9fb'

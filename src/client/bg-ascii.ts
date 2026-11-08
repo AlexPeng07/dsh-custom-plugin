@@ -22,6 +22,7 @@
  * @module @alexpeng/dsh-custom-plugin/client/bg-ascii
  */
 
+import { buildFocusCaps, FOCUS_FEATHER_PX, FOCUS_FLOOR, normalizeFocusRect, sameFocusRect, type BgFocusRect } from './bg-focus.ts'
 import { hexToRgb, inkFor, inkScaleFor } from './palette.ts'
 
 /** Upper bound for the backing-store scale. */
@@ -211,6 +212,13 @@ export const DEGRADE_MAX = 6
 const CONTRAST = 1
 const GAMMA = 1
 
+/** Lowest field value the `flow` / `static` piece may emit, as a fraction of
+ * the ramp. 0.45 keeps the darkest cell around the middle of the ramp instead
+ * of the blank space glyph: the ink *area* per cell, not the ink darkness, is
+ * what the eye reads through the 0.5-alpha content surface (see
+ * `createFlowPiece`). Exported for the unit test that pins the distribution. */
+export const FLOW_LEVEL_FLOOR = 0.45
+
 /** Bayer 4×4 ordered dither matrix (row-major). */
 const BAYER4 = new Uint8Array([0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5])
 
@@ -277,6 +285,15 @@ function valueNoise(x: number, y: number): number {
  * The `flow` piece: a slowly drifting value-noise field. `t` is already
  * scaled by the preset speed. Dithering only makes sense on short ramps;
  * at 16 levels it adds noise instead of removing banding.
+ *
+ * The field is lifted by {@link FLOW_LEVEL_FLOOR} before quantisation. That
+ * lift is the round-1 visibility fix, and it is a *coverage* fix, not an ink
+ * fix: value noise spends most of its area near 0.5, which quantises onto the
+ * `blocks` ramp's mid glyphs (`+` / `*`) — measured at 12 px those carry only
+ * 5.5% / 4.4% of a cell's ink area, against 12% for `#`, 17% for `%` and 23%
+ * for `@`. Raising the ink ΔL further does nothing to that (the ink is already
+ * near-black and the surface halves it), while the lift moves the typical cell
+ * from `+` to `#`-`%`, i.e. 2–3× the ink mass on screen.
  */
 export function createFlowPiece(levels: number, dither: boolean): AsciiPiece {
   return (t, out, cols, rows) => {
@@ -286,7 +303,7 @@ export function createFlowPiece(levels: number, dither: boolean): AsciiPiece {
     for (let row = 0; row < rows; row++) {
       const y = row * 0.11 + driftY
       for (let col = 0; col < cols; col++, i++) {
-        let v = valueNoise(col * 0.08 + driftX, y)
+        let v = FLOW_LEVEL_FLOOR + (1 - FLOW_LEVEL_FLOOR) * valueNoise(col * 0.08 + driftX, y)
         if (CONTRAST !== 1) v = (v - 0.5) * CONTRAST + 0.5
         if (GAMMA !== 1) v = Math.pow(v < 0 ? 0 : v, GAMMA)
         if (dither) {
@@ -669,6 +686,9 @@ export interface AsciiBackdrop {
    * into that preset's `ranges`; a preset switch keeps the overrides and
    * re-clamps them. Repaints immediately so a dragging slider is visible. */
   setParams(params: AsciiParams): void
+  /** Move the calm zone (the reading column). `null` disables the mask. The
+   * per-cell caps are rebuilt only when the zone or the grid actually moves. */
+  setFocus(rect: BgFocusRect | null): void
   /** Stop everything and free the canvas, listeners, arrays and atlases. */
   destroy(): void
   readonly stats: AsciiBackdropStats
@@ -721,6 +741,12 @@ export function createAsciiBackdrop(options: AsciiBackdropOptions): AsciiBackdro
   let layoutDone = false
   let levels: Uint8Array | null = null
   let piece: AsciiPiece | null = null
+  // Spatial focus mask: the reading column stays calm, the edges keep full ink.
+  // `focusCaps` is rebuilt only when the zone or the grid moves (a dirty flag),
+  // never per frame, so the hot loop stays allocation-free.
+  let focusRect: BgFocusRect | null = null
+  let focusCaps: Uint8Array | null = null
+  let focusDirty = true
   let surface = FALLBACK_SURFACE
   let ink = inkFor(FALLBACK_SURFACE, false, current.inkScale)
   let inkScale = current.inkScale
@@ -829,6 +855,9 @@ export function createAsciiBackdrop(options: AsciiBackdropOptions): AsciiBackdro
       rows = clampedRows
       levels = new Uint8Array(cols * rows)
       atlasKey = ''
+      // Cell geometry moved under the mask: the cached caps no longer line up
+      // with the new grid.
+      focusDirty = true
     }
     updatePiece()
     layoutDone = true
@@ -864,6 +893,16 @@ export function createAsciiBackdrop(options: AsciiBackdropOptions): AsciiBackdro
     return atlas
   }
 
+  /** Level caps for the current grid + zone, rebuilt only when dirty. */
+  function focusCapsFor(): Uint8Array | null {
+    if (focusRect === null || levels === null || cols <= 0 || rows <= 0) return null
+    if (!focusDirty && focusCaps !== null) return focusCaps
+    const lastLevel = CHARSET[spec().charset].length - 1
+    focusCaps = buildFocusCaps(cols, rows, cellW, cellH, focusRect, FOCUS_FEATHER_PX, FOCUS_FLOOR, lastLevel, focusCaps ?? undefined)
+    focusDirty = false
+    return focusCaps
+  }
+
   function drawFrame(t: number): void {
     if (destroyed || ctx === null) return
     ctx.fillStyle = surface
@@ -880,12 +919,17 @@ export function createAsciiBackdrop(options: AsciiBackdropOptions): AsciiBackdro
       return
     }
     piece(t, levels, cols, rows)
+    const caps = focusCapsFor()
     const empty = baked.empty
     let i = 0
     for (let row = 0; row < rows; row++) {
       const y = row * cellH
       for (let col = 0; col < cols; col++, i++) {
-        const lv = levels[i]
+        const raw = levels[i]
+        // One extra table read and compare per cell; the fade never touches the
+        // atlas or the piece, so a masked frame costs what an unmasked one does
+        // apart from this branch.
+        const lv = caps === null || raw <= caps[i] ? raw : caps[i]
         if (empty[lv] === 1) continue
         ctx.drawImage(baked.canvas, lv * baked.pxW, 0, baked.pxW, baked.pxH, col * cellW, y, baked.tileW, baked.tileH)
       }
@@ -1100,6 +1144,21 @@ export function createAsciiBackdrop(options: AsciiBackdropOptions): AsciiBackdro
     if (!running) startLoop()
   }
 
+  function setFocus(next: BgFocusRect | null): void {
+    if (destroyed) return
+    const rect = normalizeFocusRect(next)
+    if (sameFocusRect(rect, focusRect)) return
+    focusRect = rect
+    // The old caps stay allocated for the next build (same grid → same length);
+    // the dirty flag is what stops a stale table from being used.
+    focusDirty = true
+    if (!layoutDone || running) return
+    // A paused page must not be woken up just because the layout settled; the
+    // next visible frame rebuilds and repaints with the new zone.
+    if (computeMotion() === 'paused') return
+    drawStaticFrame()
+  }
+
   function onVisibility(): void {
     applyMotion()
   }
@@ -1177,9 +1236,10 @@ export function createAsciiBackdrop(options: AsciiBackdropOptions): AsciiBackdro
     canvas.remove()
     levels = null
     piece = null
+    focusCaps = null
     atlasKey = ''
     stats.alive = false
   }
 
-  return { sync, setPreset, setParams, destroy, stats }
+  return { sync, setPreset, setParams, setFocus, destroy, stats }
 }
