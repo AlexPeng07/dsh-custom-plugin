@@ -105,12 +105,16 @@ export function toDarkRamp(hex: string, lightness: number): string {
  * by a fixed delta (up on dark surfaces, down on light ones). The target is
  * "visible but not competing with body text", not WCAG text contrast.
  *
- * The two deltas are not symmetric on purpose. Content surfaces sit at 0.5–0.7
- * alpha, so only 8–13% of the ink survives in the reading column; on a light
- * surface 0.13 still leaves ~3 luma of structure, while the same delta on the
- * dark ramp measured as a flat sheet (2 luma, live 1280×822 host, 0.2.x), which
- * read as "the background is on but nothing happened". 0.20 restores the same
- * perceived presence in dark mode without touching the light rendering.
+ * The deltas are sized from the composited page, not from the raw canvas.
+ * Content surfaces sit at 0.5–0.7 alpha, so only ~19% of the ink reaches the
+ * reading column: the old 0.13 left a 2.9-luma range (0.64% Michelson) in a
+ * content-column patch, i.e. below the ~1% just-noticeable band, so the layer
+ * read as "on but nothing happened" even while it was animating. 0.31 puts
+ * that same patch at 6.3 luma / 1.39%, comfortably above the band, while the
+ * canvas ink is still far below body-text contrast (measured 1280×822,
+ * 0.2.2-rc.1). Dark mode is not the same number because its surface sits at
+ * ~37 luma: 0.20 read flat (3.8 luma) and 0.38 now lands at 7.6 luma, the
+ * matching perceived step rather than the same HSL delta.
  */
 export function inkFor(surfaceHex: string, dark: boolean): string {
   const [h, s, l] = rgbToHsl(hexToRgb(surfaceHex))
@@ -120,11 +124,11 @@ export function inkFor(surfaceHex: string, dark: boolean): string {
 }
 
 /** Ink lightness drop from a light surface. */
-export const LIGHT_INK_DELTA = -0.13
+export const LIGHT_INK_DELTA = -0.31
 
 /** Ink lightness lift from a dark surface; see {@link inkFor} for why it is
  *  larger than the light delta. */
-export const DARK_INK_DELTA = 0.20
+export const DARK_INK_DELTA = 0.38
 
 /** Body-canvas lightness for the dark variant of a palette family. */
 export const DARK_CANVAS_LIGHTNESS = 0.12

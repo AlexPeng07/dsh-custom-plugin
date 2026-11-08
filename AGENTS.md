@@ -88,11 +88,16 @@ daily token usage.
   `#vx-bg`. The effect contract is `(t, out: Uint8Array, cols, rows) => void`:
   pieces write ramp levels, never strings, into one reused buffer. Level 0 is
   blank in both themes and the ramps climb in ink density; the theme only swaps
-  the ink (single colour from `inkFor`, ΔL −0.13 on a light surface and +0.20 on
-  a dark one — a dark surface under 0.5–0.7 alpha content leaves only 8–13% of
-  the ink, and the original +0.11 measured 2 luma of contrast, i.e. visually
-  flat), never the glyph order or the alpha ramp. Glyphs are pre-baked into one
-  per-level atlas, so a frame is one
+  the ink (single colour from `inkFor`, ΔL −0.31 on a light surface and +0.38 on
+  a dark one), never the glyph order or the alpha ramp. The deltas are sized
+  from the *composited* page, not the raw canvas: content surfaces sit at
+  0.5–0.7 alpha, so only ~19% of the ink reaches the reading column. The old
+  −0.13/+0.20 left 2.9 luma (0.64% Michelson) light and 3.8 luma dark — below
+  the ~1% just-noticeable band, so users reported the layer as "on but
+  invisible"; −0.31/+0.38 measures 6.3 / 7.6 luma (1.39% / 9.37% Michelson) on
+  a live 1280×822 host (0.2.2-rc.1). Do not shrink a delta back toward the
+  old numbers: that is a visibility regression, not a taste adjustment. Glyphs
+  are pre-baked into one per-level atlas, so a frame is one
   `fillRect` plus one `drawImage` per non-empty tile — no per-frame allocation.
   The atlas key is `charset|ink|dark|dpr|tileW|tileH|fontPx|opacity`, so a
   preset switch rebakes only when the ramp or the cell geometry changes. Grid

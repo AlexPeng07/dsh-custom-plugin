@@ -61,10 +61,10 @@ export interface ShaderStyleSpec {
  */
 export const SHADER_STYLES: Record<ShaderStyle, ShaderStyleSpec> = {
   liquid: {
-    // 0.48 of the ink at the cloud peaks. The ink delta is fixed at 0.13
-    // lightness, so this is what makes the field read at 1x instead of
-    // looking like a flat tint (measured: p95 luminance spread ~5 levels,
-    // the same order the ASCII presets carry).
+    // 0.48 of the ink at the cloud peaks. The ink delta comes from `inkFor`
+    // (0.31 light / 0.38 dark), so the cloud reads at 1x instead of looking
+    // like a flat tint (measured p95 luminance spread ~5 levels at the old
+    // 0.13; the stronger delta lifts that without touching the intensity).
     speed: 1, density: 1.1, intensity: 0.48, seed: 7.3, fps: 24, animated: true,
     ranges: {
       speed: { min: 0.2, max: 1.2 },

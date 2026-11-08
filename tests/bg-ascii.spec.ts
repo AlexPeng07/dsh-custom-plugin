@@ -425,6 +425,25 @@ describe('inkFor', () => {
     expect(isDarkSurface(dark)).toBe(true)
     expect(isDarkSurface(light)).toBe(false)
   })
+
+  it('keeps the composited ink above the just-noticeable band', () => {
+    // Content surfaces sit at 0.5–0.7 alpha, so only ~19% of the raw canvas
+    // ink survives into the reading column. Measured on a live 1280×822 host
+    // (0.2.2-rc.1): the old −0.13 left a 2.9-luma range / 0.64% Michelson
+    // patch, below the ~1% JND, i.e. "on but invisible"; −0.31 lands at
+    // 6.3 luma / 1.39%. Dark mode's ~37-luma surface needs the larger +0.38
+    // (3.8 luma before, 7.6 luma now). These floors pin the raw canvas step
+    // that produces those composited numbers — a smaller delta is a
+    // regression to "visually flat", not a taste adjustment.
+    const brightness = (hex: string): number => {
+      const [r, g, b] = hexToRgb(hex)
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b
+    }
+    const light = '#e9ebee'
+    const dark = '#1c1e21'
+    expect(brightness(light) - brightness(inkFor(light, false))).toBeGreaterThanOrEqual(70)
+    expect(brightness(inkFor(dark, true)) - brightness(dark)).toBeGreaterThanOrEqual(90)
+  })
 })
 
 describe('createAsciiBackdrop', () => {
