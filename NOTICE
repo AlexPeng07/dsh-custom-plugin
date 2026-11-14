@@ -1,0 +1,71 @@
+dsh-custom-plugin
+=================
+
+The ocean background piece (`src/client/bg-ocean.ts`) derives its
+divergence-free current form and its boids-lite school steering from
+`stackedlol/ascii-sharks`:
+
+    MIT License
+    Copyright (c) 2026 drewdi
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in all
+    copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE.
+
+The wave tank (`src/client/bg-wake.ts`) is original to this package.
+
+The `dsh-ascii-ocean` plugin was read as a behaviour reference only. Its
+repository has no licence text (the LICENSE file is 12 bytes), so no code from
+it is copied here.
+
+The shape-aware glyph chart in `src/client/bg-ascii.ts` (`SHAPE_EXTRAS`,
+`buildShapeChart` and the `level × 5 + direction` lookup) adapts the algorithm
+described in Alex Harri Jónsson's "ASCII characters are not pixels" and the MIT
+`glyph-graphics` implementation:
+
+    MIT License
+
+    Copyright (c) 2026 Alex Yankov
+
+    This library implements the ASCII rendering algorithm described in
+    "Rendering ASCII in WebGL" by Alex Harri Jónsson
+    (https://alexharri.com/blog/ascii-rendering) and is derived from the
+    MIT-licensed implementation in https://github.com/alexharri/website:
+
+    Copyright (c) 2025 Alex Harri Jónsson
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in all
+    copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE.
+
+No source files are vendored: the renderer applies the idea to its own
+level-buffer + atlas pipeline.
+

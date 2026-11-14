@@ -99,7 +99,8 @@
     "CHANGELOG.md",
     "README.md",
     "README.zh.md",
-    "README.i18n.yaml"
+    "README.i18n.yaml",
+    "NOTICE"
   ],
   "license": "Apache-2.0"
 }

@@ -13,6 +13,12 @@
  * palette; the ink keeps `inkFor`'s fixed lightness delta and nothing neon or
  * highly saturated enters the shader.
  *
+ * `liquid` also reads the pointer through two extra vec4s (`u_pointer`,
+ * `u_pulse`): the cursor becomes an eddy that turns the cloud, and a press
+ * expands a ring from where it landed. `grain` declares `animated:false` and
+ * never runs a frame loop, so it deliberately ignores both — a static speck
+ * field that reacts to the mouse would not be static any more.
+ *
  * Styles are self-declared static or animated. A style that does not depend on
  * `u_time` draws one frame and never schedules rAF; the caller never has to
  * sniff pixels to discover that (readPixels would force a sync far more
@@ -22,6 +28,7 @@
 
 import { DEGRADE_MAX, DPR_CAP, createLadder, isDarkSurface, observeFrame, type LadderState } from './bg-ascii.ts'
 import { FOCUS_FEATHER_PX, FOCUS_FLOOR, normalizeFocusRect, type BgFocusRect } from './bg-focus.ts'
+import { attachBgPointer, createBgPointerState, syncBgPointer, type BgPointerEventLike, type BgPointerState, type BgPointerTargetLike } from './bg-pointer.ts'
 import { hexToRgb, inkFor, inkScaleFor } from './palette.ts'
 
 /** Every shader style id. */
@@ -72,13 +79,17 @@ export const SHADER_STYLES: Record<ShaderStyle, ShaderStyleSpec> = {
     // pixel (field ≈ 0.4) lands near 0.35 amount instead of 0.09 — the cloud
     // covers area rather than owning a few bright cores — and the peak
     // intensity moved 0.56 → 0.70 with the panel range widened to 1.0.
-    speed: 1, density: 1.1, intensity: 0.7, seed: 7.3, fps: 24, animated: true, inkScale: 1,
+    // 2026-11-11 default from the Desktop verification panel: a looser 0.80
+    // grid, with the intensity one step lighter than the 0.70 first pass
+    // (0.65 — the user asked for every default to read a little fainter).
+    // The ink delta still comes from `inkFor` (0.7 light / 0.15 dark).
+    speed: 1, density: 0.8, intensity: 0.65, seed: 7.3, fps: 24, animated: true, inkScale: 1,
     ranges: {
-      speed: { min: 0.2, max: 1.2 },
-      density: { min: 0.8, max: 1.6 },
-      intensity: { min: 0.2, max: 1 },
+      speed: { min: 0, max: 2 },
+      density: { min: 0.4, max: 1.2 },
+      intensity: { min: 0.3, max: 1.0 },
       seed: { min: 0, max: 9999 },
-      fps: { min: 15, max: 30 },
+      fps: { min: 15, max: 33 },
     },
   },
   grain: {
@@ -91,13 +102,17 @@ export const SHADER_STYLES: Record<ShaderStyle, ShaderStyleSpec> = {
     // dark, i.e. 2.4× the light figure on a dark surface — exactly the target
     // ratio), so boosting it would push the dark theme into the distracting
     // band; its shallow 1.64% peak is a property of a fine static speck.
-    speed: 0, density: 1.2, intensity: 0.6, seed: 41.7, fps: 30, animated: false, inkScale: 1,
+    // 2026-11-11 default from the Desktop verification panel: 0.75 density at
+    // 24 fps keeps the speck fine but no longer full-rate on a static field.
+    // The intensity moved 0.60 → 0.55 in the same pass that centred the
+    // sliders, matching the ASCII tier's one-step-lighter default.
+    speed: 0, density: 0.75, intensity: 0.55, seed: 41.7, fps: 24, animated: false, inkScale: 1,
     ranges: {
       speed: { min: 0, max: 0 },
-      density: { min: 0.75, max: 1.75 },
-      intensity: { min: 0.2, max: 0.8 },
+      density: { min: 0.45, max: 1.05 },
+      intensity: { min: 0.2, max: 0.9 },
       seed: { min: 0, max: 9999 },
-      fps: { min: 10, max: 30 },
+      fps: { min: 15, max: 33 },
     },
   },
 }
@@ -224,6 +239,10 @@ float vnoise(vec2 p) {
  */
 export const SHADER_FRAGMENT_SOURCE: Record<ShaderStyle, string> = {
   liquid: `${SHADER_PRELUDE}
+// Pointer interaction lives only in the animated style: grain is declared
+// static and never schedules a frame, so reacting there would be a lie.
+uniform vec4 u_pointer;
+uniform vec4 u_pulse;
 float fbm(vec2 p) {
   float v = 0.0;
   float a = 0.55;
@@ -240,6 +259,24 @@ void main() {
   float aspect = u_resolution.x / max(u_resolution.y, 1.0);
   vec2 q = (v_uv - 0.5) * vec2(aspect, 1.0);
   float t = u_time * u_speed;
+  // Pointer eddy: rotate the field around the cursor, strongest at the centre
+  // and gone by ~22% of the viewport height. A resting pointer still turns
+  // slowly (0.5 base, plus a slow breath), and a fast drag multiplies the
+  // angle, so the cloud visibly follows the hand instead of ignoring it.
+  float eddy = 0.0;
+  if (u_pointer.z > 0.5) {
+    vec2 pc = u_pointer.xy / u_resolution;
+    vec2 p = (pc - 0.5) * vec2(aspect, -1.0);
+    vec2 d = q - p;
+    // smoothstep requires edge0 < edge1; the inverted form is undefined in
+    // GLSL and some drivers (SwiftShader among them) return the wrong end.
+    float fall = 1.0 - smoothstep(0.0, 0.22, length(d));
+    eddy = fall;
+    float angle = fall * fall * 2.9 * (0.5 + u_pointer.w + 0.15 * sin(t * 0.9));
+    float cs = cos(angle);
+    float sn = sin(angle);
+    q = p + vec2(cs * d.x - sn * d.y, sn * d.x + cs * d.y);
+  }
   float scale = 2.4 * u_density;
   vec2 warp = vec2(
     vnoise(q * scale + vec2(t * 0.11, seed01 * 3.7)),
@@ -250,7 +287,30 @@ void main() {
   // A very low-frequency vertical breath keeps the cloud alive without
   // pushing the field into a fast, high-contrast band.
   f *= 0.82 + 0.18 * sin(q.y * 2.4 + t * 0.22 + seed01 * 6.0);
-  float amount = clamp(f * u_intensity, 0.0, 1.0) * focusWeight();
+  // The eddy also thickens the ink under the cursor. A pure coordinate
+  // rotation is invisible wherever the cloud is flat, which is most of a
+  // low-contrast field; this term is what makes the pointer's position read
+  // even when there is no boundary under it.
+  f *= 1.0 + eddy * 0.42;
+  // Press: six overlapping splats expand from the click and briefly thicken
+  // the cloud; each has its own centre, radius and weight, so the response
+  // reads as a splash rather than one perfect ring, and it fades with age.
+  float ring = 0.0;
+  if (u_pulse.w > 0.5) {
+    vec2 pc = u_pulse.xy / u_resolution;
+    vec2 p = (pc - 0.5) * vec2(aspect, -1.0);
+    for (int i = 0; i < 6; i++) {
+      float fi = float(i);
+      vec2 off = vec2(sin(fi * 2.3 + 1.7), cos(fi * 1.7 + 4.1)) * 0.055;
+      // 0.32–0.57 q/s crosses the viewport height in 1.7–3.1 s, so the splash
+      // stays on screen for most of its 2.6 s life instead of flying off.
+      float radius = u_pulse.z * (0.32 + 0.05 * fi);
+      float band = (length(q - p - off) - radius) * 12.0;
+      ring += exp(-band * band) * (0.55 - 0.05 * fi);
+    }
+    ring *= exp(-u_pulse.z * 0.8);
+  }
+  float amount = clamp((f + ring * 0.7) * u_intensity, 0.0, 1.0) * focusWeight();
   gl_FragColor = vec4(mix(u_surface, u_ink, amount), 1.0);
 }`,
   grain: `${SHADER_PRELUDE}
@@ -288,7 +348,29 @@ export interface ShaderUniformValues {
   focus: [number, number, number, number]
   focusFeather: number
   focusFloor: number
+  /** `[x, y, active, speed]` in CSS px; `active <= 0` disables the eddy. */
+  pointer: [number, number, number, number]
+  /** `[x, y, age, active]` in CSS px; `active <= 0` disables the ring. */
+  pulse: [number, number, number, number]
 }
+
+/** One pointer sample for the shader. `speed` is 0..1 (already normalised). */
+export interface ShaderPointerInput {
+  x: number
+  y: number
+  active: boolean
+  speed: number
+}
+
+/** One press sample for the shader; `age` is seconds since the press. */
+export interface ShaderPulseInput {
+  x: number
+  y: number
+  age: number
+}
+
+/** How long a press ring is allowed to expand, in seconds. */
+export const SHADER_PULSE_LIFE = 2.6
 
 /** Inputs for {@link shaderUniforms}; `dark` is derived from the surface. */
 export interface ShaderUniformInput {
@@ -302,6 +384,10 @@ export interface ShaderUniformInput {
   densityScale?: number
   /** Reading-column calm zone from the appearance painter. */
   focus?: BgFocusRect | null
+  /** Live pointer sample; absent means "no eddy". */
+  pointer?: ShaderPointerInput | null
+  /** Live press sample; absent or expired means "no ring". */
+  pulse?: ShaderPulseInput | null
 }
 
 function finite(value: number, fallback: number): number {
@@ -322,6 +408,30 @@ function rgb01(hex: string): [number, number, number] {
 function focusRectUniform(rect: BgFocusRect | null | undefined): [number, number, number, number] {
   const clean = normalizeFocusRect(rect)
   return clean === null ? [0, 0, 0, 0] : [clean.x, clean.y, clean.w, clean.h]
+}
+
+/** Pointer/pulse uniforms stay finite and inside the viewport; an inactive
+ * sample is `[0, 0, 0, 0]` so the shader takes the cheap branch. */
+function pointerUniform(pointer: ShaderPointerInput | null | undefined, width: number, height: number): [number, number, number, number] {
+  if (pointer === null || pointer === undefined || !pointer.active) return [0, 0, 0, 0]
+  return [
+    clamp(pointer.x, 0, width, 0),
+    clamp(pointer.y, 0, height, 0),
+    1,
+    clamp(pointer.speed, 0, 1, 0),
+  ]
+}
+
+function pulseUniform(pulse: ShaderPulseInput | null | undefined, width: number, height: number): [number, number, number, number] {
+  if (pulse === null || pulse === undefined) return [0, 0, 0, 0]
+  const age = clamp(pulse.age, 0, SHADER_PULSE_LIFE, SHADER_PULSE_LIFE)
+  if (pulse.age >= SHADER_PULSE_LIFE) return [0, 0, 0, 0]
+  return [
+    clamp(pulse.x, 0, width, 0),
+    clamp(pulse.y, 0, height, 0),
+    age,
+    1,
+  ]
 }
 
 /**
@@ -351,6 +461,8 @@ export function shaderUniforms(input: ShaderUniformInput): ShaderUniformValues {
     focus: focusRectUniform(input.focus),
     focusFeather: FOCUS_FEATHER_PX,
     focusFloor: FOCUS_FLOOR,
+    pointer: pointerUniform(input.pointer, Math.max(1, finite(input.width, 1)), Math.max(1, finite(input.height, 1))),
+    pulse: pulseUniform(input.pulse, Math.max(1, finite(input.width, 1)), Math.max(1, finite(input.height, 1))),
   }
 }
 
@@ -454,7 +566,9 @@ export interface ShaderResizeObserverLike {
   disconnect(): void
 }
 
-/** The slice of `Window` this renderer touches. */
+/** The slice of `Window` this renderer touches. Pointer listeners are optional
+ * so a minimal test window without them still boots the tier (the eddy is
+ * simply inert there). */
 export interface ShaderWinLike {
   readonly devicePixelRatio: number
   readonly innerWidth?: number
@@ -463,6 +577,8 @@ export interface ShaderWinLike {
   cancelAnimationFrame(handle: number): void
   matchMedia(query: string): ShaderMediaQueryLike
   ResizeObserver?: new (callback: () => void) => ShaderResizeObserverLike
+  addEventListener?(type: string, listener: (event: BgPointerEventLike) => void, options?: { passive?: boolean }): void
+  removeEventListener?(type: string, listener: (event: BgPointerEventLike) => void, options?: { passive?: boolean }): void
 }
 
 /** Observable renderer state; the live probe and tests read this. */
@@ -520,6 +636,8 @@ interface UniformLocations {
   focus: object | null
   focusFeather: object | null
   focusFloor: object | null
+  pointer: object | null
+  pulse: object | null
 }
 
 interface BuiltProgram {
@@ -598,6 +716,8 @@ function buildProgram(gl: ShaderGL, style: ShaderStyle): BuiltProgram | null {
       focus: gl.getUniformLocation(program, 'u_focus'),
       focusFeather: gl.getUniformLocation(program, 'u_focusFeather'),
       focusFloor: gl.getUniformLocation(program, 'u_focusFloor'),
+      pointer: gl.getUniformLocation(program, 'u_pointer'),
+      pulse: gl.getUniformLocation(program, 'u_pulse'),
     },
   }
 }
@@ -660,6 +780,23 @@ export function createShaderBackdrop(options: ShaderBackdropOptions): ShaderBack
   let resizeObserver: ShaderResizeObserverLike | null = null
   let dprMql: ShaderMediaQueryLike | null = null
   let focusRect: BgFocusRect | null = null
+  // Pointer state is shared with the ASCII tier: passive window listeners, one
+  // read per existing frame, no loop of its own. `pulseAt` is seconds on the
+  // same clock as `u_time`, so hiding the page freezes the ring as well.
+  const pointer: BgPointerState = createBgPointerState()
+  const detachPointer = typeof win.addEventListener === 'function' && typeof win.removeEventListener === 'function'
+    ? attachBgPointer(win as BgPointerTargetLike, pointer)
+    : () => {}
+  let lastPulseId = -1
+  let pulseX = 0
+  let pulseY = 0
+  let pulseAt = -1
+  // The eddy reads the already-eased pointer from `bg-pointer` (70 ms time
+  // constant), so it must not ease the position a second time — that stacked
+  // to ~250 ms and the swirl visibly dragged behind the hand. Only the speed
+  // is smoothed here (0.12 per frame), which is what makes a flick ramp the
+  // swirl instead of stepping it.
+  let smoothSpeed = 0
 
   function spec(): ShaderStyleSpec {
     return current
@@ -718,6 +855,27 @@ export function createShaderBackdrop(options: ShaderBackdropOptions): ShaderBack
 
   function drawFrame(seconds: number): void {
     if (destroyed || lost || gl === null || built === null || !layoutDone) return
+    // Same easing/damping step as the ASCII tier: the eddy follows an eased
+    // position and its speed uniform reaches zero when the hand rests.
+    syncBgPointer(pointer)
+    // One-shot press edge: the first frame only records the id, so a renderer
+    // that boots with the button already down cannot fire a ring by itself.
+    if (pointer.pulseId !== lastPulseId) {
+      if (lastPulseId < 0) {
+        lastPulseId = pointer.pulseId
+      } else {
+        lastPulseId = pointer.pulseId
+        pulseX = pointer.pulseX
+        pulseY = pointer.pulseY
+        pulseAt = seconds
+      }
+    }
+    if (pointer.active) {
+      const target = Math.min(1, Math.sqrt(pointer.vx * pointer.vx + pointer.vy * pointer.vy) / 1600)
+      smoothSpeed += (target - smoothSpeed) * 0.12
+    } else {
+      smoothSpeed = 0
+    }
     const values = shaderUniforms({
       time: seconds,
       width: cssW,
@@ -727,6 +885,10 @@ export function createShaderBackdrop(options: ShaderBackdropOptions): ShaderBack
       surface,
       densityScale,
       focus: focusRect,
+      pointer: pointer.active ? { x: pointer.x, y: pointer.y, active: true, speed: smoothSpeed } : null,
+      pulse: pulseAt >= 0 && seconds - pulseAt < SHADER_PULSE_LIFE
+        ? { x: pulseX, y: pulseY, age: seconds - pulseAt }
+        : null,
     })
     if (level >= DEGRADE_MAX) {
       gl.viewport(0, 0, canvas.width, canvas.height)
@@ -758,6 +920,8 @@ export function createShaderBackdrop(options: ShaderBackdropOptions): ShaderBack
     gl.uniform4f(u.focus, values.focus[0], values.focus[1], values.focus[2], values.focus[3])
     gl.uniform1f(u.focusFeather, values.focusFeather)
     gl.uniform1f(u.focusFloor, values.focusFloor)
+    gl.uniform4f(u.pointer, values.pointer[0], values.pointer[1], values.pointer[2], values.pointer[3])
+    gl.uniform4f(u.pulse, values.pulse[0], values.pulse[1], values.pulse[2], values.pulse[3])
     gl.drawArrays(gl.TRIANGLES, 0, 3)
     frames++
     stats.frames = frames
@@ -1027,6 +1191,7 @@ export function createShaderBackdrop(options: ShaderBackdropOptions): ShaderBack
       dprMql = null
     }
     canvas.removeEventListener('webglcontextlost', onContextLost)
+    detachPointer()
     if (built !== null) {
       gpu.deleteProgram(built.program)
       built = null

@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { BG_LAYER_ID, bgLayerTint, decideBgFxLayer, decideBgLayer, mountBgLayer, swapBgRenderer, unmountBgLayer, type BgLayerDocLike, type BgLayerElementLike } from '../src/client/bg-layer.ts'
+import { BG_LAYER_ID, bgLayerScope, bgLayerTint, decideBgFxLayer, decideBgLayer, mountBgLayer, pickColumnHost, swapBgRenderer, unmountBgLayer, type BgLayerDocLike, type BgLayerElementLike, type ColumnHostCandidate } from '../src/client/bg-layer.ts'
 import { DARK_CANVAS_LIGHTNESS, PALETTE, toDarkRamp } from '../src/client/palette.ts'
 
 interface FakeElement extends BgLayerElementLike {
@@ -160,6 +160,52 @@ describe('mountBgLayer / unmountBgLayer', () => {
   it('tolerates a fresh page where the layer never existed', () => {
     const doc = fakeDoc()
     expect(() => unmountBgLayer(doc)).not.toThrow()
+  })
+})
+
+describe('bgLayerScope', () => {
+  it('mounts ocean inside the conversation column and everything else on the page', () => {
+    expect(bgLayerScope('ascii', 'ocean')).toBe('conversation')
+    expect(bgLayerScope('ascii', 'flow')).toBe('page')
+    expect(bgLayerScope('ascii', 'static')).toBe('page')
+    expect(bgLayerScope('shader', 'liquid')).toBe('page')
+    expect(bgLayerScope('none', 'ocean')).toBe('page')
+  })
+})
+
+describe('pickColumnHost', () => {
+  const candidate = (className: string, height: number, opaque = false): ColumnHostCandidate => ({ className, height, opaque })
+
+  it('takes the outermost node between the anchor and the column that fills it', () => {
+    // Nearest-first: the dock, two wrappers, then the column root.
+    const chain = [
+      candidate('', 24),
+      candidate('wrapper', 720),
+      candidate('appFrame', 720),
+      candidate('GPfA3t_centerCol', 720),
+    ]
+    expect(pickColumnHost(chain)).toBe(1)
+  })
+
+  it('falls back to the node immediately below the column when none fills it', () => {
+    const chain = [
+      candidate('', 24),
+      candidate('inputWrap', 40),
+      candidate('GPfA3t_centerCol', 720),
+      candidate('parent', 720),
+    ]
+    expect(pickColumnHost(chain)).toBe(1)
+  })
+
+  it('uses the outermost opaque background when the column class is absent', () => {
+    const chain = [candidate('', 24, false), candidate('shell', 800, true), candidate('page', 800, true)]
+    expect(pickColumnHost(chain)).toBe(2)
+  })
+
+  it('returns -1 for an empty or unusable chain, and the column itself at index 0', () => {
+    expect(pickColumnHost([])).toBe(-1)
+    expect(pickColumnHost([candidate('', 10), candidate('', 20)])).toBe(-1)
+    expect(pickColumnHost([candidate('_centerCol', 720)])).toBe(0)
   })
 })
 

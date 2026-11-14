@@ -1,5 +1,7 @@
 # dsh-custom-plugin
 
+> 会话进度、当前参数、验证/安装流程与已知坑见 `PROJECT_HANDOFF.md`（接手必读，规则以本文件为准）。
+
 Standalone convenience suite for the DeepSeek Harness (DSH) Web GUI:
 personalization (appearance, weather FX, glass), project folders, prompts,
 conversation export, Mermaid rendering, quote reply, and DeepSeek balance /
@@ -59,7 +61,7 @@ daily token usage.
   line in the disposer at the bottom of `src/client/custom.tsx`. `saveCfg`
   refuses to POST until a state read has succeeded (`cfgLoaded`) — unloaded
   factory defaults must never reach the host.
-- The page-background layer (`div#vx-bg`) is appended to `<body>`, never
+- Page-scoped presets use the page-background layer (`div#vx-bg`), appended to `<body>`, never
   inside `.vx-root`: the overlay slot's ancestor is the shell's
   `.pI_x6G_overlayLayer` (`position:absolute; z-index:20`), so `.vx-root`'s
   2147483000 only orders plugin surfaces locally and native dialogs at body-level
@@ -234,8 +236,12 @@ daily token usage.
   symmetric (nodes 1842/1844/1842, `#vx-bg` 0/1/0, canvases 1/2/1,
   `setInterval` 2/3/2, listeners 31/31/31 and 36/37/36).
 - The renderer is `src/client/bg-ascii.ts`, mounted as one canvas inside
-  `#vx-bg`. The effect contract is `(t, out: Uint8Array, cols, rows) => void`:
-  pieces write ramp levels, never strings, into one reused buffer. Level 0 is
+  `#vx-bg`. The effect contract is
+  `(t, out, cols, rows, input?, emphasis?, overlay?) => void`: pieces write ramp
+  levels, never strings, into one reused `Uint8Array`. `input` is grid-space
+  pointer state, `emphasis` marks cells that must stay visible inside the calm
+  zone at `EFFECT_FOCUS_FLOOR`, and `overlay` carries sparse non-ramp glyphs
+  (fish bodies) that the renderer draws with `fillText` after the atlas blit. Level 0 is
   blank in both themes and the ramps climb in ink density; the theme only swaps
   the ink (single colour from `inkFor`, `LIGHT_INK_DELTA −0.7` on a light
   surface and `DARK_INK_DELTA +0.15` on a dark one), never the glyph order or
@@ -258,9 +264,22 @@ daily token usage.
   visibility regressions, not taste adjustments. Glyphs
   are pre-baked into one per-level atlas, so a frame is one
   `fillRect` plus one `drawImage` per non-empty tile — no per-frame allocation.
-  The atlas key is `charset|ink|dark|dpr|tileW|tileH|fontPx|opacity`, so a
-  preset switch rebakes only when the ramp, the ink string or the cell geometry
-  changes. Grid cell comes from measuring 50 `M` advances (`cellH = fontPx ×
+  The atlas key is `charset|shape|ink|dark|dpr|tileW|tileH|fontPx|opacity`, so
+  a preset switch rebakes only when the ramp, the ink string, the shape-aware
+  flag or the cell geometry changes. Shape-aware presets append 5–7 directional
+  tiles to the same strip (see below).
+- Shape-aware rendering (2026-11-13, ported from the community): `flow` /
+  `static` / `ripple` set `shapeAware: true`, and the renderer reads the raw
+  level buffer's local gradient (±2 cells; direction 1 = vertical, 2 =
+  horizontal, 3 = "/", 4 = "\") and swaps a ramp glyph for a directional extra
+  of similar ink weight. The chart is `level × 5 + dir`; direction 0 always
+  keeps the calibrated ramp, and an extra is used only when its ink mass is
+  within one ramp step. Extras live in `SHAPE_EXTRAS` (blocks: `_ - = ! | / \`;
+  classic scaled to its 16 levels); the `dots` pieces and `rain` stay plain.
+  The idea and the MIT implementation are credited in the code —
+  alexharri.com/blog/ascii-rendering and github.com/aleyan/glyph-graphics —
+  and no dependency was added. Cost: four neighbour reads per cell (harness
+  flow stays at 20.1 fps / 45.3% TaskDuration). Grid cell comes from measuring 50 `M` advances (`cellH = fontPx ×
   1.15`), DPR is capped at 2, `density` multiplies the cell size, and
   `MAX_COLS = 240` / `MAX_ROWS = 96` widen the cell rather than truncating the
   grid.
@@ -280,23 +299,32 @@ daily token usage.
   (live A/B diff, 2026-11-06).
 - Phase 3a ships six ASCII presets, each a distinct piece rather than one field
   with different knobs (`createPresetPiece` dispatch): `flow` a drifting value
-  noise field (`blocks`, dither, 0.75/24 fps); `rain` per-column falling trails
+  noise field (`blocks`, dither, 0.65/24 fps); `rain` per-column falling trails
   with a bright head and a quadratic fade tail, 14% dormant columns, 16-level
-  `classic` ramp and no dither (1/24 fps); `ocean` low-frequency horizontal
-  swells plus fixed foam at hash hotspots (`dots`, dither, 0.65/20 fps);
+  `classic` ramp and no dither (0.75/24 fps); `ocean` a living water surface
+  (`dots`, 11 px, dither, 1.5/24 fps): a divergence-free current, a noise-contour
+  crest field over a 20% one-step speckle, an 18-small-fish school plus two
+  large multi-cell koi, and the pointer interaction below;
   `starfield` sparse depth-parallax stars, >50% blank cells, no dither at
-  fontPx 14 (0.5/15 fps); `ripple` three fixed concentric-ring origins with a
+  fontPx 14 (0.65/20 fps); `ripple` three fixed concentric-ring origins with a
   `CELL_ASPECT = 1.9` y-correction and dither off to keep the contours
-  (0.75/20 fps); `static` the deterministic flow frame at zero rAF. Ink always
+  (0.65/24 fps); `static` the deterministic flow frame at zero rAF. Ink always
   derives from the surface brightness, so every preset reads on both themes
-  and all palettes; nothing neon or saturated is allowed in.
+  and all palettes; nothing neon or saturated is allowed in. The 2026-11-11
+  defaults are the panel values the user signed off during the Desktop
+  verification pass, one step lighter after the range pass: the ASCII canvas
+  `opacity` is 0.55 for flow/rain/starfield, 0.45 for `ocean` and 0.60 for
+  ripple/static (was 0.60/0.65; `ocean` then went two steps further down
+  because it lives inside the conversation column) — that axis is part of the
+  shipped look, not a leftover override.
 - Every piece carries its own `inkScale` on top of the theme's base ΔL
-  (`1.0 flow/static`, `1.1 rain`, `1.25 ripple`, `1.4 ocean`, `1.6 starfield`),
+  (`1.0 flow/static`, `1.1 rain`, `1.25 ripple`, `1.2 ocean`, `1.6 starfield`),
   because the same ΔL on a block glyph and on a dot glyph are not the same
   picture: a `dots` cell carries ~1/6 of a `blocks` cell's ink. Per-piece
   calibration 2026-11-08 (light, standard strength, coverage / mean ink mass /
   peak): flow 9.78% / 0.15% / 2.99%, rain 4.76%/0.08%/3.08%, ocean was
-  4.03%/0.12%/4.37% and is 6.25%/0.17%/4.37% at density 0.65, starfield was
+  4.03%/0.12%/4.37% and was 6.25%/0.17%/4.37% at density 0.65 before the
+  interactive round moved the default feel to soft + 0.6, starfield was
   0.23%/0.01%/3.94% and is 0.37%/0.03%/5.15% at fontPx 14, ripple 6.98%/0.11%
   /3.11%, static tracks flow. Rain and grain deliberately stay put: rain's peak
   already matches flow's and motion is its signal (13.3% of cells change in
@@ -306,6 +334,233 @@ daily token usage.
   table that looks prettier. Starfield stays sparse on purpose (>50% blank
   cells); only its glyph size and ink step were lifted so "sparse" stops
   meaning "absent".
+- Pointer interaction (2026-11-09; `ocean` first, then `flow`, `rain`,
+  `ripple`, `starfield` and the shader tier's `liquid` on 2026-11-11). The
+  contract, in order:
+  - `src/client/bg-pointer.ts` attaches `pointermove` / `pointerdown` /
+    `pointerup` / `pointercancel` / `pointerleave` / `blur` to the window with
+    `{passive:true}`. It never calls `preventDefault`, never reads layout, never
+    starts a frame, ignores touch moves (a touch tap is still a press) and
+    removes exactly those listeners in the disposer. The renderer maps CSS px
+    to grid cells once per frame; the piece only sees `AsciiInput`.
+  - Feel contract (2026-11-11, the open-source interaction round): the position
+    follows the raw sample with `POINTER_POS_TAU_MS = 70` (time-based, so the
+    `lerp ≈ 0.15` feel is identical at 60 and 1000 Hz; every step carries at
+    least 8 ms so coalesced samples still move) and the velocity with
+    `POINTER_VEL_TAU_MS = 90`. Below `POINTER_DEAD_SPEED = 80` CSS px/s the
+    reported velocity is exactly zero (smoothstep onset up to 2×), so a resting
+    hand never stirs the fog, bends the rain or spins the eddy. Both tiers call
+    `syncBgPointer` once per *existing* frame: it eases the remaining distance
+    after the last event, damps the velocity after 90 ms without input and
+    snaps everything to zero at `POINTER_IDLE_MS = 1500` (velocity 0, position
+    on the target), so no piece can run on a stale sample. A press snaps the
+    position to the click and **keeps** the incoming velocity — that is what
+    lets `ripple` throw a harder ring from a flick. The four constants are
+    exported and pinned by `tests/bg-pointer.spec.ts`.
+  - `src/client/bg-field.ts` owns the shared primitives (`quantizeLevel`,
+    `hash2`, `valueNoise`, `shade`, `AsciiInput`, `AsciiPiece`,
+    `OVERLAY_GLYPHS`) so `bg-ocean.ts` does not import the renderer.
+  - `src/client/bg-wake.ts` is a two-buffer wave equation (`height` +
+    `velocity`, five-point Laplacian, `WAKE_C2 = 0.28`, damping 0.975, decay
+    0.993). The field is signed: crests add ink and strong troughs clear it, so
+    a click's dipole draws a bright ring around a small hole instead of
+    saturating a disk to the top of the ramp. The one-cell border is absorbing,
+    and the whole pass is O(cols × rows) with no per-frame allocation.
+  - `src/client/bg-ocean.ts` keeps 18 small two-cell fish and two large koi.
+    Small fish are `>#`/`<#` direction marks plus a body cell; koi are 28-cell
+    silhouettes (`#` body, `%` edge, `@` head, `~` tail) through `overlay`.
+    Steering is boids-lite (alignment / cohesion / separation / mill), the
+    pointer pushes fish away within 6 cells, a click startles within 9 cells
+    and the school regroups through the fear decay. The water is a
+    noise-contour crest field whose one-step speckle is tied to the crests
+    (spray on the wave) rather than spread over every cell: troughs stay empty,
+    which is what keeps the sea from reading as dust and from mixing with the
+    copy. A full dot grid was rejected because it reads as graph paper **and**
+    defeats the calm zone (the cap can only step a glyph down, never remove
+    it). The ambient swell peaks at 0.45 of the ramp, deliberately leaving the
+    top levels to the pointer:
+    crests add dots (`+h × 1.5`) and troughs below −0.06 clear them, so a wake
+    reads as a bright ring plus a hole. A drag drops one small dipole ring per
+    0.16 s and 4 cells (`DRAG_RING_TIME` / `DRAG_RING_DISTANCE`) plus a faint
+    trail, so the path reads as a row of expanding rings rather than a lifted
+    patch; a click widens the same four rings (width 1.8–2.6 cells).
+  - Emphasis: only positive wake crests above `EMPHASIS_WAKE = 0.09` (or fish
+    cells) may bypass the calm zone, and only up to
+    `EFFECT_FOCUS_FLOOR = 0.65` of the ramp (`bg-ascii.ts`). The 2026-11-11
+    interaction pass raised it from 0.5 so a user-caused ripple reads clearly
+    under the copy; the ambient stays at the 0.15 floor. Troughs add no ink
+    (they clear dots) and stay masked. The renderer
+    allocates `emphasis` / `overlay` only for `interactive` presets, clears them
+    per frame, draws overlay glyphs with `fillText` (≈90 cells/frame) and
+    reports `stats.emphasisCells` / `stats.overlayCells`. `gridInput.active` is
+    false while paused, static, reduced-motion or L5+, so a pointer move cannot
+    wake a stopped loop.
+  - Harness measurement 2026-11-09 (headless Edge, real DOM, 1280×822 CSS /
+    DPR 1.5, 126×38 grid; renderer canvas pixels, not page screenshots): idle
+    20.0 fps, TaskDuration 26.5% of wall; drag 20.0 fps / 27.8%; click 20.0;
+    idle coverage column 1.53% vs sidebar 2.58%; after a click column 3.81% vs
+    sidebar 7.16%; same frame with the mask off column 11.79% vs 4.11% with it
+    on; `data-vx-bg-motion="static"` + a pointer move paints 0 frames. These
+    are harness numbers; the live Desktop pass is recorded in CHANGELOG.md.
+  - `flow` is the second interactive piece (2026-11-11) and is page-scoped, so
+    it needs no column anchor. Its fog is two value-noise octaves (0.7 body,
+    0.3 filament) so the field has detail instead of reading as one flat wash;
+    `static` shares the exact same formula at `h = 0`, and the preset test pins
+    the byte-identical t=0 frame. It keeps the same wave tank as a
+    *displacement* field rather than a water surface: `h` bends the noise coordinates
+    (`+h*1.4` / `+h*0.9`) and adds ink (`+h*0.18`), so a pointer trail reads as
+    stirred fog instead of a bright brush stroke. A drag injects a **curl
+    dipole** — two opposite lobes offset ±(1.6–3.0) cells either side of the
+    path — plus a weak centre lift, so the fog is stirred rather than painted;
+    the splat radius (1.8–4.0 cells) and the swirl both grow with pointer
+    speed. A hand that rests (velocity under 10 cells/s) feeds a per-cell
+    `bleed` field (rate 0.8/s, τ 0.8 s, ellipse 4 × 2.2 cells, floor 0.002)
+    that thickens the ink by up to `bleed × 0.45`, so damp fog accumulates
+    after about a second and fades in roughly two. A click reuses the same
+    two-ring dipole as `ocean`; cells with `|h| > 0.14` or `bleed > 0.12` are
+    marked for emphasis, so a trail or a dwell stays visible inside the calm
+    zone at up to 65% while the field between them stays masked.
+    `static` shares the field but is built with `createFlowPiece(..., false)`:
+    one deterministic frame, no wake allocation, no interaction state.
+    Harness 2026-11-11 (headless Edge, real DOM, 1280×822 CSS / DPR 1.5,
+    145×44 grid, standard strength): idle column coverage 8.42% (the calm zone
+    holds the base field at its floor) vs sidebar 19.42%; after a drag the
+    column still reads 8.42% because the trail is clipped to that floor, while
+    the sidebar keeps the full texture; after a click 9.48%; 20.0 fps with
+    36.0% TaskDuration during continuous dragging;
+    `data-vx-bg-motion="static"` paints 0 frames. These are renderer-canvas
+    pixels, not page screenshots.
+  - `rain` is the third interactive piece (2026-11-11). Its metaphor is wind
+    on a curtain, not water, so it does **not** use the wake tank: each column
+    carries four column-sized weights — `shift` (steady wind bend), `kick`
+    (a press's decaying push), `surge` (the press's head flash) and `repel`
+    (the tunnel). A drag sets the wind target from pointer speed (`vx × 0.06`,
+    clamped to 5 columns) with a 20-column falloff; the bend follows at
+    0.25/frame but eases back at 0.06, so the gust is still readable about a
+    second after the hand stops. A press pushes columns away from the click
+    across 14 columns (4.5 columns at the centre, decaying ×0.93/frame) and
+    flashes only the **two leading cells** of each nearby trail (`surge ×1.0`,
+    decaying ×0.94) — the trail behind keeps its own fade, so a press reads as
+    a spark at the heads instead of the whole curtain brightening. A *resting*
+    pointer carves a repulsion tunnel: columns within `RAIN_TUNNEL_RADIUS = 8`
+    are pushed outward up to 2.4 columns (`repel`, 0.3/frame toward the target,
+    0.1/frame back) and the destination cell's ink is cut by up to 90% inside
+    the radius (smoothstep rim, so the parting edge is feathered), so the rain
+    parts around the cursor and closes when it leaves.
+    The tunnel is **not** marked for emphasis — it is an absence of ink, and the
+    calm-zone floor would push it back up. The trail top bends further than its
+    tail (`shear = 1 − 0.45 × row/rows`), which is what makes the drops slant
+    like rain instead of sliding sideways as one rigid line. Each column also
+    carries a 0.82–1.0 depth brightness on top of its own head speed, so the
+    curtain reads as layers instead of one flat sheet. Only the row loop's
+    write target changes; head/trail/active are still recomputed per frame and
+    no per-frame allocation is added. Without input all four weights stay zero,
+    so the frame is bit-identical to the pre-interaction rain; the tails snap to
+    zero (`|kick| < 0.01`, `surge < 0.02`, `|shift| < 0.001`, `|repel| < 0.01`)
+    so the picture really settles instead of keeping a sub-level residual
+    forever. Harness 2026-11-11 (headless Edge, real DOM, 1280×822 CSS / DPR 1.5,
+    193×59 grid, standard strength): idle column coverage 1.81% vs sidebar
+    3.81%; after a drag column 3.02%; after a click column 2.65%; 20.1 fps with
+    13.4% TaskDuration during continuous dragging;
+    `data-vx-bg-motion="static"` paints 0 frames.
+  - `ripple` is the fourth interactive piece (2026-11-11). The fixed three
+    origins stay exactly as calibrated; the pointer may add up to six live
+    sources in a fixed ring buffer (`RIPPLE_MAX_SOURCES`, no allocation per
+    drop). A press drops one source at the click (`amp 0.40 + min(0.26, speed ×
+    0.004)`, ring rate `2.6 + min(1.2, speed × 0.012)`), so a flick throws a
+    harder and faster ring than a resting click while a visible ring is still
+    ~4 cells out within 120 ms; a drag drops a weaker one (`amp 0.17`, rate 1.7)
+    at most every 0.22 s and only after moving 5 cells, which reads as a
+    fingertip trail. Sources live 3.2 s and fade linearly; the per-cell distance
+    gate (`RIPPLE_REACH = 48`) skips `sqrt`/`sin` for most cells. Inside a
+    pointer ring's wave band (`|wave| > 0.04`) the glyph gets one extra step in
+    the wave's direction (`±0.085`), so the band reads as a travelling contour;
+    every value is a pure function of the source's age, so a cell the ring has
+    passed returns to the ambient field exactly. The first pointer sighting only
+    records the position — a page that loads under a resting cursor must not
+    spawn a ring. Dynamic sources mark `emphasis` where their own contribution
+    exceeds 0.06, so a fresh ring stays visible inside the calm zone at the 65%
+    cap while the fixed field stays masked. Without input the piece is
+    bit-identical to the pre-interaction version, and the frame is bit-identical
+    again once every source has expired. Harness 2026-11-11 (headless Edge, real
+    DOM, 1280×822 CSS / DPR 1.5, 145×44 grid, standard strength): idle column
+    coverage 4.30%; after a drag 5.76%; after a click 9.48%; 20.1 fps with
+    36.9% TaskDuration during continuous dragging;
+    `data-vx-bg-motion="static"` paints 0 frames.
+  - `starfield` is the fifth interactive piece (2026-11-11) and the lightest.
+    The field is split into **three depth layers** drifting at 0.05 / 0.10 /
+    0.18 rows/s with thresholds 0.975 / 0.966 / 0.956 (far dim, mid medium,
+    near bright), so the picture has parallax without a second canvas. The
+    pointer column is eased at 0.12/frame and shifts each layer by up to 1.2
+    cells (≈15 px) in proportion to its distance from the page centre; the
+    offset is rounded onto each layer's own lattice, so the near layer hops a
+    cell while the far one stays put. A sparse field cannot be made denser
+    without losing its character, so direct interaction is light: a press
+    scatters 24 sparks inside a 2.5-cell disc (linear radius, so the cluster is
+    bright at the centre); a drag drops 3 every 0.1 s, jittered ±4 × ±3 cells;
+    each spark lives 1.4 s in a fixed 28-slot ring buffer and paints a plus
+    (centre + four neighbours one level weaker). Dwelling adds the slower cue:
+    a per-cell `heat` field (rate 1.6/s, τ 0.408 s = ×0.96 per 60 Hz frame,
+    ellipse 11 × 6 cells ≈ 150 px) brightens the stars inside it
+    (`+heat × 0.65`) and lights near-miss cells (`hash > 0.84`) as a small
+    cluster; both are marked for emphasis. Heat under 0.02 is ignored, so the
+    baseline is bit-identical again after the pointer leaves. Harness
+    2026-11-11 (headless Edge, real DOM, 1280×822 CSS / DPR 1.5, 83×25 grid,
+    standard strength): idle column coverage 0.126%; after a drag 0.458%;
+    after a click 0.393%; 20.1 fps (the preset's own pacing) with a low task
+    share; `data-vx-bg-motion="static"` paints 0 frames.
+  - `liquid` (the shader tier) is the sixth interactive surface. The uniform
+    contract gained two vec4s, and they exist **only in the animated style**:
+    `u_pointer = [x, y, active, speed]` (CSS px, speed normalised 0..1 from
+    `bg-pointer`'s smoothed velocity) and `u_pulse = [x, y, age, active]`
+    (`age` seconds on the same clock as `u_time`, so hiding the page freezes
+    the ring). `grain` declares `animated:false` and never schedules a frame;
+    it deliberately does not read either uniform — a static speck field that
+    reacts to the mouse would contradict its own declaration. Both are built
+    by `pointerUniform` / `pulseUniform`, clamped into the viewport, and an
+    inactive sample is `[0, 0, 0, 0]` so the shader takes one cheap branch.
+    The eddy rotates the cloud's sample coordinates around the cursor
+    (`fall = 1 − smoothstep(0, 0.22, dist)`; note the non-inverted edges — the
+    inverted form is undefined in GLSL and SwiftShader returned the wrong end)
+    and thickens the ink under it (`f *= 1 + eddy × 0.42`, angle ×2.9) — a pure coordinate
+    rotation is invisible wherever the cloud is flat, which is most of a
+    low-contrast field. The position is `bg-pointer`'s already-eased sample
+    (70 ms), so it is **not** smoothed a second time (the two stages stacked to
+    ~250 ms and the swirl visibly dragged); only the speed uniform is eased
+    (0.12/frame), which ramps a flick instead of stepping it. A press launches
+    **six overlapping splats** (deterministic offsets within ±0.055 q, radii
+    `age × (0.32 + 0.05i)` q/s, weights 0.55…0.30) over its 2.6 s life
+    (`SHADER_PULSE_LIFE`), so the response reads as a splash instead of one
+    perfect ring. The renderer attaches the same passive window listeners as
+    the ASCII tier and detaches them in `destroy`; a window without
+    `addEventListener` still boots (the eddy is inert). Harness measurement
+    2026-11-11 (headless Edge + SwiftShader, 1280×822 CSS / DPR 1.5, 400×320
+    crop at 520,260, block ratio >8 luma, calm zone off): the cloud alone
+    moves 13.2% of the crop over 600 ms; moving the pointer to the crop's
+    top-left moves block 0 by **0.334**, and the bottom-right position moves
+    blocks 11 / 15 by **0.866 / 0.946** — the eddy follows the pointer with the
+    pointer's own easing. A press moves **86.4%** of the crop at +140 ms and
+    91.3% at +540 ms, because six bands of different radii are still crossing
+    it; the focus mask multiplies all of it down in the reading column, which
+    is the calm-zone contract rather than a missing interaction.
+  - `ocean` is the first **conversation-scoped** preset (`bgLayerScope` in
+    `bg-layer.ts`): the page layer and its backdrop token set are not mounted.
+    `ColumnBgAnchor` is registered in `conversation.input.dock`; it walks to the
+    AppFrame centre column (`pickColumnHost`, pure and unit-tested), inserts a
+    fixed `z-index:-1` wrapper as the host's first child, sets
+    `isolation:isolate` (and `position:relative` when static) and lets the
+    normal ASCII renderer own the wrapper. That stacking context is what makes
+    the canvas paint above the column background and below every message
+    without touching any other surface. The calm zone applies here too: the
+    same viewport rect `measureFocusRect` produces for the page layer is
+    shifted by the host's `getBoundingClientRect()` and pushed through
+    `setFocus`, and `ColumnBgAnchor` re-measures it on the same 350 ms cadence
+    plus whenever `bgFocus` flips. With the switch on (the shipped default)
+    the water under the copy sits at `FOCUS_FLOOR`; with it off the whole
+    column is uniform. Pointer CSS px are shifted by the host's
+    `getBoundingClientRect()` before grid mapping; without that offset a ripple
+    lands outside the column canvas. The page layer stays for every other
+    preset.
 - `flow` / `static` additionally lift their field before quantisation:
   `FLOW_LEVEL_FLOOR = 0.45` (exported, pinned by `tests/bg-ascii.spec.ts`).
   Value noise spends most of its area near 0.5, which quantises onto `+` / `*`
@@ -318,17 +573,26 @@ daily token usage.
   half of the ramp to make the field subtler — that is the state the user
   rejected, and it is now the calm zone's job to keep the reading column quiet.
 - Each spec carries `ranges` (`density`/`speed`/`fps`/`fontPx`/`opacity` min +
-  max) next to its defaults, for the Phase 3b custom panel; defaults must stay
-  inside those bounds (pinned by `tests/bg-ascii.spec.ts`). `fps` is the
-  author's pacing, not a performance ceiling: ocean 20, starfield 15 and ripple
-  20 are deliberate and measured with 0 dropped frames and 0 long tasks on a
+  max) next to its defaults, for the Phase 3b custom panel. Every numeric
+  default is the **arithmetic midpoint** of its own range (2026-11-11, user
+  request: a default slider must sit mid-track so the picture can be tuned
+  lighter *and* darker — 浓度 used to start at its minimum and could only get
+  darker). Only the bounds moved; the shipped default look is unchanged, and
+  `tests/bg-params.spec.ts` pins the midpoint for all five ASCII knobs and the
+  four shader knobs, so a range edit that re-centres away from the default
+  fails. Defaults must still stay inside those bounds (pinned by
+  `tests/bg-ascii.spec.ts` / `tests/bg-shader.spec.ts`). `fps` is the author's
+  pacing, not a performance ceiling: ocean 24, starfield 20 and ripple 24 are
+  deliberate and measured with 0 dropped frames and 0 long tasks on a
   1440×900 live host, so lowering them is not a degradation signal.
 - Preset switching reuses the same canvas, grid buffer and piece factory; only
-  the atlas rebuilds, and only when its key changes. Only `flow` ↔ `static`
-  now share a key (`blocks`/dither/12 px/ink 1.0); `ripple` shares the ramp
-  and cell geometry but carries its own ink step (1.25), so it rebakes, and
-  `rain` (`classic`, 1.1), `ocean` (`dots`, 0.65/20, 1.4) and `starfield`
-  (`dots`, 14 px, 1.6) differ on ramp, geometry and ink. `setPreset` resets the ladder to L0, then either stops the loop and
+  the atlas rebuilds, and only when its key changes. Since the 2026-11-11
+  defaults, `flow` and `static` differ on canvas opacity (0.55 vs 0.60), which
+  is part of the atlas key, so crossing that pair rebakes once; `ripple`
+  shares the ramp and cell geometry but carries its own ink step (1.25) and
+  opacity, so it rebakes, and `rain` (`classic`, 1.1), `ocean` (`dots`, 11 px,
+  1.2) and `starfield` (`dots`, 14 px, 1.6) differ on ramp, geometry and ink.
+  `setPreset` resets the ladder to L0, then either stops the loop and
   paints one frame (paused/static/reduced/L5) or draws an immediate frame and
   restarts rAF, so no blank frame or leftover preset frame is left behind. The
   custom panel stays deferred.
@@ -351,8 +615,11 @@ daily token usage.
   (field ≈ 0.4) lands near 0.35 amount instead of owning a few bright cores —
   the cloud has to cover area — and `intensity` is 0.70 with the panel range
   widened to 1.0 (was 0.56 / 0.6). With the backdrop token set that moves 77.6%
-  of the page by >2 luma (p99 51) instead of 34%. `grain` already measures the
-  highest ink mass of all eight pieces and stays at 0.6 — its 1.64% light peak
+  of the page by >2 luma (p99 51) instead of 34%. (The 2026-11-11 range pass
+  moved the shipped default one step lighter to 0.65; the 77.6% figure belongs
+  to the 0.70 sample.) `grain` already measures the
+  highest ink mass of all eight pieces and stays at 0.55 (was 0.60 before the
+  2026-11-11 lightening pass) — its 1.64% light peak
   is the honest shape of a static speck field, not a calibration miss, and
   lifting it would push dark past the parity band.
 - The two tiers never coexist: `swapBgRenderer` builds the replacement first
@@ -386,16 +653,25 @@ daily token usage.
   swap the picture), and the button's label, title tooltip and the muted hint
   beside it say exactly that. Below the strength row sits the **avoid-the-copy**
   switch — `bgFocus` (避让正文, default on, hint "打开时内容区域会更淡、四周更浓；
-  关掉则整页均匀。"). It is discrete like tier/preset (one save, pending
+  关掉则整页均匀。"). It is rendered even while the tier is 关闭, because it is a
+  stored preference rather than a per-frame control — hiding it with the rest of
+  the FX block read as "the default mask was removed". It is discrete like
+  tier/preset (one save, pending
   debounce cancelled) and is deliberately *not* one of the six params
   `resetBgParams` clears, so "恢复默认参数" never turns the mask back on behind
   the user's back. Above the sliders sits the **ink-strength**
-  choice — `bgStrength: 'soft' | 'standard' | 'strong'` (柔和 / 标准 / 明显,
+  choice — `bgStrength: 'soft' | 'standard' | 'strong'` (柔和 / 标准 / 强烈,
   default `'standard'`), one flat field, three buttons, `aria-pressed`, saved
-  discretely like tier/preset. It scales the ink step, not the density:
-  `BG_STRENGTH_SCALE` = 0.62 / 1 / 1.4, measured on light flow as 0.10% /
-  0.15% / 0.20% ink mass (0.63× / 1× / 1.34×) against 1.73% / 2.99% / 3.85%
-  peaks. The sliders remain a separate axis on purpose — density changes how
+  discretely like tier/preset. The top step was labelled 明显 until
+  2026-11-11 and is 强烈 now; the stored field values (`soft`/`standard`/
+  `strong`) never moved. On 2026-11-11 the multipliers were re-scaled down
+  because the user found the old `standard` (1.0×) too dark: the ladder is
+  now `BG_STRENGTH_SCALE` = 0.45 / 0.62 / 0.9, so the default 标准 is exactly
+  the ink step the user had previously chosen as 柔和. It scales the ink
+  step, not the density. The earlier calibration (0.62 / 1 / 1.4) measured on
+  light flow as 0.10% / 0.15% / 0.20% ink mass (0.63× / 1× / 1.34×) against
+  1.73% / 2.99% / 3.85% peaks; the new steps sit below that table's first
+  entry. The sliders remain a separate axis on purpose — density changes how
   many cells are lit, strength changes how lit they are; shipping one linear
   "visibility" knob instead of both is what left the first round with no
   direct answer to "it still looks faint". `AppearanceTab` subscribes via

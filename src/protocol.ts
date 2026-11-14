@@ -50,9 +50,10 @@ export interface CustomPluginConfig {
    * `normalizeCfg` resets it into the set that matches `bgFx`. Unknown values
    * fall back to the tier default (`'flow'` / `'liquid'`). */
   bgFxPreset?: BgFxPreset
-  /** Ink strength: 'soft' | 'standard' | 'strong'. Default 'standard' (the
-   * calibrated value). It scales the per-piece ink step only; density, speed
-   * and frame rate are unaffected. Unknown values fall back to 'standard'. */
+  /** Ink strength: 'soft' | 'standard' | 'strong'. Default 'soft' (the
+   * calibrated default feel, paired with the ocean preset's 0.6 density).
+   * It scales the per-piece ink step only; density, speed and frame rate are
+   * unaffected. Unknown values fall back to 'soft'. */
   bgStrength?: BgStrength
   /** Background tunable overrides. One flat numeric field per knob because
    * `normalizeCfg` drops nested values. `BG_PARAM_UNSET` (-1) means "follow

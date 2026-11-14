@@ -71,25 +71,28 @@ export function tierFromCfg(cfg: CustomPluginConfig): BgTier {
 /**
  * Ink-strength multipliers on top of each piece's calibrated ink step.
  *
- * The values are the measured Michelson ratios from the round-6 calibration
- * (composited content-column patch, 1280×822): soft ≈ 0.62× and strong ≈ 1.4×
- * of the calibrated standard. They scale only the ink's lightness step; the
- * grid geometry, speed and frame pacing are untouched.
+ * Re-scaled on 2026-11-11: the user found the old `standard` (1.0×) too dark,
+ * so the default moved to the value he had been using as 柔和 (0.62×) and the
+ * whole ladder was shifted down — 柔和 0.45× / 标准 0.62× / 强烈 0.9×. They
+ * scale only the ink's lightness step; the grid geometry, speed and frame
+ * pacing are untouched.
  */
 export const BG_STRENGTH_SCALE: Record<BgStrength, number> = {
-  soft: 0.62,
-  standard: 1,
-  strong: 1.4,
+  soft: 0.45,
+  standard: 0.62,
+  strong: 0.9,
 }
 
-/** Presentation order and labels of the three strength choices. */
+/** Presentation order and labels of the three strength choices. The labels
+ * are 柔和 / 标准 / 强烈 (2026-11-11): the first step keeps its original name
+ * and the top step is 强烈; the stored values and scales never moved. */
 export const BG_STRENGTH_META: ReadonlyArray<{ readonly value: BgStrength, readonly label: string }> = [
   { value: 'soft', label: '柔和' },
   { value: 'standard', label: '标准' },
-  { value: 'strong', label: '明显' },
+  { value: 'strong', label: '强烈' },
 ]
 
-/** Read the strength from a config snapshot; unknown values are 'standard'. */
+/** Read the strength from a config snapshot; unknown values are 'soft'. */
 export function strengthFromCfg(cfg: CustomPluginConfig): BgStrength {
   const value = cfg.bgStrength
   return value !== undefined && (BG_STRENGTHS as readonly string[]).includes(value) ? value : 'standard'

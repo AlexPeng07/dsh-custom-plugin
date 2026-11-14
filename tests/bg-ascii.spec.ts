@@ -35,6 +35,7 @@ import {
   type AsciiWinLike,
 } from '../src/client/bg-ascii.ts'
 import { hexToRgb, INK_SCALE_MAX, INK_SCALE_MIN, inkFor, inkScaleFor } from '../src/client/palette.ts'
+import type { BgPointerEventLike } from '../src/client/bg-pointer.ts'
 
 /**
  * A 2D context that records the calls the draw contract cares about: how many
@@ -46,6 +47,8 @@ interface FakeCtx extends AsciiCtxLike {
   fillRectCount: number
   transforms: number
   advance: number
+  /** Source-column starts of every blit, i.e. `level * pxW`. */
+  sources: number[]
 }
 
 function fakeCtx(advance = 7.2): FakeCtx {
@@ -61,11 +64,12 @@ function fakeCtx(advance = 7.2): FakeCtx {
     fillRectCount: 0,
     transforms: 0,
     advance,
+    sources: [],
     measureText(text: string) { return { width: text.length * ctx.advance } },
     fillText() { ctx.fillTextCount++ },
     fillRect() { ctx.fillRectCount++ },
     setTransform() { ctx.transforms++ },
-    drawImage() { ctx.drawImageCount++ },
+    drawImage(_image, sx) { ctx.drawImageCount++; ctx.sources.push(sx) },
   }
   return ctx
 }
@@ -96,6 +100,7 @@ interface FakeHost extends AsciiHostLike {
   children: FakeCanvas[]
   attrs: Map<string, string>
   props: Map<string, string>
+  rect: { left: number; top: number }
 }
 
 function fakeHost(width = 1440, height = 900): FakeHost {
@@ -105,9 +110,11 @@ function fakeHost(width = 1440, height = 900): FakeHost {
     children: [],
     attrs: new Map<string, string>(),
     props: new Map<string, string>([['--vx-bg-tint', '#e9ebee']]),
+    rect: { left: 0, top: 0 },
     getAttribute(name: string) { return host.attrs.get(name) ?? null },
     appendChild(node: unknown) { host.children.push(node as FakeCanvas); return node },
     style: { getPropertyValue(name: string) { return host.props.get(name) ?? '' } },
+    getBoundingClientRect() { return host.rect },
   }
   return host
 }
@@ -143,6 +150,11 @@ function fire(doc: FakeDoc, type: string): void {
   for (const listener of [...(doc.listeners.get(type) ?? [])]) listener()
 }
 
+/** Fire a recorded window pointer event. */
+function emitWin(win: FakeWin, type: string, event: BgPointerEventLike): void {
+  for (const listener of [...(win.pointerListeners.get(type) ?? [])]) listener(event)
+}
+
 interface FakeMql extends AsciiMediaQueryLike {
   matches: boolean
   listeners: Array<() => void>
@@ -166,6 +178,7 @@ interface FakeWin extends AsciiWinLike {
   rafCanceled: number[]
   queries: FakeMql[]
   observers: FakeResizeObserver[]
+  pointerListeners: Map<string, Array<(event: BgPointerEventLike) => void>>
 }
 
 interface FakeResizeObserver extends AsciiResizeObserverLike {
@@ -183,6 +196,16 @@ function fakeWin(dpr = 1, reduced = false): FakeWin {
     rafCanceled: [],
     queries: [],
     observers: [],
+    pointerListeners: new Map(),
+    addEventListener(type: string, listener: (event: BgPointerEventLike) => void) {
+      const list = win.pointerListeners.get(type) ?? []
+      list.push(listener)
+      win.pointerListeners.set(type, list)
+    },
+    removeEventListener(type: string, listener: (event: BgPointerEventLike) => void) {
+      const list = win.pointerListeners.get(type) ?? []
+      win.pointerListeners.set(type, list.filter((entry) => entry !== listener))
+    },
     requestAnimationFrame(callback: (now: number) => void) {
       const id = handle++
       win.rafCallbacks.set(id, callback)
@@ -385,15 +408,16 @@ describe('preset pieces', () => {
     // below the dots pieces because its 13.3% inter-frame change carries it,
     // and `starfield` pays for its sparse field with the brightest points.
     const ink: Record<AsciiPreset, number> = {
-      flow: 1, static: 1, rain: 1.1, ripple: 1.25, ocean: 1.4, starfield: 1.6,
+      flow: 1, static: 1, rain: 1.1, ripple: 1.25, ocean: 1.2, starfield: 1.6,
     }
     for (const [preset, value] of Object.entries(ink)) {
       expect(ASCII_PRESETS[preset as AsciiPreset].inkScale).toBe(value)
     }
     // The two dot pieces needed cell-level fixes on top of the ink step:
     // ocean's swell was 1/3 of flow's ink mass at density 0.5, and starfield's
-    // 12 px dots read as nothing at 0.23% coverage.
-    expect(ASCII_PRESETS.ocean.density).toBe(0.65)
+    // 12 px dots read as nothing at 0.23% coverage. Ocean then went finer
+    // (1.5) and lighter (ink 1.2) once it moved inside the conversation column.
+    expect(ASCII_PRESETS.ocean.density).toBe(1.5)
     expect(ASCII_PRESETS.starfield.fontPx).toBe(14)
   })
 })
@@ -545,7 +569,8 @@ describe('createAsciiBackdrop', () => {
     expect(main.height).toBe(1800)
     expect(backdrop.stats.frames).toBe(1)
     expect(backdrop.stats.atlasBuilds).toBe(1)
-    expect(atlas.ctx.fillTextCount).toBe(9)
+    // 9 ramp glyphs + 7 directional extras for the shape-aware flow atlas.
+    expect(atlas.ctx.fillTextCount).toBe(16)
     expect(backdrop.stats.cols).toBeLessThanOrEqual(MAX_COLS)
     expect(backdrop.stats.rows).toBeLessThanOrEqual(MAX_ROWS)
 
@@ -553,7 +578,7 @@ describe('createAsciiBackdrop', () => {
     expect(backdrop.stats.frames).toBe(6)
     // One atlas for all frames; only drawImage runs per tile.
     expect(backdrop.stats.atlasBuilds).toBe(1)
-    expect(atlas.ctx.fillTextCount).toBe(9)
+    expect(atlas.ctx.fillTextCount).toBe(16)
     expect(main.ctx.fillTextCount).toBe(0)
     expect(main.ctx.drawImageCount).toBeGreaterThan(0)
     // At most one blit per cell per frame; spaces are skipped, never extra work.
@@ -562,7 +587,7 @@ describe('createAsciiBackdrop', () => {
     backdrop.destroy()
   })
 
-  it('reuses the canvas, grid and atlas across presets that share ramp, geometry and ink', () => {
+  it('reuses the canvas and grid, rebaking only when the atlas key changes', () => {
     const doc = fakeDoc()
     const win = fakeWin(1)
     const host = fakeHost()
@@ -573,25 +598,27 @@ describe('createAsciiBackdrop', () => {
     expect(backdrop.stats.frames).toBe(1)
     expect(backdrop.stats.atlasBuilds).toBe(1)
 
-    // flow ↔ static use blocks at density 0.75 / 12 px and the same calibrated
-    // ink scale, so their atlas key never moves: zero rebakes, one repaint each.
+    // flow and static share the ramp, geometry and ink scale but not the
+    // canvas opacity (0.60 vs 0.65 in the shipped defaults), and opacity is
+    // part of the atlas key — so each crossing rebakes once, and the canvas
+    // and grid buffers are still reused.
     backdrop.setPreset('static')
-    expect(backdrop.stats.atlasBuilds).toBe(1)
+    expect(backdrop.stats.atlasBuilds).toBe(2)
     expect(backdrop.stats.frames).toBe(2)
     expect(win.rafCallbacks.size).toBe(0)
 
     backdrop.setPreset('flow')
-    expect(backdrop.stats.atlasBuilds).toBe(1)
+    expect(backdrop.stats.atlasBuilds).toBe(3)
     expect(backdrop.stats.frames).toBe(3)
     expect(win.rafCallbacks.size).toBe(1)
 
-    // ripple shares the geometry too, but its calibrated ink step is higher,
-    // so the key moves once per crossing of that pair.
+    // ripple shares the geometry too, but its calibrated ink step and opacity
+    // move the key as well.
     backdrop.setPreset('ripple')
-    expect(backdrop.stats.atlasBuilds).toBe(2)
+    expect(backdrop.stats.atlasBuilds).toBe(4)
     expect(backdrop.stats.frames).toBe(4)
     backdrop.setPreset('flow')
-    expect(backdrop.stats.atlasBuilds).toBe(3)
+    expect(backdrop.stats.atlasBuilds).toBe(5)
     expect(backdrop.stats.frames).toBe(5)
 
     // One canvas stayed attached; the switch never recreated it.
@@ -645,7 +672,7 @@ describe('createAsciiBackdrop', () => {
     expect(backdrop.stats.atlasBuilds).toBe(2)
     expect(backdrop.stats.frames).toBe(2)
 
-    // ocean: dots ramp at density 0.65, 12 px, own ink step → one more rebake.
+    // ocean: dots ramp at density 0.6, 12 px, own ink step → one more rebake.
     backdrop.setPreset('ocean')
     expect(backdrop.stats.atlasBuilds).toBe(3)
 
@@ -767,5 +794,101 @@ describe('createAsciiBackdrop', () => {
     expect(() => backdrop.destroy()).not.toThrow()
     expect(win.rafCanceled.length).toBe(1)
     expect(ASCII_PRESETS.flow.fps).toBeGreaterThan(0)
+  })
+
+  it('feeds pointer movement into an interactive preset without a second rAF', () => {
+    const doc = fakeDoc()
+    const win = fakeWin(1)
+    const host = fakeHost()
+    host.attrs.set('data-vx-bg-motion', 'animated')
+    const backdrop = createAsciiBackdrop({ doc, win, host, preset: 'ocean' })
+    backdrop.sync()
+    const main = doc.created[0]
+    // The fish overlay is present even before the pointer arrives.
+    expect(backdrop.stats.overlayCells).toBeGreaterThan(0)
+    expect(main.ctx.fillTextCount).toBeGreaterThan(0)
+    const pending = win.rafCallbacks.size
+    expect(pending).toBe(1)
+
+    emitWin(win, 'pointermove', { clientX: 700, clientY: 420, pointerType: 'mouse' })
+    tick(win, 100)
+    emitWin(win, 'pointermove', { clientX: 760, clientY: 440, pointerType: 'mouse' })
+    tick(win, 160)
+    // The drag leaves a wake; the pointer never starts a frame of its own.
+    expect(backdrop.stats.emphasisCells).toBeGreaterThan(0)
+    expect(win.rafCallbacks.size).toBe(1)
+    backdrop.destroy()
+  })
+
+  it('keeps emphasized interaction cells above the calm-zone floor', () => {
+    const doc = fakeDoc()
+    const win = fakeWin(1)
+    const host = fakeHost()
+    host.attrs.set('data-vx-bg-motion', 'animated')
+    const backdrop = createAsciiBackdrop({ doc, win, host, preset: 'ocean' })
+    backdrop.sync()
+    const main = doc.created[0]
+    // The reading column covers the whole viewport: the base water is pushed
+    // to the 0.15 floor, but a ripple the pointer just made must still reach
+    // the documented 50% emphasis floor.
+    backdrop.setFocus({ x: 0, y: 0, w: 1440, h: 900 })
+    emitWin(win, 'pointermove', { clientX: 700, clientY: 420, pointerType: 'mouse' })
+    tick(win, 100)
+    emitWin(win, 'pointermove', { clientX: 780, clientY: 460, pointerType: 'mouse' })
+    main.ctx.sources.length = 0
+    tick(win, 160)
+    expect(backdrop.stats.emphasisCells).toBeGreaterThan(0)
+    // Tile width is ceil(cellW); the source start is level * pxW.
+    const tileW = Math.ceil(7.2 / (ASCII_PRESETS.ocean.density))
+    const maxLevel = Math.max(...main.ctx.sources) / tileW
+    expect(maxLevel).toBeGreaterThanOrEqual(2)
+    backdrop.destroy()
+  })
+
+  it('shifts viewport pointer coordinates into a conversation host offset', () => {
+    const doc = fakeDoc()
+    const win = fakeWin(1)
+    const host = fakeHost(800, 600)
+    host.rect = { left: 400, top: 100 }
+    host.attrs.set('data-vx-bg-motion', 'animated')
+    const backdrop = createAsciiBackdrop({ doc, win, host, preset: 'ocean' })
+    backdrop.sync()
+    const before = backdrop.stats.emphasisCells
+    // Both viewport points are to the right of the 800 px host; without the
+    // offset they would map outside the grid and leave no visible ring.
+    emitWin(win, 'pointermove', { clientX: 950, clientY: 300, pointerType: 'mouse' })
+    tick(win, 100)
+    emitWin(win, 'pointerdown', { clientX: 1050, clientY: 300, pointerType: 'mouse' })
+    tick(win, 160)
+    expect(backdrop.stats.emphasisCells).toBeGreaterThan(before)
+    backdrop.destroy()
+  })
+
+  it('does not run interaction work for a non-interactive preset', () => {
+    const doc = fakeDoc()
+    const win = fakeWin(1)
+    const host = fakeHost()
+    host.attrs.set('data-vx-bg-motion', 'animated')
+    const backdrop = createAsciiBackdrop({ doc, win, host, preset: 'static' })
+    backdrop.sync()
+    emitWin(win, 'pointermove', { clientX: 700, clientY: 420, pointerType: 'mouse' })
+    tick(win, 100)
+    expect(backdrop.stats.emphasisCells).toBe(0)
+    expect(backdrop.stats.overlayCells).toBe(0)
+    backdrop.destroy()
+  })
+
+  it('removes pointer listeners with the rest of the renderer', () => {
+    const doc = fakeDoc()
+    const win = fakeWin(1)
+    const host = fakeHost()
+    host.attrs.set('data-vx-bg-motion', 'animated')
+    const backdrop = createAsciiBackdrop({ doc, win, host, preset: 'ocean' })
+    backdrop.sync()
+    const attached = [...win.pointerListeners.values()].reduce((sum, list) => sum + list.length, 0)
+    expect(attached).toBeGreaterThan(0)
+    backdrop.destroy()
+    const left = [...win.pointerListeners.values()].reduce((sum, list) => sum + list.length, 0)
+    expect(left).toBe(0)
   })
 })

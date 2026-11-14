@@ -18,9 +18,9 @@ import { DEFAULT_CONFIG, type BgFxPreset, type BgStrength, type ConversationSear
 import { createUsageRow, dayKey, mergeUsageRow } from '../usage.ts'
 import { DEEPSEEK_PRICING_CHECKED_ON, DEEPSEEK_PRICING_SOURCE_URL, estimateUsageCostCny, usageCostBreakdown } from '../pricing.ts'
 import { appearanceTokenKey, BACKDROP_ALPHA_BASE, BACKDROP_ALPHA_LAYER1, BACKDROP_ALPHA_SIDEBAR, DARK_CANVAS_LIGHTNESS, hexToRgb, PALETTE, toDarkRamp } from './palette.ts'
-import { bgLayerTint, decideBgFxLayer, mountBgLayer, swapBgRenderer, unmountBgLayer, type BgFxCaps, type BgFxVerdict, type BgLayerDocLike } from './bg-layer.ts'
+import { bgLayerScope, bgLayerTint, decideBgFxLayer, mountBgLayer, pickColumnHost, swapBgRenderer, unmountBgLayer, type BgFxCaps, type BgFxVerdict, type BgLayerDocLike, type ColumnHostCandidate } from './bg-layer.ts'
 import { focusRectFor, type BgFocusRect } from './bg-focus.ts'
-import { createAsciiBackdrop, resolveAsciiPreset, type AsciiBackdrop, type AsciiDocLike, type AsciiWinLike } from './bg-ascii.ts'
+import { createAsciiBackdrop, resolveAsciiPreset, type AsciiBackdrop, type AsciiDocLike, type AsciiHostLike, type AsciiWinLike } from './bg-ascii.ts'
 import { createShaderBackdrop, resolveShaderStyle, type ShaderBackdrop, type ShaderDocLike, type ShaderHostLike, type ShaderWinLike } from './bg-shader.ts'
 import {
   BG_PARAM_META,
@@ -622,11 +622,18 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     // so the token set below is part of the renderer, not an appearance extra.
     const requestedMode = cfg.bgFx ?? 'none'
     const bgVerdict = decideBgFxLayer(requestedMode, bgFxCaps(requestedMode === 'shader'))
-    // A mounted renderer is behind every shell surface, and the stacked
+    // `ocean` paints inside the conversation column (ColumnBgAnchor); a
+    // body-level layer would sit behind an opaque chat card and be invisible.
+    // The page verdict is therefore off for that preset, and the backdrop token
+    // set is not installed: the page keeps its normal opaque fills while the
+    // column canvas owns the effect.
+    const conversationScope = bgLayerScope(cfg.bgFx, cfg.bgFxPreset) === 'conversation'
+    const pageVerdict: BgFxVerdict = conversationScope ? { mount: false, reason: 'disabled' } : bgVerdict
+    // A mounted page renderer is behind every shell surface, and the stacked
     // translucent surfaces multiply the ink away (see BACKDROP_ALPHA_*). The
     // backdrop token set is what makes the layer visible at all — with or
     // without glass. `glass` only matters when no renderer is mounted.
-    const backdrop = bgVerdict.mount
+    const backdrop = pageVerdict.mount
     // Slider ticks repaint the appearance dozens of times with an unchanged
     // palette + glass toggle; re-registering identical tokens would re-apply
     // the shell's variables and force a full-document recalc each time.
@@ -696,10 +703,10 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       // Dark mode derives the same family's dark variant; S.dark is kept in
       // step with the GUI theme (applyDark) and re-runs this painter.
       const surface = S.dark === true ? toDarkRamp(base, DARK_CANVAS_LIGHTNESS) : base
-      dyn += bgVerdict.mount
+      dyn += pageVerdict.mount
         ? ' body { background-color: transparent !important; }'
         : ` body { background-color: ${surface} !important; }`
-    } else if (bgVerdict.mount) {
+    } else if (pageVerdict.mount) {
       dyn += ' body { background-color: transparent !important; }'
     }
     if (cfg.globalGlass === true) {
@@ -714,7 +721,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       dyn += ` [role='dialog'], [role='menu'], [role='tooltip'], [role='listbox'], [data-radix-popper-content-wrapper] { backdrop-filter: ${filter} !important; -webkit-backdrop-filter: ${filter} !important; }`
     }
     setDynCss(dyn)
-    syncBackgroundLayer(bgVerdict)
+    syncBackgroundLayer(pageVerdict)
   }
 
   // The 2D-canvas and WebGL probes create throwaway contexts; cache the
@@ -1837,6 +1844,183 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     }, React.createElement(Icon, { n: 'sliders', size: 13 }), React.createElement('span', null, '个性化'))
   }
 
+  /** Walk from the hidden slot anchor to the node that owns the conversation
+   * column's background. The picker is pure and unit-tested; this adapter only
+   * reads geometry and computed backgrounds. */
+  function findColumnHost(anchor: HTMLElement): HTMLElement | null {
+    const d = anchor.ownerDocument
+    const w = d.defaultView
+    if (w === null) return null
+    const chain: HTMLElement[] = []
+    let el: HTMLElement | null = anchor.parentElement
+    while (el !== null && el !== d.body) {
+      chain.push(el)
+      el = el.parentElement
+    }
+    if (chain.length === 0) return null
+    const candidates: ColumnHostCandidate[] = chain.map((node) => {
+      const rect = node.getBoundingClientRect()
+      const bg = w.getComputedStyle(node).backgroundColor
+      return {
+        className: typeof node.className === 'string' ? node.className : '',
+        height: rect.height,
+        opaque: bg !== '' && bg !== 'transparent' && bg !== 'rgba(0, 0, 0, 0)',
+      }
+    })
+    const index = pickColumnHost(candidates)
+    return index >= 0 ? chain[index] : null
+  }
+
+  /**
+   * `ocean` paints inside the conversation column, not behind the opaque chat
+   * card. The slot drops a hidden anchor into the input dock; on mount we walk
+   * to the column root, insert a fixed negative-index wrapper as its first
+   * child, and let the normal ASCII renderer own it. The host's
+   * `isolation:isolate` is what makes a negative-index child paint above the
+   * column background and below every message, without touching any other
+   * surface of the app.
+   *
+   * There is deliberately no calm-zone mask here: the whole point of the
+   * column scope is that the water is visible behind the copy. The calm zone
+   * still applies to page-scoped presets.
+   */
+  function ColumnBgAnchor(): React.ReactElement {
+    const { cfg, dark } = useSSelector(selectAppearanceSlice, shallowEqual)
+    const active = bgLayerScope(cfg.bgFx, cfg.bgFxPreset) === 'conversation'
+    const anchorRef = React.useRef<HTMLSpanElement | null>(null)
+    const handleRef = React.useRef<AsciiBackdrop | null>(null)
+    const wrapperRef = React.useRef<HTMLDivElement | null>(null)
+    const tint = bgLayerTint(cfg.bg, dark === true)
+    const tintRef = React.useRef(tint)
+    tintRef.current = tint
+    const preset = resolveAsciiPreset(cfg.bgFxPreset)
+    const params = asciiParamsFromCfg(cfg, preset)
+    // The renderer effect runs once per activation, so it reads the live config
+    // through a ref; the focus switch has its own effect below.
+    const cfgRef = React.useRef(cfg)
+    cfgRef.current = cfg
+
+    React.useEffect(() => {
+      if (!active) return
+      const anchor = anchorRef.current
+      if (anchor === null) return
+      const host = findColumnHost(anchor)
+      if (host === null) {
+        reportDiag('conversation column host not found; ocean column layer skipped')
+        return
+      }
+      const wrapper = document.createElement('div')
+      wrapper.setAttribute('data-vx-column-bg', '')
+      wrapper.setAttribute('aria-hidden', 'true')
+      wrapper.style.cssText = 'position:fixed;left:0;top:0;width:0;height:0;z-index:-1;pointer-events:none;'
+      wrapper.style.setProperty('--vx-bg-tint', tintRef.current)
+      wrapper.setAttribute('data-vx-bg-motion', 'animated')
+      const prevPosition = host.style.position
+      const prevIsolation = host.style.isolation
+      if (window.getComputedStyle(host).position === 'static') host.style.position = 'relative'
+      host.style.isolation = 'isolate'
+      host.insertBefore(wrapper, host.firstChild)
+      const syncRect = (): void => {
+        const rect = host.getBoundingClientRect()
+        wrapper.style.left = `${Math.round(rect.left)}px`
+        wrapper.style.top = `${Math.round(rect.top)}px`
+        wrapper.style.width = `${Math.round(rect.width)}px`
+        wrapper.style.height = `${Math.round(rect.height)}px`
+      }
+      syncRect()
+      const handle = createAsciiBackdrop({
+        doc: document as unknown as AsciiDocLike,
+        win: window as unknown as AsciiWinLike,
+        host: wrapper as unknown as AsciiHostLike,
+        preset: 'ocean',
+        params,
+      })
+      // The calm zone is measured in viewport CSS px; this canvas starts at the
+      // column's top-left, so the rect is shifted into host-local coordinates
+      // once per measure (the same rect the page layer receives).
+      const applyFocus = (): void => {
+        if (cfgRef.current.bgFocus === false) {
+          handle.setFocus(null)
+          return
+        }
+        const rect = measureFocusRect()
+        if (rect === null) {
+          handle.setFocus(null)
+          return
+        }
+        const hostRect = host.getBoundingClientRect()
+        handle.setFocus({
+          x: rect.x - hostRect.left,
+          y: rect.y - hostRect.top,
+          w: rect.w,
+          h: rect.h,
+        })
+      }
+      handle.sync()
+      applyFocus()
+      handleRef.current = handle
+      wrapperRef.current = wrapper
+      const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(syncRect) : null
+      observer?.observe(host)
+      window.addEventListener('resize', syncRect)
+      // Same cadence as the page layer's poll: the composer opens, collapses
+      // or the column resizes, and the mask has to move with the text.
+      const focusTimer = window.setInterval(applyFocus, 350)
+      return () => {
+        observer?.disconnect()
+        window.removeEventListener('resize', syncRect)
+        window.clearInterval(focusTimer)
+        handleRef.current = null
+        wrapperRef.current = null
+        handle.destroy()
+        wrapper.remove()
+        host.style.isolation = prevIsolation
+        host.style.position = prevPosition
+      }
+      // The renderer is created once per activation; params and tint have their
+      // own effects so a slider tick does not rebuild the fish or the wake.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [active])
+
+    React.useEffect(() => {
+      const handle = handleRef.current
+      if (handle === null) return
+      if (cfg.bgFocus === false) {
+        handle.setFocus(null)
+        return
+      }
+      const rect = measureFocusRect()
+      const wrapper = wrapperRef.current
+      if (rect === null || wrapper === null) {
+        handle.setFocus(null)
+        return
+      }
+      const hostRect = wrapper.getBoundingClientRect()
+      handle.setFocus({
+        x: rect.x - hostRect.left,
+        y: rect.y - hostRect.top,
+        w: rect.w,
+        h: rect.h,
+      })
+    }, [active, cfg.bgFocus])
+
+    React.useEffect(() => {
+      const handle = handleRef.current
+      if (handle === null) return
+      handle.setParams(asciiParamsFromCfg(cfg, resolveAsciiPreset(cfg.bgFxPreset)))
+      handle.sync()
+    }, [active, cfg.bgDensity, cfg.bgSpeed, cfg.bgFps, cfg.bgFontPx, cfg.bgOpacity, cfg.bgIntensity, cfg.bgStrength, cfg.bgFxPreset])
+
+    React.useEffect(() => {
+      const wrapper = wrapperRef.current
+      if (wrapper === null) return
+      wrapper.style.setProperty('--vx-bg-tint', tint)
+      handleRef.current?.sync()
+    }, [tint])
+
+    return React.createElement('span', { ref: anchorRef, 'data-vx-column-bg-anchor': '', style: { display: 'none' } })
+  }
+
   function PromptQuickButton(props: SessionScopedProps): React.ReactElement {
     useViewedSession(props)
     return React.createElement('button', {
@@ -2374,6 +2558,21 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
                 }, PRESET_LABELS[id] ?? id)
               }),
             ),
+            // The interactive pieces say what the pointer does instead of
+            // letting the user discover it by accident.
+            tier === 'ascii' && preset === 'ocean'
+              ? React.createElement('div', { className: 'vx-muted' }, '海面会随鼠标拖动泛起涟漪，点击溅起水花；鱼群会被惊动，随后慢慢重新聚拢。')
+              : tier === 'ascii' && preset === 'flow'
+                ? React.createElement('div', { className: 'vx-muted' }, '拖动会搅动雾面，点击会推开一圈涟漪。')
+                : tier === 'ascii' && preset === 'rain'
+                  ? React.createElement('div', { className: 'vx-muted' }, '鼠标划过像一阵风，会把雨丝吹斜；点击向两侧拨开雨帘，随后慢慢合拢。')
+                  : tier === 'ascii' && preset === 'ripple'
+                    ? React.createElement('div', { className: 'vx-muted' }, '点击会在落点漾开一圈新的涟漪，拖动会沿途留下小水纹。')
+                    : tier === 'ascii' && preset === 'starfield'
+                      ? React.createElement('div', { className: 'vx-muted' }, '点击会在落点点亮一小片星尘，拖动会沿途撒下星光，随后渐渐暗去。')
+                      : tier === 'shader' && preset === 'liquid'
+                        ? React.createElement('div', { className: 'vx-muted' }, '鼠标划过会卷动墨云，点击会从落点扩散出一圈涟漪。')
+                        : null,
             // The intuitive "it looks too faint / too loud" outlet: scales the
             // ink step only, so density, speed and frame rate stay put.
             React.createElement('div', { className: 'vx-row wrap', role: 'group', 'aria-label': '背景墨色强度' },
@@ -2388,15 +2587,22 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
                 }, item.label)
               }),
             ),
-            React.createElement('div', { className: 'vx-muted' }, '「墨色强度」只改整片墨色的深浅：觉得淡就点「明显」，觉得抢眼就点「柔和」；密度、帧率与预设都不变。'),
-            // The calm zone as a user-facing choice: on = the reading column
-            // stays faint while the gutters keep the texture.
-            React.createElement(Toggle, {
-              label: '避让正文',
-              checked: cfg.bgFocus !== false,
-              onChange: pickFocus,
-              hint: '打开时内容区域会更淡、四周更浓；关掉则整页均匀。',
-            }),
+            React.createElement('div', { className: 'vx-muted' }, '「墨色强度」只改整片墨色的深浅：觉得淡就点「强烈」，觉得抢眼就点「柔和」；密度、帧率与预设都不变。'),
+          ),
+      // The calm-zone preference is a stored setting, not part of the visible
+      // renderer, so the switch stays in the panel while the tier is off —
+      // hiding it made the default look like the option had been removed.
+      // It applies to the conversation canvas as well: ColumnBgAnchor shifts
+      // the same viewport rect into the column's local coordinates.
+      React.createElement(Toggle, {
+        label: '避让正文',
+        checked: cfg.bgFocus !== false,
+        onChange: pickFocus,
+        hint: '打开时内容区域会更淡、四周更浓；关掉则整页均匀。',
+      }),
+      tier === 'none'
+        ? null
+        : React.createElement(React.Fragment, null,
             // A still preset paints exactly one frame, so switching to it looks
             // like nothing happened. Say so inside the panel — never a toast.
             stillNote === null ? null : React.createElement('div', { className: 'vx-note' }, stillNote),
@@ -3655,6 +3861,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
   }
   injectOne('sidebar.footer.action', 'custom-plugin-folders', { id: 'custom-plugin-folders', order: -100, label: '项目' }, FolderSidebarButton)
   injectOne('shell.overlay', 'custom-plugin-overlay', { id: 'custom-plugin-overlay', order: 10, label: 'Custom 便利套件' }, OverlayRoot)
+  injectOne('conversation.input.dock', 'custom-plugin-column-bg', { id: 'custom-plugin-column-bg', order: 20, label: '会话区背景' }, ColumnBgAnchor)
   injectOne('conversation.input.dock', 'custom-plugin-quote', { id: 'custom-plugin-quote', order: 30, label: '引用回复' }, QuoteDock)
   injectOne('conversation.chat.turnTail', 'custom-plugin-turn-tail', { id: 'custom-plugin-turn-tail', order: 10 }, TurnTailEntry)
   injectOne('settings.section', 'custom-plugin-appearance', { id: 'custom-plugin-appearance', order: 30, label: '个性化' }, SettingsPage)

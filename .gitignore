@@ -6,9 +6,20 @@ lib/
 # Research artifacts and live screenshots from 2026-11-06: kept out of the
 # repository; only code and docs ship.
 2026-11-06/
+# Per-session handoff packages (background-fx work, 2026-11-09): local reading
+# material that duplicates AGENTS.md / CHANGELOG.md plus copied research docs;
+# the durable record stays in those two files.
+2026-11-09/
 # Scratch for the live checks: throwaway npm installs, isolated DSH_HOME trees,
 # packed tarballs and the cookie jars holding boot tokens. Never committed.
 .deskprobe/
+# Local scratch for the background-fx sessions: the editor's ignore config,
+# pasted reference links, the per-session handoff note and the earlier round-6
+# docs. The durable record stays in AGENTS.md / CHANGELOG.md.
+.zcodeignore
+dsh网站.txt
+PROJECT_HANDOFF.md
+.trae/
 .DS_Store
 Thumbs.db
 desktop.ini

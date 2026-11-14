@@ -92,9 +92,9 @@ describe('panel fields per tier', () => {
   })
 
   it('reads bounds from the active preset, never a local copy', () => {
-    expect(paramRange('ascii', 'flow', 'fps')).toEqual({ min: 15, max: 30 })
-    expect(paramRange('ascii', 'rain', 'fps')).toEqual({ min: 15, max: 30 })
-    expect(paramRange('shader', 'liquid', 'intensity')).toEqual({ min: 0.2, max: 1 })
+    expect(paramRange('ascii', 'flow', 'fps')).toEqual({ min: 15, max: 33 })
+    expect(paramRange('ascii', 'rain', 'fps')).toEqual({ min: 15, max: 33 })
+    expect(paramRange('shader', 'liquid', 'intensity')).toEqual({ min: 0.3, max: 1 })
     expect(paramRange('shader', 'grain', 'speed')).toEqual({ min: 0, max: 0 })
     expect(paramRange('none', 'flow', 'density')).toBeNull()
     expect(paramRange('ascii', 'flow', 'intensity')).toBeNull()
@@ -104,8 +104,27 @@ describe('panel fields per tier', () => {
 describe('clamping and defaults', () => {
   it('clamps an out-of-range stored value into the preset band', () => {
     expect(effectiveParam(cfgWith({ bgDensity: 99 }), 'ascii', 'flow', 'density')).toBe(ASCII_PRESETS.flow.ranges.density.max)
-    expect(effectiveParam(cfgWith({ bgDensity: 0.4 }), 'ascii', 'flow', 'density')).toBe(ASCII_PRESETS.flow.ranges.density.min)
+    expect(effectiveParam(cfgWith({ bgDensity: 0.1 }), 'ascii', 'flow', 'density')).toBe(ASCII_PRESETS.flow.ranges.density.min)
     expect(effectiveParam(cfgWith({ bgIntensity: 5 }), 'shader', 'liquid', 'intensity')).toBe(SHADER_STYLES.liquid.ranges.intensity.max)
+  })
+
+  it('centres every default in its own range so a slider starts mid-track', () => {
+    const mid = (range: { min: number; max: number }): number => (range.min + range.max) / 2
+    for (const preset of Object.keys(ASCII_PRESETS) as Array<keyof typeof ASCII_PRESETS>) {
+      const spec = ASCII_PRESETS[preset]
+      expect(spec.density).toBeCloseTo(mid(spec.ranges.density), 6)
+      expect(spec.speed).toBeCloseTo(mid(spec.ranges.speed), 6)
+      expect(spec.fps).toBeCloseTo(mid(spec.ranges.fps), 6)
+      expect(spec.fontPx).toBeCloseTo(mid(spec.ranges.fontPx), 6)
+      expect(spec.opacity).toBeCloseTo(mid(spec.ranges.opacity), 6)
+    }
+    for (const style of Object.keys(SHADER_STYLES) as Array<keyof typeof SHADER_STYLES>) {
+      const spec = SHADER_STYLES[style]
+      expect(spec.speed).toBeCloseTo(mid(spec.ranges.speed), 6)
+      expect(spec.density).toBeCloseTo(mid(spec.ranges.density), 6)
+      expect(spec.intensity).toBeCloseTo(mid(spec.ranges.intensity), 6)
+      expect(spec.fps).toBeCloseTo(mid(spec.ranges.fps), 6)
+    }
   })
 
   it('uses the sentinel and the preset default when no override is stored', () => {
@@ -124,11 +143,12 @@ describe('clamping and defaults', () => {
   })
 
   it('clamps a cross-preset value when the preset changes', () => {
-    const cfg = cfgWith({ bgFontPx: 16, bgDensity: 0.4 })
-    // ocean's density floor is 0.5, so the flow-tuned 0.4 is pulled up.
+    const cfg = cfgWith({ bgFontPx: 14, bgDensity: 0.4 })
+    // ocean's density floor is 1.3 now that its default is centred, so the
+    // flow-tuned 0.4 is pulled up.
     expect(asciiParamsFromCfg(cfg, 'ocean').density).toBe(ASCII_PRESETS.ocean.ranges.density.min)
-    // 16 px stays inside rain's font range, so it survives unchanged.
-    expect(asciiParamsFromCfg(cfg, 'rain').fontPx).toBe(16)
+    // 14 px stays inside rain's font range, so it survives unchanged.
+    expect(asciiParamsFromCfg(cfg, 'rain').fontPx).toBe(14)
     // grain's speed is locked at 0; liquid's own default comes through.
     expect(shaderParamsFromCfg(cfgWith({}), 'grain').speed).toBe(0)
     expect(shaderParamsFromCfg(cfg, 'liquid').intensity).toBe(SHADER_STYLES.liquid.intensity)
@@ -227,18 +247,18 @@ describe('ink strength', () => {
   })
 
   it('maps the three tiers to measured multipliers in ascending order', () => {
-    expect(BG_STRENGTH_SCALE.standard).toBe(1)
-    expect(BG_STRENGTH_SCALE.soft).toBeLessThan(1)
-    expect(BG_STRENGTH_SCALE.strong).toBeGreaterThan(1)
+    expect(BG_STRENGTH_SCALE.standard).toBe(0.62)
+    expect(BG_STRENGTH_SCALE.soft).toBeLessThan(BG_STRENGTH_SCALE.standard)
+    expect(BG_STRENGTH_SCALE.strong).toBeGreaterThan(BG_STRENGTH_SCALE.standard)
     expect(BG_STRENGTH_META.map((item) => item.value)).toEqual(['soft', 'standard', 'strong'])
-    expect(BG_STRENGTH_META.map((item) => item.label)).toEqual(['柔和', '标准', '明显'])
+    expect(BG_STRENGTH_META.map((item) => item.label)).toEqual(['柔和', '标准', '强烈'])
   })
 
   it('rides along on both renderer param sets', () => {
     const cfg = cfgWith({ bgStrength: 'strong' })
     expect(asciiParamsFromCfg(cfg, 'flow').strength).toBe(BG_STRENGTH_SCALE.strong)
     expect(shaderParamsFromCfg(cfg, 'liquid').strength).toBe(BG_STRENGTH_SCALE.strong)
-    expect(asciiParamsFromCfg(cfgWith({}), 'flow').strength).toBe(1)
+    expect(asciiParamsFromCfg(cfgWith({}), 'flow').strength).toBe(BG_STRENGTH_SCALE.standard)
   })
 
   it('multiplies the piece ink scale on both tiers', () => {

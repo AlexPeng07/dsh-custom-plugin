@@ -168,3 +168,61 @@ export function mountBgLayer(doc: BgLayerDocLike, verdict: BgLayerMountVerdict, 
 export function unmountBgLayer(doc: BgLayerDocLike): void {
   doc.getElementById(BG_LAYER_ID)?.remove()
 }
+
+/**
+ * Where the active preset paints.
+ *
+ * `ocean` is the first piece that is mounted *inside* the conversation column
+ * (see `ColumnBgAnchor`): the shell's conversation surface is opaque, so a
+ * body-level layer behind it is invisible in the chat. Other presets keep the
+ * page-level layer. Keeping the decision pure makes it testable and keeps the
+ * painter and the React anchor from disagreeing.
+ */
+export type BgLayerScope = 'page' | 'conversation'
+
+export function bgLayerScope(bgFx: string | undefined, bgFxPreset: string | undefined): BgLayerScope {
+  return bgFx === 'ascii' && bgFxPreset === 'ocean' ? 'conversation' : 'page'
+}
+
+/** One ancestor of the slot anchor, reduced to what the host picker reads. */
+export interface ColumnHostCandidate {
+  readonly className: string
+  readonly height: number
+  readonly opaque: boolean
+}
+
+/**
+ * Pick the conversation column host from an anchor's ancestor chain, ordered
+ * nearest-first. The reference implementation (`dsh-ascii-ocean`) looks for
+ * the AppFrame centre column class and then takes the outermost ancestor that
+ * still fills it, which is the node that owns the column's background. The
+ * fallback is the outermost ancestor with an opaque background.
+ *
+ * Returns the index into `chain`, or -1 when nothing is usable.
+ */
+export function pickColumnHost(chain: readonly ColumnHostCandidate[]): number {
+  if (chain.length === 0) return -1
+  let colIndex = -1
+  for (let i = 0; i < chain.length; i++) {
+    if (chain[i].className.includes('_centerCol')) {
+      colIndex = i
+      break
+    }
+  }
+  if (colIndex === 0) return 0
+  if (colIndex > 0) {
+    const colHeight = chain[colIndex].height
+    let host = -1
+    if (colHeight > 80) {
+      for (let i = colIndex - 1; i >= 0; i--) {
+        if (chain[i].height >= colHeight * 0.8) host = i
+      }
+    }
+    return host >= 0 ? host : colIndex - 1
+  }
+  let opaque = -1
+  for (let i = 0; i < chain.length; i++) {
+    if (chain[i].opaque) opaque = i
+  }
+  return opaque
+}

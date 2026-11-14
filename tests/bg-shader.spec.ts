@@ -10,8 +10,10 @@
 import { describe, expect, it } from 'vitest'
 import { BG_FX_SHADER_STYLES } from '../src/protocol.ts'
 import {
+  SHADER_FRAGMENT_SOURCE,
   SHADER_STYLES,
   SHADER_UNIFORM_RANGES,
+  SHADER_PULSE_LIFE,
   createShaderBackdrop,
   resolveShaderStyle,
   shaderUniforms,
@@ -25,6 +27,7 @@ import {
   type ShaderStyle,
   type ShaderWinLike,
 } from '../src/client/bg-shader.ts'
+import type { BgPointerEventLike } from '../src/client/bg-pointer.ts'
 
 type Listener = (event: ShaderContextLostEvent) => void
 
@@ -174,14 +177,17 @@ interface FakeWin extends ShaderWinLike {
   raf: number
   readonly callbacks: Map<number, (now: number) => void>
   readonly cancelled: Set<number>
+  readonly pointerListeners: Map<string, Array<(event: BgPointerEventLike) => void>>
   reducedMotion: boolean
   flush(now: number): void
+  emit(type: string, event: BgPointerEventLike): void
 }
 
 function fakeWin(dpr = 1): FakeWin {
   let nextId = 0
   const callbacks = new Map<number, (now: number) => void>()
   const cancelled = new Set<number>()
+  const pointerListeners = new Map<string, Array<(event: BgPointerEventLike) => void>>()
   const win: FakeWin = {
     devicePixelRatio: dpr,
     innerWidth: 1440,
@@ -189,9 +195,19 @@ function fakeWin(dpr = 1): FakeWin {
     raf: 0,
     callbacks,
     cancelled,
+    pointerListeners,
     reducedMotion: false,
     requestAnimationFrame(callback) { const id = ++nextId; callbacks.set(id, callback); return id },
     cancelAnimationFrame(id) { cancelled.add(id); callbacks.delete(id) },
+    addEventListener(type, listener) {
+      const list = pointerListeners.get(type) ?? []
+      list.push(listener)
+      pointerListeners.set(type, list)
+    },
+    removeEventListener(type, listener) {
+      const list = pointerListeners.get(type) ?? []
+      pointerListeners.set(type, list.filter((entry) => entry !== listener))
+    },
     matchMedia(query) {
       const listeners = new Set<() => void>()
       const mql: ShaderMediaQueryLike = {
@@ -206,6 +222,9 @@ function fakeWin(dpr = 1): FakeWin {
         callbacks.delete(id)
         callback(now)
       }
+    },
+    emit(type, event) {
+      for (const listener of [...(pointerListeners.get(type) ?? [])]) listener(event)
     },
   }
   return win
@@ -348,6 +367,40 @@ describe('shaderUniforms', () => {
     expect(shaderUniforms(base).focusFloor).toBeGreaterThan(0)
     expect(shaderUniforms(base).focusFloor).toBeLessThan(1)
   })
+
+  it('disables the pointer eddy when there is no live sample', () => {
+    expect(shaderUniforms(base).pointer).toEqual([0, 0, 0, 0])
+    expect(shaderUniforms({ ...base, pointer: { x: 10, y: 20, active: false, speed: 0.4 } }).pointer)
+      .toEqual([0, 0, 0, 0])
+  })
+
+  it('clamps the live pointer into the viewport and its speed into 0..1', () => {
+    expect(shaderUniforms({ ...base, pointer: { x: 700, y: 400, active: true, speed: 0.25 } }).pointer)
+      .toEqual([700, 400, 1, 0.25])
+    expect(shaderUniforms({ ...base, pointer: { x: -50, y: 2000, active: true, speed: 4 } }).pointer)
+      .toEqual([0, 900, 1, 1])
+    expect(shaderUniforms({ ...base, pointer: { x: Number.NaN, y: 300, active: true, speed: Number.NaN } }).pointer)
+      .toEqual([0, 300, 1, 0])
+  })
+
+  it('expires a press ring after its documented life', () => {
+    expect(shaderUniforms(base).pulse).toEqual([0, 0, 0, 0])
+    expect(shaderUniforms({ ...base, pulse: { x: 700, y: 400, age: 0.4 } }).pulse)
+      .toEqual([700, 400, 0.4, 1])
+    expect(shaderUniforms({ ...base, pulse: { x: 700, y: 400, age: SHADER_PULSE_LIFE } }).pulse)
+      .toEqual([0, 0, 0, 0])
+    expect(shaderUniforms({ ...base, pulse: { x: 5000, y: 400, age: -2 } }).pulse)
+      .toEqual([1440, 400, 0, 1])
+  })
+
+  it('only the animated liquid shader reads the pointer uniforms', () => {
+    expect(SHADER_FRAGMENT_SOURCE.liquid).toContain('u_pointer')
+    expect(SHADER_FRAGMENT_SOURCE.liquid).toContain('u_pulse')
+    // Grain is declared static and never schedules a frame; reacting to the
+    // pointer there would contradict that declaration.
+    expect(SHADER_FRAGMENT_SOURCE.grain).not.toContain('u_pointer')
+    expect(SHADER_FRAGMENT_SOURCE.grain).not.toContain('u_pulse')
+  })
 })
 
 describe('createShaderBackdrop: capability gates', () => {
@@ -396,6 +449,51 @@ describe('createShaderBackdrop: layout and uniforms', () => {
     expect(lastUniform(gl, 'u_time')).toEqual([0])
     expect(lastUniform(gl, 'u_surface')?.every((value) => value >= 0 && value <= 1)).toBe(true)
     expect(lastUniform(gl, 'u_ink')?.every((value) => value >= 0 && value <= 1)).toBe(true)
+  })
+
+  it('uploads an idle pointer and no ring by default', () => {
+    const { gl } = harness()
+    expect(lastUniform(gl, 'u_pointer')).toEqual([0, 0, 0, 0])
+    expect(lastUniform(gl, 'u_pulse')).toEqual([0, 0, 0, 0])
+  })
+
+  it('turns a pointer move into an eddy and a press into an expanding ring', () => {
+    const { win, gl } = harness()
+    win.emit('pointermove', { clientX: 700, clientY: 400, pointerType: 'mouse' })
+    win.flush(1000)
+    win.flush(1060)
+    // `[x, y, active, speed]`; the first sample carries no velocity yet.
+    expect(lastUniform(gl, 'u_pointer')).toEqual([700, 400, 1, 0])
+    win.emit('pointerdown', { clientX: 640, clientY: 360, pointerType: 'mouse', button: 0 })
+    win.flush(1120)
+    expect(lastUniform(gl, 'u_pulse')).toEqual([640, 360, 0, 1])
+    win.flush(1300)
+    const aged = lastUniform(gl, 'u_pulse')
+    expect(aged?.[0]).toBe(640)
+    expect(aged?.[1]).toBe(360)
+    // `[x, y, age, active]`: age grows on the shader's own clock.
+    expect(aged?.[2]).toBeGreaterThan(0)
+    expect(aged?.[3]).toBe(1)
+  })
+
+  it('does not attach pointer listeners when the window cannot carry them', () => {
+    const gl = fakeGL()
+    const doc = fakeDoc(gl)
+    const host = fakeHost()
+    // A bare window (no addEventListener) still boots the tier; the eddy is
+    // simply inert instead of the renderer throwing during creation.
+    const bare = {
+      devicePixelRatio: 1,
+      requestAnimationFrame() { return 1 },
+      cancelAnimationFrame() {},
+      matchMedia() {
+        return { matches: false, addEventListener() {}, removeEventListener() {} }
+      },
+    }
+    const backdrop = createShaderBackdrop({ doc, win: bare, host, style: 'liquid' })
+    expect(backdrop).not.toBeNull()
+    backdrop?.sync()
+    expect(lastUniform(gl, 'u_pointer')).toEqual([0, 0, 0, 0])
   })
 })
 
