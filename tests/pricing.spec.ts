@@ -1,7 +1,7 @@
 /** Unit tests for the DeepSeek cost-estimation helpers. */
 
 import { describe, expect, it } from 'vitest'
-import { DEEPSEEK_PRICING_SOURCE_URL, estimateUsageCostCny, priceOf, usageCostBreakdown } from '../src/pricing.ts'
+import { DEEPSEEK_PRICING_CHECKED_ON, DEEPSEEK_PRICING_SOURCE_URL, estimateUsageCostCny, priceOf, usageCostBreakdown } from '../src/pricing.ts'
 
 const fullRow = {
   in: 1_000_000,
@@ -14,23 +14,33 @@ const fullRow = {
 }
 
 describe('DeepSeek pricing', () => {
-  it('exposes a traceable official pricing source', () => {
+  it('exposes a traceable official pricing source and check date', () => {
     expect(DEEPSEEK_PRICING_SOURCE_URL).toContain('api-docs.deepseek.com')
+    expect(DEEPSEEK_PRICING_CHECKED_ON).toBe('2026-11-14')
   })
 
-  it('covers the current and legacy model names', () => {
+  it('covers the current and legacy model names at the official peak rates', () => {
     expect(priceOf('deepseek-flash')).toEqual({ input: 2, cacheHit: 0.04, output: 8 })
-    expect(priceOf('deepseek-v4-flash-vision-exp')).toEqual({ input: 2, cacheHit: 0.04, output: 8 })
+    expect(priceOf('deepseek-v4-pro')).toEqual({ input: 9, cacheHit: 0.3, output: 27 })
+    expect(priceOf('deepseek-pro')).toEqual(priceOf('deepseek-v4-pro'))
+    expect(priceOf('deepseek-v4-flash-vision-exp')).toEqual(priceOf('deepseek-v4-flash'))
     expect(priceOf('deepseek-chat')).toEqual(priceOf('deepseek-v4-flash'))
+    expect(priceOf('deepseek-v4.1-pro')).toEqual(priceOf('deepseek-v4-pro'))
+    expect(priceOf('deepseek-v4.1-flash')).toEqual(priceOf('deepseek-v4-flash'))
     expect(priceOf('unknown-model')).toEqual(priceOf('deepseek-v4-flash'))
   })
 
   it('applies the half-price off-peak multiplier to every counter', () => {
+    // All counters off-peak: (2 + 0.04 + 2 + 8) / 2 = 6.02.
     expect(estimateUsageCostCny(fullRow, 'deepseek-v4-flash')).toBeCloseTo(6.02, 8)
+    // All counters peak: 2 + 0.04 + 2 + 8 = 12.04.
     const peak = usageCostBreakdown({ ...fullRow, peakIn: 1_000_000, peakCacheIn: 1_000_000, peakCacheW: 1_000_000, peakOut: 1_000_000 }, 'deepseek-v4-flash')
+    expect(peak.exact).toBe(true)
     expect(peak.peakTokens).toBe(4_000_000)
     expect(peak.offPeakTokens).toBe(0)
     expect(peak.totalCostCny).toBeCloseTo(12.04, 8)
+    // Pro peak: 9 + 0.3 + 9 + 27 = 45.3; off-peak is half.
+    expect(usageCostBreakdown(fullRow, 'deepseek-v4-pro').totalCostCny).toBeCloseTo(22.65, 8)
   })
 
   it('marks pre-split rows as inexact instead of presenting a false tariff split', () => {
@@ -43,8 +53,7 @@ describe('DeepSeek pricing', () => {
 
   it('does not trust an exact marker when peak counters are incomplete or impossible', () => {
     const incomplete = { ...fullRow, peakSplitKnown: true }
-    const incompleteBreakdown = usageCostBreakdown(incomplete, 'deepseek-v4-flash')
-    expect(incompleteBreakdown.exact).toBe(false)
+    expect(usageCostBreakdown(incomplete, 'deepseek-v4-flash').exact).toBe(false)
     const impossible = { ...fullRow, peakSplitKnown: true, peakIn: 2_000_000, peakCacheIn: 0, peakCacheW: 0, peakOut: 0 }
     expect(usageCostBreakdown(impossible, 'deepseek-v4-flash').exact).toBe(false)
   })

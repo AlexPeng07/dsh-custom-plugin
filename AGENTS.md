@@ -4,7 +4,7 @@
 
 Standalone convenience suite for the DeepSeek Harness (DSH) Web GUI:
 personalization (appearance, weather FX, glass), project folders, prompts,
-conversation export, Mermaid rendering, quote reply, and DeepSeek balance /
+conversation export, Mermaid rendering, and DeepSeek balance /
 daily token usage.
 
 ## Package rules
@@ -16,6 +16,134 @@ daily token usage.
   (`src/client/styles.ts`) with plain CSS (no CSS Modules, no `:global`
   wrappers).
 - UI copy is plain Chinese; there is no i18n registration.
+- UI surfaces follow the host design system (`src/client/styles.ts`): colours,
+  radii, shadows, type and motion come from `--dsw-*` / `--ds-*` tokens;
+  popovers use the host menu material + `--dsw-menu-backdrop-filter`, dialogs
+  use the opaque `--dsw-alias-bg-layer-3` with `--dsw-elevation-prominent`,
+  and settings content is card-based. Do not reintroduce self-drawn fills,
+  fixed 430px windows or draggable popovers.
+- Balance is **DSH account only** (2026-11-14): the host reuses the
+  `deepseekAccount` service (`getState()` then `getBalance(AccountClientMetadata)`),
+  which is the same recharge + bonus wallet query Settings → 账号与余额
+  renders. Resolve it lazily with `ctx.get('deepseekAccount')`; do **not** add
+  it to `inject` (the web profile may not ship the account bundle). Signed out →
+  the card keeps the local estimate and points to Settings → 账号与余额; a null
+  wallet result while `getState()` says `credential-stored` is `pending` (retry,
+  never an error); a failed wallet query retries. Do not reintroduce an API-key
+  balance path, a key form, or a Node/curl balance transport. The card shows
+  granted/topped-up amounts, a zero-balance hint and the account service's
+  usage/topUp links. The legacy `apiKey` state/credential helpers remain only
+  for old state documents and status diagnostics, not as a balance source.
+- Tariff rules (2026-11-14): the official page lists **peak** CNY prices per 1M
+  tokens — Flash 2 / 0.04 / 8 and Pro 9 / 0.30 / 27 for input / cache-hit /
+  output — and off-peak is exactly half. Peak = Beijing weekdays 09–12 / 14–18
+  **excluding Chinese statutory holidays**; weekends and holidays are off-peak
+  all day. `src/usage.ts` carries the holiday ranges (2026/2027, checked from
+  the State Council notices) and must be extended when the next notice ships.
+  `src/pricing.ts` is the single source (checked date + one-line note); `peak*`
+  counters drive the split and `exact` stays false until a rescan fills them.
+  The docs page's markdown conversion can collapse the table and drop the peak
+  rows and footnote — verify against the raw HTML/curl, never WebFetch alone.
+- Usage attribution: an event that arrives before its own `request/context`
+  (title generation) falls back to the session model, then the last model seen
+  anywhere — never a fake `unknown` row. The first open of the balance card
+  backfills today's ledger with one rescan when it is empty or still contains
+  `unknown`; keep that one-shot guard so a card open cannot become a scan loop.
+- Floating surfaces are built from `src/client/ui/overlays.tsx`: `Popover`
+  (anchored, flip/clamp, Escape/outside close, focus return), `Dialog`,
+  `usePresence` (exit animation) and `ToastStack`. Open/close motion is
+  150–220 ms (the popover leaves from its anchor side via `--vx-pop-shift`;
+  dismissed toasts stay mounted in place for their exit) and is disabled under
+  `prefers-reduced-motion`.
+- Motion tokens (`--vx-ease-out`, `--vx-dur-pop`, …) live on `:root`, not
+  `.vx-root`: the settings page and the dialogs/toasts it owns render outside
+  our overlay layer, and an undefined custom property invalidates the whole
+  `animation`/`transition` shorthand there. Extend the reduced-motion block
+  when adding a surface outside `.vx-root`.
+- Liquid glass is one SVG filter owned by `custom.tsx` and referenced from
+  `backdrop-filter`. The displacement map is generated from a rounded-rect SDF
+  at alpha 255 (Chromium premultiplies transparent PNGs to zeros), encodes the
+  normal in R/G, and uses `primitiveUnits="objectBoundingBox"` with `feImage`
+  at 0..1 (percentage values only refract the bottom/right edges). Extend the
+  filter region past the box and end with `feMerge` of the displacement result
+  only. Keep the fill around 70% of the host menu token; lower values make the
+  text panels unreadable. Liquid popovers animate with translate/fade only —
+  `transform: scale()` distorts the filter coordinate space.
+- While a **page-level** background renderer is live, `<html>` carries
+  `vx-bg-live`: glass uses a radial centre-solid / edge-clear fill and a
+  contrast-boosted backdrop chain so the animated texture stays visible at the
+  rim without hurting the copy. Do not reuse the uniform idle fill there — with
+  the faint ASCII layer behind it, the material looks like the glass switch did
+  nothing. `ocean` renders in the conversation column, so it must not set this
+  class or the live filter: there is no page texture behind the header/settings.
+- The non-backdrop palette token set keeps `--dsw-alias-bg-layer-2` opaque: the
+  shell settings dialog paints itself with that token, and an alpha there lets
+  the conversation text bleed through the settings page whenever no page
+  renderer installed the backdrop set. The page renderer also gets a bounded
+  self-heal (three retries) if its first DOM append is lost while the shell
+  settles.
+- Every anchored card shares one shell in `styles.ts`: `.vx-popover` is a flex
+  column with `overflow:hidden`, the head is `12px 14px 6px`, the single
+  scrolling `.vx-pop-body` is `4px 14px 10px`, and an optional `.vx-pop-foot`
+  is `6px 14px 12px` with a top border. Do not give a card its own padding or
+  scroll container — that is how the balance card drifted into a different
+  surface. The header balance card is a one-screen summary (today + monthly
+  budget + 刷新/扫描/完整用量); 7/30/90-day ranges, CSV and balance detail stay
+  in Settings → 用量与额度.
+- dsh Desktop 0.2.2-rc.3 renders plugin popovers in a **separate transparent
+  window** (UI Automation exposes the 个性化 popover as a `window`; the main
+  document has no `.vx-popover`, no iframe, and `body` contains only the icon
+  sprite, `#root`, `#vx-lg-filter` and `#vx-bg`). `backdrop-filter` therefore
+  has no page pixels to sample there: a translucent glass fill shows the body
+  text / weather / live background crisply through the panel, which is the
+  "背景动效与玻璃无法并存" report. Plugin floating surfaces must carry a
+  legible fill of their own and treat blur/refraction as a Web enhancement,
+  never as the readability mechanism. The two modes are a real material pair,
+  not two fills: frost is an opaque milk pane (~90% neutral white + 30px blur)
+  with no edge optics; liquid is Apple-style clear glass — a colourless body at
+  86%→78% (popovers/dialogs) and 90%→82% (settings sheet), with the lens carried
+  by edge optics: a 1px specular rim with a faint cyan/magenta dispersion, a
+  bright top bevel and a darker bottom inner shade. The settings page is one
+  glass sheet painted from neutral colours, never the host's per-mode tokens,
+  so 背景动效 关闭/字符/光影 only nudges transmission by two points and can never
+  turn it flat white; cards inside are transparent groups. The settings page and
+  the popovers live in separate floating documents, so cross-window backdrop
+  refraction is unavailable — the edge optics are the material, and any
+  `backdrop-filter` is a Web-only enhancement. `:root.vx-dark` swaps the same
+  recipes to their dark values. Appearance saves are broadcast on
+  `vx-custom-plugin-state`; a settings surface that runs as a separate plugin
+  instance updates the main store, and the receiver only applies cfg, never
+  re-saves. Calibrated 2026-11-16 on the live Desktop host.
+- Entry map: the header 「个性化」 button opens only the appearance popover
+  (`QuickAppearancePanel`); everything else lives in the settings-page hub
+  (`SettingsPage`, sections appearance/folders/prompts/search/export/
+  extensions/usage/data). Keep one primary entry per feature. Management links
+  that need the settings page (balance card 完整用量, appearance 完整设置,
+  prompt 管理提示词, palette actions) call `openHostSettings`, which drives the
+  host's real entry controls (account menu → 设置, or a direct trigger) and then
+  selects our 个性化 nav cell; keep the `Ctrl+Alt+,` toast only as the
+  unreachable fallback.
+- Pure UI models live in `src/client/ui/`: `anchor.ts` (placement),
+  `prompt-model.ts` (validation/tags/filter/sort/import), `folders-model.ts`
+  (tree mutations), `command-model.ts` (filter/group/recent). Keep them
+  DOM-free and covered by their spec files when changing behaviour.
+- Settings-page components may not receive the session/workspace hooks; the
+  folder tree degrades to ids instead of failing. Do not assume `useSessions`
+  props exist on `settings.section`.
+- The host settings overlay is a body-level `position:fixed` layer at
+  `z-index:1000`, above the shell overlay layer that contains `.vx-root`.
+  While our hub is mounted it sets `settingsSurfaceOpen`; global modals, the
+  command palette and toasts then render from `SettingsOverlays` inside that
+  page. Rendering them from `.vx-root` while settings are open makes them
+  invisible behind the host panel.
+- All decision surfaces use `ui/overlays.tsx`'s `Dialog`; do not reintroduce
+  the retired `.vx-modal` / `.vx-modal-mask` classes. The prompt editor must
+  confirm before discarding a dirty draft on Escape/mask/Cancel.
+- `settings.section` may receive no session/workspace hooks. `SettingsPage`
+  falls back to `useBridgedSessions` / `useBridgedWorkspaces`, which read the
+  shallow snapshots mirrored into `sessionIndex` / `workspaceIndex` by the
+  always-mounted `OverlayRoot`. Keep those snapshots reference-stable to avoid
+  a store render loop.
 - `src/dsh-home.ts`, `src/mount-once.ts`, `src/loopback.ts` are standalone
   utility modules kept in-tree so the package builds standalone.
 - Background palettes and their dark-mode derivation live in
@@ -27,7 +155,10 @@ daily token usage.
   every dsh host under that home — including dsh Desktop's separate profile —
   so an atomic replace there must name its temp file after the writing process
   (`tempPathFor`); a fixed temp name is a cross-process race, not just an
-  in-process one.
+  in-process one. On Windows a rename can still hit EPERM/EACCES/EBUSY while a
+  scanner or the other host holds the destination: `replaceStateFile` retries
+  with backoff, fails fast when the target is a directory, and only then falls
+  back to an in-place write verified by reading the document back.
 - State-document invariants (all covered by `tests/state.spec.ts` /
   `tests/loader-entry.spec.ts` — keep them holding when touching
   `src/state.ts`, `src/index.ts`, `src/host-service.ts`):
@@ -677,9 +808,10 @@ daily token usage.
   direct answer to "it still looks faint". `AppearanceTab` subscribes via
   `useSSelector(selectAppearanceSlice)` (cfg + `dark` only), so no per-turn
   write re-renders it. While a renderer is mounted the backdrop token set opens
-  the content column and the sidebar at any glass state (see the layer bullet),
-  and the panel shows a note saying exactly that — "卡片和弹窗保持不透明" — and
-  never flips the glass toggle for the user. User-facing copy names the tiers
+  the content column and the sidebar at any glass state (see the layer bullet);
+  glass over that live layer uses the `vx-bg-live` radial fill rather than
+  staying opaque, and the panel never flips the glass toggle for the user.
+  User-facing copy names the tiers
   关闭 / 字符 / 光影 and
   the fps slider is labelled 帧率 with no unit — implementation words (“WebGL”,
   DPR, atlas, shader) never appear in the panel.
@@ -691,7 +823,7 @@ daily token usage.
   stack a second poll on an in-flight request. `HeaderBalance` also selects
   only its three fields (`balance`, today's usage row, `balanceOpen`) so a
   streaming turn cannot re-render the header or recompute the ledger; the
-  always-mounted `MermaidInPlace`, `QuoteDock`, `QuoteButton` and `Toasts`
+  always-mounted `MermaidInPlace` and `Toasts`
   components select only their own fields too. `OverlayRoot` selects the
   overlay/config/theme/session fields it renders, and each `FolderNode` selects
   only its add/pick/drop state. Components that render null most of the time

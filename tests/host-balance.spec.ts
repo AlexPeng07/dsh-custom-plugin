@@ -1,26 +1,19 @@
 /**
- * Unit tests for the balance route's network-failure handling: TLS-intercepting
- * proxies make the host's outbound call fail intermittently with an opaque
- * "fetch failed" (real reason in error.cause), so the envelope must carry a
- * message the user can act on — and keep keyConfigured so the pill reads as
- * "额度?" (retry-worthy) instead of flipping to the key-free estimate.
+ * Unit tests for the account-only balance envelope: the host reuses the same
+ * recharge + bonus wallet query Settings → 账号与余额 renders, and must report
+ * signed-out / pending / failed separately so the card can show the right hint
+ * instead of a generic failure or a stale API-key error.
  * @module dsh-custom-plugin/tests/host-balance
  */
 
-import { describe, expect, it, vi } from 'vitest'
-import { CustomPluginHost, readableFetchError } from '../src/host-service.ts'
+import { describe, expect, it } from 'vitest'
+import { balanceFromAccountWallets, CustomPluginHost } from '../src/host-service.ts'
+import type { AccountBalanceOutcome } from '../src/host-service.ts'
 import { defaultState } from '../src/state.ts'
-import type { CredentialStore } from '../src/system-credentials.ts'
 
-class MemoryCredentialStore implements CredentialStore {
-  readonly available = true
-  value = 'sk-test'
-  async get(): Promise<string> { return this.value }
-  async set(value: string): Promise<boolean> { this.value = value; return true }
-  async clear(): Promise<boolean> { this.value = ''; return true }
-}
+const LINKS = { usageUrl: 'https://platform.deepseek.com/usage', topUpUrl: 'https://platform.deepseek.com/top_up' }
 
-function makeHost(): CustomPluginHost {
+function makeHost(accountBalance?: () => Promise<AccountBalanceOutcome | undefined>): CustomPluginHost {
   return new CustomPluginHost({
     sessionQuery: {} as never,
     state: defaultState(),
@@ -29,63 +22,71 @@ function makeHost(): CustomPluginHost {
     reportDiag: () => {},
     diagReports: [],
     readCredential: async () => '',
-    credentialStore: new MemoryCredentialStore(),
+    credentialStore: { available: false, get: async () => '', set: async () => false, clear: async () => false },
+    accountBalance,
   })
 }
 
-/** Node wraps connection-level failures in a TypeError "fetch failed" with
- * the real reason in `.cause` — reproduce that shape exactly. */
-function fetchFailure(code: string): TypeError {
-  return new TypeError('fetch failed', { cause: { code } })
-}
-
-describe('balance network failures', () => {
-  it('translates a TLS-intercepting proxy into an actionable message', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => { throw fetchFailure('SELF_SIGNED_CERT_IN_CHAIN') }))
-    const result = await makeHost().balanceGet()
-    expect(result.ok).toBe(false)
-    expect(result.keyConfigured).toBe(true)
-    expect(result.error).toContain('TLS 证书校验失败')
-    expect(result.error).toContain('api.deepseek.com')
-  })
-
-  it('keeps keyConfigured on a DNS failure instead of reading as "no key"', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => { throw fetchFailure('ENOTFOUND') }))
-    const result = await makeHost().balanceGet()
-    expect(result.ok).toBe(false)
-    expect(result.keyConfigured).toBe(true)
-    expect(result.error).toContain('DNS 解析失败')
-  })
-
-  it('keeps keyConfigured on a bare fetch failure with no cause code', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('fetch failed') }))
-    const result = await makeHost().balanceGet()
-    expect(result.ok).toBe(false)
-    expect(result.keyConfigured).toBe(true)
-    expect(result.error).toContain('网络请求失败')
-  })
-
-  it('reports an upstream auth failure as 认证失败', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => new Response('unauthorized', { status: 401 })))
-    const result = await makeHost().balanceGet()
-    expect(result.ok).toBe(false)
-    expect(result.keyConfigured).toBe(true)
-    expect(result.error).toContain('认证失败')
-  })
-
-  it('surfaces a successful balance payload', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => Response.json({
-      is_available: true,
-      balance_infos: [{ currency: 'CNY', total_balance: '12.34', granted_balance: '1.00', topped_up_balance: '11.34' }],
-    })))
-    const result = await makeHost().balanceGet()
+describe('account balance', () => {
+  it('maps the ready wallets and forwards the platform links', async () => {
+    const result = await makeHost(async () => ({
+      status: 'ready',
+      value: [{ currency: 'CNY', balance: '10.00' }],
+      bonusWallets: [{ currency: 'CNY', balance: '2.50' }],
+      links: LINKS,
+    })).balanceGet()
     expect(result.ok).toBe(true)
-    expect(result.balance?.total).toBe('12.34')
+    expect(result.source).toBe('account')
+    expect(result.balance).toEqual({ currency: 'CNY', total: '12.50', granted: '2.50', toppedUp: '10.00' })
+    expect(result.links).toEqual(LINKS)
   })
 
-  it('maps bare fetch-failed and unknown causes readably', () => {
-    expect(readableFetchError(new TypeError('fetch failed'))).toContain('网络请求失败')
-    expect(readableFetchError(new TypeError('fetch failed', { cause: { code: 'ETIMEDOUT' } }))).toContain('ETIMEDOUT')
-    expect(readableFetchError(new Error('boom'))).toBe('boom')
+  it('reports a signed-out account with the platform links', async () => {
+    const result = await makeHost(async () => ({ status: 'signed-out', links: LINKS })).balanceGet()
+    expect(result.ok).toBe(false)
+    expect(result.accountSignedOut).toBe(true)
+    expect(result.links).toEqual(LINKS)
+    expect(result.error).toContain('未登录')
+  })
+
+  it('reports a settling account as pending instead of an error', async () => {
+    const result = await makeHost(async () => ({ status: 'pending', links: LINKS })).balanceGet()
+    expect(result.ok).toBe(false)
+    expect(result.accountPending).toBe(true)
+    expect(result.accountSignedOut).not.toBe(true)
+  })
+
+  it('reports a failed wallet query', async () => {
+    const result = await makeHost(async () => ({ status: 'failed', links: LINKS })).balanceGet()
+    expect(result.ok).toBe(false)
+    expect(result.accountError).toBe('账号余额读取失败')
+  })
+
+  it('reports an absent account service instead of inventing a balance', async () => {
+    const result = await makeHost().balanceGet()
+    expect(result.ok).toBe(false)
+    expect(result.accountUnavailable).toBe(true)
+    expect(result.balance).toBeUndefined()
+  })
+})
+
+describe('account wallet mapping', () => {
+  it('sums recharge and bonus wallets into the card shape', () => {
+    expect(balanceFromAccountWallets(
+      [{ currency: 'CNY', balance: '10.10' }],
+      [{ currency: 'CNY', balance: '2.25' }],
+    )).toEqual({ currency: 'CNY', total: '12.35', granted: '2.25', toppedUp: '10.10' })
+  })
+
+  it('prefers CNY and ignores wallets in the other currency', () => {
+    expect(balanceFromAccountWallets(
+      [{ currency: 'USD', balance: '3.00' }],
+      [{ currency: 'CNY', balance: '1.23' }, { currency: 'USD', balance: '4.00' }],
+    )).toEqual({ currency: 'CNY', total: '1.23', granted: '1.23', toppedUp: '0.00' })
+  })
+
+  it('returns null when there is no usable wallet', () => {
+    expect(balanceFromAccountWallets([], [])).toBeNull()
+    expect(balanceFromAccountWallets([{ currency: 'EUR', balance: '1' }], [])).toBeNull()
   })
 })

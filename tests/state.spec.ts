@@ -40,16 +40,17 @@ describe('normalizeCfg', () => {
   })
 
   it('accepts only known keys', () => {
-    const cfg = normalizeCfg({ quote: true, bogus: 'x' })
-    expect(cfg.quote).toBe(true)
+    const cfg = normalizeCfg({ antiScroll: true, bogus: 'x' })
+    expect(cfg.antiScroll).toBe(true)
     expect((cfg as Record<string, unknown>).bogus).toBeUndefined()
   })
 
-  it('drops keys retired with the timeline rail instead of persisting them', () => {
-    const cfg = normalizeCfg({ timeline: false, timelineLeft: true, starsOnly: true })
+  it('drops retired keys instead of persisting them', () => {
+    const cfg = normalizeCfg({ timeline: false, timelineLeft: true, starsOnly: true, quote: true })
     expect((cfg as Record<string, unknown>).timeline).toBeUndefined()
     expect((cfg as Record<string, unknown>).timelineLeft).toBeUndefined()
     expect((cfg as Record<string, unknown>).starsOnly).toBeUndefined()
+    expect((cfg as Record<string, unknown>).quote).toBeUndefined()
   })
 
   it('normalizes numeric budget fields', () => {

@@ -41,6 +41,56 @@ function resolveMermaidVersion(): string {
 type UsageScanResult = { ok: true; day: string; usageToday: unknown; scannedSessions: number } | { ok: false; error: string }
 type MermaidFetchResult = { ok: true; bytes: number } | { ok: false; error: string }
 
+/** Minimal wallet face of the DSH account service (Settings → 账号与余额). */
+export interface AccountWalletLike {
+  readonly currency: string
+  readonly balance: string
+}
+
+/** The account service's balance outcome, mirrored locally so the plugin does
+ *  not take a hard dependency on `@deepseek-ai/dsh-deepseek-account`. */
+export type AccountBalanceLike =
+  | { readonly status: 'ready'; readonly value: readonly AccountWalletLike[]; readonly bonusWallets: readonly AccountWalletLike[] }
+  | { readonly status: 'failed' }
+
+/** Platform links the account service exposes for the balance rows. */
+export interface AccountLinksLike {
+  readonly usageUrl: string
+  readonly topUpUrl: string
+}
+
+/** Wrapper used by the host entry: `pending` means the account is signed in
+ *  but the wallet query has not settled (a startup grant race), so the caller
+ *  must retry instead of showing an error. */
+export type AccountBalanceOutcome =
+  | { readonly status: 'ready'; readonly value: readonly AccountWalletLike[]; readonly bonusWallets: readonly AccountWalletLike[]; readonly links?: AccountLinksLike }
+  | { readonly status: 'failed'; readonly links?: AccountLinksLike }
+  | { readonly status: 'signed-out'; readonly links?: AccountLinksLike }
+  | { readonly status: 'pending'; readonly links?: AccountLinksLike }
+
+/**
+ * Sum the account's normal (recharge) and bonus wallets into the balance shape
+ * the header card renders. CNY wins when both currencies exist, matching the
+ * balance endpoint's own preference; decimal strings are summed as numbers and
+ * re-quantized to two decimals for display.
+ */
+export function balanceFromAccountWallets(normal: readonly AccountWalletLike[], bonus: readonly AccountWalletLike[]): BalanceInfo | null {
+  const currencies = [...normal, ...bonus].map((wallet) => wallet.currency)
+  const currency = currencies.includes('CNY') ? 'CNY' : currencies.includes('USD') ? 'USD' : ''
+  if (currency === '') return null
+  const sum = (wallets: readonly AccountWalletLike[]): number => wallets
+    .filter((wallet) => wallet.currency === currency)
+    .reduce((total, wallet) => total + (Number.isFinite(Number(wallet.balance)) ? Number(wallet.balance) : 0), 0)
+  const toppedUp = sum(normal)
+  const granted = sum(bonus)
+  return {
+    currency,
+    total: (toppedUp + granted).toFixed(2),
+    granted: granted.toFixed(2),
+    toppedUp: toppedUp.toFixed(2),
+  }
+}
+
 interface ScanEntry {
   readable: boolean
   /** Live usage arrived before this session's read: the whole replay is
@@ -84,6 +134,10 @@ export interface CustomPluginHostOptions {
   readCredential?: () => Promise<string>
   /** Test seam and optional platform adapter for OS credential storage. */
   credentialStore?: CredentialStore
+  /** DSH account balance source (the same service Settings → 账号与余额 uses).
+   *  Resolves `undefined` when the account service is absent (web profile),
+   *  otherwise a signed-out / pending / ready / failed outcome. */
+  accountBalance?: () => Promise<AccountBalanceOutcome | undefined>
 }
 
 /** Host capabilities behind the routes and the agent tool. */
@@ -95,7 +149,11 @@ export class CustomPluginHost {
   private readonly diagReports: string[]
   private readonly attachments: AttachmentStore | undefined
   private readonly credentialStore: CredentialStore
+  private readonly accountBalance: (() => Promise<AccountBalanceOutcome | undefined>) | undefined
   private readonly sessionModel = new Map<string, string | null>()
+  /** Last model seen on any session; attributes events (title generation,
+   *  synthetic turns) that arrive before their own `request/context`. */
+  private lastKnownModel: string | null = null
   // Serialize asynchronous state mutations (edits, imports, and scans).
   // Session events are synchronous, so they are queued while an operation is
   // waiting on disk or session I/O and folded before the next operation.
@@ -129,6 +187,7 @@ export class CustomPluginHost {
     this.diagReports = options.diagReports
     this.attachments = options.attachments
     this.credentialStore = options.credentialStore ?? new SystemCredentialStore()
+    this.accountBalance = options.accountBalance
     this.localMermaidPath = options.localMermaidPath ?? defaultLocalMermaidPath
     this.readCredential = options.readCredential ?? readDeepSeekCredential
   }
@@ -208,6 +267,7 @@ export class CustomPluginHost {
   /** Track the model of each session's latest request. */
   rememberModel(sessionId: string, model: string | null): void {
     this.sessionModel.set(sessionId, model)
+    if (model !== null && model !== '' && model !== 'unknown') this.lastKnownModel = model
   }
 
   forgetSession(sessionId: string): void {
@@ -215,9 +275,14 @@ export class CustomPluginHost {
   }
 
   /** Fold one assistant/message usage record into the ledger. The event time
-   * decides both the day bucket and the peak/off-peak portion. */
+   * decides the day bucket; the peak counters are legacy telemetry (the
+   * current official tariff is flat). */
   foldUsage(sessionId: string, usage: UsageRecord, time?: number, modelOverride?: string | null): void {
-    const model = modelOverride !== undefined ? (modelOverride ?? 'unknown') : (this.sessionModel.get(sessionId) ?? 'unknown')
+    // A usage event can arrive before its own `request/context` (the title
+    // generator runs in its own session), so fall back to the last model seen
+    // anywhere before falling back to 'unknown'. Otherwise every such call
+    // became a fake model row in the ledger.
+    const model = modelOverride ?? this.sessionModel.get(sessionId) ?? this.lastKnownModel ?? 'unknown'
     if (this.stateOperationActive) {
       this.queuedUsage.push({ usage, time, model })
       // Count the arrival immediately so an in-flight replay cannot replace
@@ -563,28 +628,49 @@ export class CustomPluginHost {
     return status
   }
 
-  /** Query the DeepSeek balance endpoint (15s timeout). */
-  async balanceGet(): Promise<{ ok: boolean; keyConfigured: boolean; balance?: BalanceInfo | null; error?: string | null; usageToday?: unknown; available?: boolean }> {
+  /**
+   * Balance for the header card and the usage tab. The DSH account service is
+   * the only source — it is the same recharge + bonus wallet query the
+   * Settings 「账号与余额」 page renders, so a signed-in desktop needs no sk- key.
+   * The result distinguishes signed-out / pending / failed so the UI can show
+   * the right hint instead of a generic failure.
+   */
+  async balanceGet(): Promise<{
+    ok: boolean
+    balance?: BalanceInfo | null
+    links?: AccountLinksLike
+    usageToday?: unknown
+    error?: string | null
+    source?: 'account'
+    accountError?: string | null
+    accountSignedOut?: boolean
+    accountPending?: boolean
+    accountUnavailable?: boolean
+  }> {
     const usageToday = this.state.usage[dayKey()] ?? {}
-    const key = await this.resolveApiKey()
-    if (key === '') return { ok: false, keyConfigured: false, error: '未配置 DeepSeek API Key（请在额度面板粘贴 sk- 开头的密钥）', usageToday }
-    let response
+    const unavailable = (): { ok: false; accountUnavailable: true; error: string; usageToday: unknown } =>
+      ({ ok: false, accountUnavailable: true, error: '当前环境没有 DSH 账号余额服务', usageToday })
+    if (this.accountBalance === undefined) return unavailable()
     try {
-      response = await this.httpJson('https://api.deepseek.com/user/balance', { Authorization: `Bearer ${key}`, Accept: 'application/json' })
+      const account = await this.accountBalance()
+      if (account === undefined) return unavailable()
+      if (account.status === 'signed-out') {
+        return { ok: false, accountSignedOut: true, links: account.links, error: 'DSH 账号未登录', usageToday }
+      }
+      if (account.status === 'pending') {
+        return { ok: false, accountPending: true, links: account.links, error: '账号余额加载中，正在重试', usageToday }
+      }
+      if (account.status === 'failed') {
+        return { ok: false, accountError: '账号余额读取失败', links: account.links, error: '账号余额读取失败', usageToday }
+      }
+      const mapped = balanceFromAccountWallets(account.value, account.bonusWallets)
+      if (mapped === null) {
+        return { ok: false, accountError: '账号没有可用的余额信息', links: account.links, error: '账号没有可用的余额信息', usageToday }
+      }
+      return { ok: true, source: 'account', balance: mapped, links: account.links, error: null, usageToday }
     } catch (error) {
-      return { ok: false, keyConfigured: true, error: String((error as Error)?.message ?? error), usageToday }
-    }
-    if (!response.ok) return { ok: false, keyConfigured: true, error: response.error ?? '请求失败', usageToday }
-    const json = (response.json ?? {}) as { is_available?: boolean; balance_infos?: Array<{ currency?: string; total_balance?: string; granted_balance?: string; topped_up_balance?: string }> }
-    const infos = json.balance_infos ?? []
-    const info = infos.find((item) => item.currency === 'CNY') ?? infos[0]
-    return {
-      ok: true,
-      keyConfigured: true,
-      available: json.is_available !== false,
-      balance: info !== undefined ? { currency: info.currency ?? '', total: info.total_balance ?? '0', granted: info.granted_balance ?? '0', toppedUp: info.topped_up_balance ?? '0' } : null,
-      error: infos.length > 0 ? null : '响应中无余额信息',
-      usageToday,
+      const message = String((error as Error)?.message ?? error)
+      return { ok: false, accountError: message, error: message, usageToday }
     }
   }
 
@@ -622,7 +708,7 @@ export class CustomPluginHost {
       if (this.usageRevision !== revisionAtStart) return { readable: false, stale: true, usage: {} }
       try {
         const snapshot = await this.readSessionLog(record.header.id)
-        const dayUsage = aggregateDayUsage(snapshot.events, today)
+        const dayUsage = aggregateDayUsage(snapshot.events, today, this.lastKnownModel)
         return { readable: true, usage: dayUsage }
       } catch {
         // skip unreadable session
@@ -780,45 +866,6 @@ export class CustomPluginHost {
       return { ok: false, error: String((error as Error)?.message ?? error) }
     }
   }
-
-  private async httpJson(url: string, headers: Record<string, string>): Promise<{ ok: true; json: unknown } | { ok: false; error?: string }> {
-    try {
-      const response = await fetch(url, { method: 'GET', headers, signal: AbortSignal.timeout(15000) })
-      if (!response.ok) {
-        if (response.status === 401 || response.status === 403) return { ok: false, error: '认证失败 (HTTP ' + response.status + ')，请检查 API Key 是否正确' }
-        return { ok: false, error: `HTTP ${response.status}` }
-      }
-      try {
-        return { ok: true, json: await response.json() }
-      } catch {
-        return { ok: false, error: '非 JSON 响应' }
-      }
-    } catch (error) {
-      return { ok: false, error: readableFetchError(error) }
-    }
-  }
-}
-
-/**
- * Translate a Node `fetch` connection-level failure into a message a user can
- * act on. Node reports "fetch failed" with the real reason in `error.cause`
- * (e.g. `SELF_SIGNED_CERT_IN_CHAIN` — a local TLS-intercepting proxy or
- * security suite, which makes outbound calls fail *intermittently* whenever
- * the interceptor takes the connection), and passing the bare TypeError
- * through once read as a mysterious network that "sometimes does not exist".
- */
-export function readableFetchError(error: unknown): string {
-  const cause = (error as { cause?: { code?: string; message?: string } })?.cause
-  const code = cause?.code ?? ''
-  if (code === 'SELF_SIGNED_CERT_IN_CHAIN' || code === 'DEPTH_ZERO_SELF_SIGNED_CERT' || code === 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY' || code === 'UNABLE_TO_VERIFY_LEAF_SIGNATURE') {
-    return 'TLS 证书校验失败：本机代理或安全软件可能正在解密 HTTPS——请对 api.deepseek.com 放行直连，或将该软件的根证书装入系统信任'
-  }
-  if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') return 'DNS 解析失败：请检查本机网络与代理配置'
-  if (code === 'ETIMEDOUT' || code === 'ECONNRESET' || code === 'ECONNREFUSED' || code === 'EHOSTUNREACH' || code === 'ENETUNREACH') {
-    return `连接失败（${code}）：请检查本机网络与代理配置`
-  }
-  const message = String(cause?.message ?? (error as Error)?.message ?? error)
-  return message === 'fetch failed' ? '网络请求失败：请检查本机网络与代理配置' : message
 }
 
 /** A 200 from a mirror is not proof of the engine: captive portals and

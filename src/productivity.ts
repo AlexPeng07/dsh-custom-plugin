@@ -35,7 +35,7 @@ function csvCell(value: unknown): string {
 }
 
 export function usageCsv(usage: UsageMap): string {
-  const rows: string[][] = [['日期', '模型', '输入', '输出', '缓存读取', '缓存写入', '调用次数', '峰闲状态', '估算费用(CNY)']]
+  const rows: string[][] = [['日期', '模型', '输入(未命中)', '输出', '缓存读取', '缓存写入', '调用次数', '峰闲状态', '估算费用(CNY)']]
   for (const day of Object.keys(usage).sort()) {
     for (const model of Object.keys(usage[day]).sort()) {
       const row = usage[day][model]

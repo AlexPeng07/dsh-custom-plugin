@@ -5,7 +5,7 @@
  * @module @alexpeng/dsh-custom-plugin/client/api
  */
 
-import { CUSTOM_PLUGIN_API_PREFIX, type BackupImportMode, type BackupImportPreview, type ConversationSearchKind, type ConversationSearchResult, type CredentialStorage, type CustomPluginBackupV1, type CustomPluginConfig, type CustomPluginPublicState, type CustomPluginState, type TimelineItem } from '../protocol.ts'
+import { CUSTOM_PLUGIN_API_PREFIX, type BackupImportMode, type BackupImportPreview, type ConversationSearchKind, type ConversationSearchResult, type CustomPluginBackupV1, type CustomPluginConfig, type CustomPluginPublicState, type CustomPluginState, type TimelineItem } from '../protocol.ts'
 
 const REQUEST_TIMEOUT_MS = 20_000
 
@@ -15,19 +15,23 @@ export interface StateEdit {
   folders?: CustomPluginState['folders']
   prompts?: CustomPluginState['prompts']
   stars?: CustomPluginState['stars']
-  apiKey?: string
 }
 
-/** Balance payload as the host reports it. */
+/** Balance payload as the host reports it (DSH account wallets only). */
 export interface BalancePayload {
   ok: boolean
-  keyConfigured: boolean
   balance?: { currency: string; total: string; granted: string; toppedUp: string } | null
+  links?: { usageUrl: string; topUpUrl: string }
   error?: string | null
   usageToday?: Record<string, unknown>
+  source?: 'account'
+  accountError?: string | null
+  accountSignedOut?: boolean
+  accountPending?: boolean
+  accountUnavailable?: boolean
 }
 
-type StateSaveResult = { ok: true; apiKeyConfigured?: boolean; credentialStorage?: CredentialStorage } | { ok: false; error?: string }
+type StateSaveResult = { ok: true } | { ok: false; error?: string }
 
 async function request<T>(path: string, init?: RequestInit, externalSignal?: AbortSignal): Promise<T> {
   const controller = new AbortController()
@@ -97,11 +101,15 @@ export async function apiConversationSearch(sessionId: string, query: string, ki
 }
 
 /** Export one session in the given format. */
-export async function apiExportRun(sessionId: string, format: string): Promise<{ ok: true; content: string; fileName: string; mime: string } | { ok: false; error?: string }> {
-  return await postJson('/export', { sessionId, format })
+export async function apiExportRun(sessionId: string, format: string, signal?: AbortSignal): Promise<{ ok: true; content: string; fileName: string; mime: string } | { ok: false; error?: string }> {
+  return await request('/export', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ sessionId, format }),
+  }, signal)
 }
 
-/** DeepSeek balance. */
+/** DeepSeek balance from the DSH account service. */
 export async function apiBalanceGet(): Promise<BalancePayload> {
   return await request('/balance', { cache: 'no-store' })
 }

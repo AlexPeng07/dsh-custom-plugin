@@ -294,12 +294,12 @@ describe('custom plugin routes error surface', () => {
     } as unknown as CustomPluginHost
     const okRoute = makeCustomPluginRoutes(okHost).find((item) => item.path === `${CUSTOM_PLUGIN_API_PREFIX}/state`)!
     const ok = response()
-    await okRoute.handler(request({ cfg: { quote: true }, folders: [] }, 'POST', '/state'), ok.res)
+    await okRoute.handler(request({ cfg: { antiScroll: true }, folders: [] }, 'POST', '/state'), ok.res)
     expect(ok.status).toBe(200)
     expect((ok.body as { ok: boolean }).ok).toBe(true)
     expect((ok.body as { apiKeyConfigured: boolean }).apiKeyConfigured).toBe(true)
     expect(persisted).toBe(1)
-    expect((edit as { cfg: unknown }).cfg).toEqual({ quote: true })
+    expect((edit as { cfg: unknown }).cfg).toEqual({ antiScroll: true })
 
     const failHost = {
       applyEdit: async () => { throw new Error('系统凭据清除失败') },

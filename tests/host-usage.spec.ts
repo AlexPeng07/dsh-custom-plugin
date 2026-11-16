@@ -207,4 +207,24 @@ describe('CustomPluginHost.usageScan', () => {
     await expect(host.usageScan()).resolves.toEqual({ ok: false, error: expect.stringContaining('用量保存失败') })
     expect(state.usage[dayKey(time)]['deepseek-v4-flash'].in).toBe(99)
   })
+
+  it('attributes an early usage event to the last known model instead of unknown', () => {
+    const state = defaultState()
+    const time = Date.now()
+    const host = new CustomPluginHost({
+      sessionQuery: {} as never,
+      state,
+      statePath: () => 'custom-plugin-state.json',
+      saveNow: async () => {},
+      reportDiag: () => {},
+      diagReports: [],
+      credentialStore: { available: false, get: async () => '', set: async () => false, clear: async () => false },
+    })
+    host.rememberModel('main-session', 'deepseek-v4-flash')
+    // The title generator runs in its own session and emits usage before any
+    // request/context of its own; it must not create a fake "unknown" row.
+    host.foldUsage('title-session', { inputTokens: 3 }, time)
+    expect(state.usage[dayKey(time)]['deepseek-v4-flash'].in).toBe(3)
+    expect(state.usage[dayKey(time)].unknown).toBeUndefined()
+  })
 })

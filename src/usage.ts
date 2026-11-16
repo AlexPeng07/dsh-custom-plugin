@@ -114,11 +114,43 @@ export function dayKey(time?: number): string {
 }
 
 /** DeepSeek peak billing window: Beijing Monday-Friday 09:00-12:00 /
- * 14:00-18:00; all weekend hours are off-peak. Evaluated on China Standard
- * Time so the split matches the published schedule on any host timezone. */
+ * 14:00-18:00, excluding Chinese statutory holidays; all weekend hours and
+ * holidays are off-peak. Evaluated on China Standard Time so the split matches
+ * the published schedule on any host timezone. */
 export function isPeakHour(time: number): boolean {
   const { hour, weekday } = cstParts(time)
-  return weekday >= 1 && weekday <= 5 && ((hour >= 9 && hour < 12) || (hour >= 14 && hour < 18))
+  const inWindow = weekday >= 1 && weekday <= 5 && ((hour >= 9 && hour < 12) || (hour >= 14 && hour < 18))
+  return inWindow && !isStatutoryHoliday(time)
+}
+
+/** Chinese statutory holiday ranges (inclusive), checked 2026-11-14 against
+ * the State Council notices: 2026 (published 2025-11-04) and 2027 (published
+ * 2026-11-05). Weekends are already off-peak; these ranges add the weekday
+ * days inside each holiday. Extend this table when the next notice ships —
+ * a missing year would charge its weekday holidays at the peak rate. */
+const STATUTORY_HOLIDAYS: ReadonlyArray<readonly [string, string]> = [
+  // 2026
+  ['2026-01-01', '2026-01-03'],
+  ['2026-02-15', '2026-02-23'],
+  ['2026-04-04', '2026-04-06'],
+  ['2026-05-01', '2026-05-05'],
+  ['2026-06-19', '2026-06-21'],
+  ['2026-09-25', '2026-09-27'],
+  ['2026-10-01', '2026-10-07'],
+  // 2027 (端午/中秋 are single Wednesdays, no makeup days)
+  ['2027-01-01', '2027-01-03'],
+  ['2027-02-05', '2027-02-13'],
+  ['2027-04-03', '2027-04-05'],
+  ['2027-05-01', '2027-05-05'],
+  ['2027-06-09', '2027-06-09'],
+  ['2027-09-15', '2027-09-15'],
+  ['2027-10-01', '2027-10-07'],
+]
+
+/** Whether the Beijing calendar day is a Chinese statutory holiday. */
+export function isStatutoryHoliday(time: number): boolean {
+  const key = dayKey(time)
+  return STATUTORY_HOLIDAYS.some(([start, end]) => key >= start && key <= end)
 }
 
 /** Remove malformed or expired day buckets from the persisted usage ledger. */
@@ -179,10 +211,11 @@ export function mergeUsageRow(target: UsageRow, source: UsageRow): void {
  * `request/context` events anywhere in the log keep the model tracking in
  * order; only `assistant/message` usage events whose own timestamp falls on
  * `day` are folded, so a session crossing midnight contributes exactly the
- * events it produced that day. */
-export function aggregateDayUsage(events: readonly SessionEvent[], day: string): Record<string, UsageRow> {
+ * events it produced that day. `fallbackModel` covers logs whose first usage
+ * event precedes any `request/context` (the live fold has the same rule). */
+export function aggregateDayUsage(events: readonly SessionEvent[], day: string, fallbackModel: string | null = null): Record<string, UsageRow> {
   const agg: Record<string, UsageRow> = {}
-  let model: string | null = null
+  let model: string | null = fallbackModel
   for (const event of events) {
     if (event === undefined || event === null) continue
     if (event.type === 'request/context') {

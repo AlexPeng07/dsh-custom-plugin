@@ -331,6 +331,38 @@ export function tempPathFor(target: string, pid: number = process.pid): string {
   return `${target}.${pid}.tmp`
 }
 
+/** Windows can hold the destination open for a moment (a virus scanner or the
+ * other dsh host's read), which makes `rename` fail with EPERM/EBUSY even
+ * though the temp file is complete. Retry those codes with backoff, but never
+ * retry a directory in the target's place; after the last attempt write the
+ * small document in place so the user's change is not lost. */
+const RENAME_RETRY_MS = [30, 60, 120, 240, 480, 800] as const
+
+async function replaceStateFile(tmpPath: string, statePath: string, doc: string): Promise<void> {
+  let lastError: unknown = null
+  for (let attempt = 0; attempt <= RENAME_RETRY_MS.length; attempt++) {
+    try {
+      await rename(tmpPath, statePath)
+      return
+    } catch (error) {
+      lastError = error
+      const code = (error as NodeJS.ErrnoException).code
+      if (code !== 'EPERM' && code !== 'EACCES' && code !== 'EBUSY') throw error
+      const target = await stat(statePath).catch(() => null)
+      if (target?.isDirectory() === true) throw error
+      if (attempt === RENAME_RETRY_MS.length) break
+      await new Promise((resolve) => setTimeout(resolve, RENAME_RETRY_MS[attempt]))
+    }
+  }
+  try {
+    await writeFile(statePath, doc, 'utf8')
+    if (await readFile(statePath, 'utf8') !== doc) throw lastError
+    await rm(tmpPath, { force: true }).catch(() => { /* nothing left to clean */ })
+  } catch (error) {
+    throw lastError ?? error
+  }
+}
+
 /** Atomically persist the state document. Saves to the same path are
  * serialized: a caller awaits its own turn's completion, a failed turn never
  * poisons the queue behind it. Before writing, another host's changes since
@@ -347,7 +379,7 @@ export function saveStateFile(state: CustomPluginState, home: string = dshHome()
       const tmpPath = tempPathFor(statePath)
       try {
         await writeFile(tmpPath, doc, 'utf8')
-        await rename(tmpPath, statePath)
+        await replaceStateFile(tmpPath, statePath, doc)
       } catch (error) {
         // A pid-qualified temp would otherwise survive a failed turn and accumulate.
         await rm(tmpPath, { force: true }).catch(() => { /* the rename may have landed; nothing left to clean */ })

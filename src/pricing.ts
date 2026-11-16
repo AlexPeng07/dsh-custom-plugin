@@ -1,7 +1,8 @@
 /**
  * DeepSeek cost-estimation helpers shared by the host-facing usage model and
- * the browser panel. Prices are CNY per 1M tokens at peak rate; off-peak is
- * applied to the portion without a peak counter.
+ * the browser panel. Prices are the official peak CNY rates per 1M tokens;
+ * off-peak is exactly half (Beijing weekdays 09–12 / 14–18 are peak, weekends
+ * and Chinese statutory holidays are off-peak all day).
  * @module @alexpeng/dsh-custom-plugin/pricing
  */
 
@@ -11,7 +12,9 @@ import type { UsageRow } from './protocol.ts'
 /** Official source used for the built-in estimate and shown in the panel. */
 export const DEEPSEEK_PRICING_SOURCE_URL = 'https://api-docs.deepseek.com/zh-cn/quick_start/pricing/'
 /** Date on which the built-in rule was checked against the official page. */
-export const DEEPSEEK_PRICING_CHECKED_ON = '2026-09-30'
+export const DEEPSEEK_PRICING_CHECKED_ON = '2026-11-14'
+/** One-line tariff summary shown under the usage tables. */
+export const DEEPSEEK_PRICING_NOTE = '官方峰谷价（每百万 tokens）：Flash 峰时输入 ¥2 / 缓存命中 ¥0.04 / 输出 ¥8，Pro ¥9 / ¥0.30 / ¥27；空闲时段半价（工作日 9–12、14–18 为峰时，周末与法定节假日全天空闲）'
 
 export interface DeepSeekUnitPrice {
   /** Uncached input / cache-miss input price. */
@@ -33,23 +36,28 @@ export interface UsageCostBreakdown {
 }
 
 const FLASH_PRICE: DeepSeekUnitPrice = { input: 2, cacheHit: 0.04, output: 8 }
+const PRO_PRICE: DeepSeekUnitPrice = { input: 9, cacheHit: 0.3, output: 27 }
 
-/** Current official peak prices, in CNY per 1M tokens. Off-peak is exactly
- * half of peak per the official page (weekday 9-12 / 14-18 Beijing time). */
+/** Official peak prices, in CNY per 1M tokens. Off-peak is exactly half. */
 const PEAK_PRICES: Readonly<Record<string, DeepSeekUnitPrice>> = {
   'deepseek-flash': FLASH_PRICE,
   'deepseek-v4-flash': FLASH_PRICE,
   'deepseek-v4-flash-vision-exp': FLASH_PRICE,
-  'deepseek-v4-pro': { input: 9, cacheHit: 0.3, output: 27 },
-  // Retired names remain readable for older session logs; they no longer
-  // appear on the official page and are approximated at Flash pricing.
+  'deepseek-pro': PRO_PRICE,
+  'deepseek-v4-pro': PRO_PRICE,
+  // Retired names remain readable for older session logs; the official page
+  // maps them onto v4-flash's non-thinking / thinking modes.
   'deepseek-chat': FLASH_PRICE,
   'deepseek-reasoner': FLASH_PRICE,
 }
 
-/** Resolve a model's peak price, falling back to Flash for unknown/legacy rows. */
+/** Resolve a model's peak price. Exact ids first; any other `*pro*` id uses
+ *  Pro pricing, and everything else falls back to Flash (the shipped default). */
 export function priceOf(model: string): DeepSeekUnitPrice {
-  return PEAK_PRICES[model] ?? FLASH_PRICE
+  const exact = PEAK_PRICES[model]
+  if (exact !== undefined) return exact
+  if (/pro/i.test(model)) return PRO_PRICE
+  return FLASH_PRICE
 }
 
 /**

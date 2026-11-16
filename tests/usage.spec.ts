@@ -55,6 +55,15 @@ describe('isPeakHour', () => {
     expect(isPeakHour(T(2026, 8, 24, 10))).toBe(true) // Monday
   })
 
+  it('treats Chinese statutory holidays as off-peak all day', () => {
+    expect(isPeakHour(T(2026, 2, 17, 10))).toBe(false) // Spring Festival, Tuesday
+    expect(isPeakHour(T(2026, 10, 5, 10))).toBe(false) // National Day, Monday
+    expect(isPeakHour(T(2027, 2, 8, 10))).toBe(false) // Spring Festival 2027, Monday
+    expect(isPeakHour(T(2027, 6, 9, 10))).toBe(false) // Dragon Boat 2027, Wednesday
+    expect(isPeakHour(T(2026, 10, 8, 10))).toBe(true) // Thursday after the holiday
+    expect(isPeakHour(T(2026, 8, 21, 10))).toBe(true) // normal Friday
+  })
+
   it('buckets days on the Beijing calendar', () => {
     // 2026-08-20 16:30 UTC == 2026-08-21 00:30 Beijing.
     expect(dayKey(Date.UTC(2026, 7, 20, 16, 30))).toBe('2026-08-21')
@@ -93,6 +102,13 @@ describe('aggregateDayUsage', () => {
     const day = aggregateDayUsage([usageEvent(1, T(2026, 8, 21, 15, 0), { inputTokens: 5 })], dayKey(T(2026, 8, 21, 15)))
     expect(day.unknown.calls).toBe(1)
     expect(day.unknown.in).toBe(5)
+  })
+
+  it('uses the fallback model when usage precedes request/context', () => {
+    const day = aggregateDayUsage([usageEvent(1, T(2026, 8, 21, 15, 0), { inputTokens: 5 })], dayKey(T(2026, 8, 21, 15)), 'deepseek-flash')
+    expect(day['deepseek-flash'].calls).toBe(1)
+    expect(day['deepseek-flash'].in).toBe(5)
+    expect(day.unknown).toBeUndefined()
   })
 })
 

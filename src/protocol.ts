@@ -81,8 +81,6 @@ export interface CustomPluginConfig {
   glassMode?: 'frost' | 'liquid'
   /** Apply backdrop blur to global dialogs/menus/tooltips as well. */
   globalGlass?: boolean
-  /** Enable the selection-quote-reply feature. */
-  quote?: boolean
   /** Force `scroll-behavior: auto` to stop automatic jump-to-bottom. */
   antiScroll?: boolean
   /** Show LaTeX / MathML copy chips under matching messages. */
@@ -112,7 +110,6 @@ export const DEFAULT_CONFIG: CustomPluginConfig = {
   glass: true,
   glassMode: 'frost',
   globalGlass: true,
-  quote: true,
   antiScroll: false,
   mermaid: true,
   formula: true,

@@ -16,11 +16,26 @@ import { join } from 'node:path'
 import { dshHome } from './dsh-home.ts'
 import { mountOnce } from './mount-once.ts'
 import { defaultState, loadStateFile, saveStateFile, STATE_FILE } from './state.ts'
-import { CustomPluginHost } from './host-service.ts'
+import { CustomPluginHost, type AccountBalanceLike, type AccountBalanceOutcome } from './host-service.ts'
 import { makeCustomPluginRoutes } from './routes.ts'
 import { dayKey } from './usage.ts'
 
 export const inject = ['webServer', 'tools', 'sessionQuery']
+
+/** Minimal face of the host's DeepSeek account service (Settings → 账号与余额).
+ *  Declared locally so the plugin does not hard-depend on the account bundle;
+ *  the service is looked up lazily and may be absent on the web profile. */
+interface DeepSeekAccountLike {
+  getState(): Promise<{ status: 'signed-out' | 'credential-stored'; links?: { usageUrl: string; topUpUrl: string } }>
+  getBalance(client: { version: string; locale: string; timezoneOffsetSeconds: number }): Promise<AccountBalanceLike | null>
+}
+
+/** Platform client version header. The desktop forwards its build version in
+ *  `DSH_CLIENT_VERSION`; the plugin version is a truthful fallback. */
+function accountClientVersion(): string {
+  const env = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env
+  return env?.DSH_CLIENT_VERSION || '0.9.3'
+}
 
 export const apply = mountOnce('@alexpeng/dsh-custom-plugin', applyImpl)
 
@@ -66,6 +81,35 @@ function applyImpl(ctx: Context): void {
     reportDiag,
     diagReports,
     attachments: ctx.get('attachments'),
+    // Reuse the host account service the Settings 「账号与余额」 page renders:
+    // recharge + bonus wallets, no sk- API key needed for a signed-in desktop.
+    accountBalance: async (): Promise<AccountBalanceOutcome | undefined> => {
+      const account = ctx.get('deepseekAccount') as DeepSeekAccountLike | undefined
+      if (account === undefined || typeof account.getBalance !== 'function') return undefined
+      let links: { usageUrl: string; topUpUrl: string } | undefined
+      try {
+        if (typeof account.getState === 'function') {
+          const state = await account.getState()
+          links = state.links
+          if (state.status === 'signed-out') return { status: 'signed-out', links }
+        }
+      } catch {
+        return { status: 'failed' }
+      }
+      const client = {
+        version: accountClientVersion(),
+        locale: 'zh-CN',
+        timezoneOffsetSeconds: -new Date().getTimezoneOffset() * 60,
+      }
+      let balance = await account.getBalance(client)
+      if (balance === null) {
+        // The grant can still be settling right after launch; one short retry
+        // closes that race without showing a false "not signed in" state.
+        await new Promise((resolve) => setTimeout(resolve, 800))
+        balance = await account.getBalance(client)
+      }
+      return balance === null ? { status: 'pending', links } : { ...balance, links }
+    },
   })
 
   const stateReady = loadStateFile(state).then(async (path) => {

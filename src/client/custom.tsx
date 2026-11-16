@@ -14,25 +14,19 @@ import * as React from 'react'
 import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ThemeRuntime } from '@deepseek-ai/dsh-client-ui-theme/client'
 import type { Context } from '@deepseek-ai/cordis'
-import { DEFAULT_CONFIG, type BgFxPreset, type BgStrength, type ConversationSearchItem, type ConversationSearchKind, type CredentialStorage, type CustomPluginConfig, type FolderNode, type PromptItem, type TimelineItem, type UsageRow } from '../protocol.ts'
+import { DEFAULT_CONFIG, type BackupImportMode, type BackupImportPreview, type BgFxPreset, type BgStrength, type ConversationSearchItem, type ConversationSearchKind, type CustomPluginConfig, type FolderNode, type PromptItem, type TimelineItem, type UsageRow } from '../protocol.ts'
 import { createUsageRow, dayKey, mergeUsageRow } from '../usage.ts'
-import { DEEPSEEK_PRICING_CHECKED_ON, DEEPSEEK_PRICING_SOURCE_URL, estimateUsageCostCny, usageCostBreakdown } from '../pricing.ts'
+import { DEEPSEEK_PRICING_CHECKED_ON, DEEPSEEK_PRICING_NOTE, DEEPSEEK_PRICING_SOURCE_URL, estimateUsageCostCny, usageCostBreakdown } from '../pricing.ts'
 import { appearanceTokenKey, BACKDROP_ALPHA_BASE, BACKDROP_ALPHA_LAYER1, BACKDROP_ALPHA_SIDEBAR, DARK_CANVAS_LIGHTNESS, hexToRgb, PALETTE, toDarkRamp } from './palette.ts'
-import { bgLayerScope, bgLayerTint, decideBgFxLayer, mountBgLayer, pickColumnHost, swapBgRenderer, unmountBgLayer, type BgFxCaps, type BgFxVerdict, type BgLayerDocLike, type ColumnHostCandidate } from './bg-layer.ts'
+import { BG_LAYER_ID, bgLayerScope, bgLayerTint, decideBgFxLayer, mountBgLayer, pickColumnHost, swapBgRenderer, unmountBgLayer, type BgFxCaps, type BgFxVerdict, type BgLayerDocLike, type ColumnHostCandidate } from './bg-layer.ts'
 import { focusRectFor, type BgFocusRect } from './bg-focus.ts'
 import { createAsciiBackdrop, resolveAsciiPreset, type AsciiBackdrop, type AsciiDocLike, type AsciiHostLike, type AsciiWinLike } from './bg-ascii.ts'
 import { createShaderBackdrop, resolveShaderStyle, type ShaderBackdrop, type ShaderDocLike, type ShaderHostLike, type ShaderWinLike } from './bg-shader.ts'
 import {
-  BG_PARAM_META,
   BG_PARAM_SAVE_MS,
-  BG_STRENGTH_META,
   asciiParamsFromCfg,
   createDebouncedSaver,
-  effectiveParam,
-  panelParamKeys,
-  paramRange,
   presetForTier,
-  presetStillNote,
   resetBgParams,
   selectAppearanceSlice,
   setParamInCfg,
@@ -40,7 +34,6 @@ import {
   shaderParamsFromCfg,
   strengthFromCfg,
   tierFromCfg,
-  tierPresets,
   type BgParamKey,
   type BgTier,
 } from './bg-params.ts'
@@ -65,8 +58,14 @@ import { mermaidLiveUrl } from './mermaid-url.ts'
 import { mermaidCodeKey, reuseTimelineItems } from './timeline-diff.ts'
 import { renderMermaid } from './mermaid-render.ts'
 import { createMermaidScanner } from './mermaid-scan.ts'
-import { COMPOSER_CLEARANCE, panelFrame, pickComposerTop, type PanelBox, type PanelFrame, type PanelSize } from './panel-bounds.ts'
 import { STATIC_CSS } from './styles.ts'
+import { Dialog, Popover, ToastStack } from './ui/overlays.tsx'
+import { AppearanceControls } from './ui/appearance-controls.tsx'
+import { Badge, Button, Card, EmptyState, Field, IconButton, Kbd, Segmented, Spinner, Switch } from './ui/primitives.tsx'
+import { filterCommands, groupCommands, loadRecent, recentCommands, recordRecent, saveRecent, type CommandGroup, type PaletteCommand } from './ui/command-model.ts'
+import { uniqueIds } from './ui/index-bridge.ts'
+import { allTags, filterPrompts, mergePromptImport, normalizeTags, sortPrompts, validatePromptDraft, type PromptImportMode, type PromptSort } from './ui/prompt-model.ts'
+import { addFolder as addFolderNode, cloneFolders, deleteFolder as deleteFolderNode, filterFolders, findFolder, folderCount, moveFolder as moveFolderNode, moveFolderOrder, renameFolder as renameFolderNode } from './ui/folders-model.ts'
 
 /** Minimal input-state face the input dock owner provides. */
 interface InputStateLike {
@@ -152,10 +151,6 @@ interface Store {
   folders: FolderNode[]
   prompts: PromptItem[]
   stars: Record<string, Record<string, boolean>>
-  apiKey: string
-  apiKeyDirty: boolean
-  apiKeyConfigured: boolean
-  credentialStorage: CredentialStorage
   usage: Record<string, Record<string, UsageRow>>
   sessionId: string | null
   turns: { sessionId: string; items: TimelineItem[] } | null
@@ -165,25 +160,31 @@ interface Store {
   turnsBySeq: Map<number, TimelineItem> | null
   anchors: Map<number, { el: HTMLElement; turn: TurnLocationLike | null }>
   panelOpen: boolean
-  panelTab: string
-  panelPos: { x: number; y: number } | null
+  /** Section shown by the settings-page hub (appearance/folders/prompts/…). */
+  settingsSection: string
+  /** Host session/workspace snapshots mirrored by the always-mounted overlay,
+   *  so the settings page works even when its slot receives no hooks. */
+  sessionIndex: SessionListLike | null
+  workspaceIndex: WorkspaceListLike | null
+  /** True while the host settings page (which hosts our hub) is mounted. */
+  settingsSurfaceOpen: boolean
   foldersOpen: boolean
   folderAdd: string | null
   folderWsPick: string | null
   dragFolder: string | null
   dropHint: { id: string; zone: string } | null
-  promptOpen: { x: number; y: number } | null
+  promptOpen: boolean
   promptQuery: string
   balanceOpen: boolean
   batchModal: boolean
   mermaidModal: { title: string; codes: string[]; index: number } | null
-  quoteSel: { text: string; x: number; y: number } | null
   ask: { title: string; value: string; cb: (text: string) => void; allowEmpty?: boolean } | null
   confirmAsk: { message: string; cb: (ok: boolean) => void } | null
   toasts: Array<{ id: number; text: string; kind: string; action: { label: string; run: () => void } | null }>
   booted: boolean
   dark: boolean
   balance: Record<string, unknown> | null
+  balanceUpdatedAt: number | null
   exporting: boolean
   usageRange: 7 | 30 | 90
   templatePrompt: PromptItem | null
@@ -197,7 +198,10 @@ interface Store {
 const NEUTRAL_TOKENS: Record<string, { light: string; dark: string }> = {
   '--dsw-alias-bg-base': { light: 'rgba(248,249,251,.5)', dark: 'rgba(15,17,23,.5)' },
   '--dsw-alias-bg-layer-1': { light: 'rgba(255,255,255,.58)', dark: 'rgba(22,25,32,.58)' },
-  '--dsw-alias-bg-layer-2': { light: 'rgba(242,244,247,.66)', dark: 'rgba(28,31,40,.66)' },
+  // The shell's settings dialog paints itself with layer-2; keeping it opaque
+  // is what stops the conversation text showing through the settings page
+  // whenever no page background installed the backdrop token set.
+  '--dsw-alias-bg-layer-2': { light: '#f2f4f7', dark: '#1c1f28' },
   '--dsw-alias-bg-overlay': { light: 'rgba(255,255,255,.78)', dark: 'rgba(18,21,28,.78)' },
   '--dsw-specific-sidebar-fill': { light: 'rgba(245,247,250,.56)', dark: 'rgba(13,15,21,.56)' },
 }
@@ -222,23 +226,86 @@ const NEUTRAL_BACKDROP_TOKENS: Record<string, { light: string; dark: string }> =
 }
 
 /** SVG displacement map + filter for the liquid glass (single-channel, no color dispersion). */
-const LG_MAP =
+/** Coarse SVG map used only when a canvas cannot be created. */
+const LG_MAP_FALLBACK =
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
   + '<defs><linearGradient id="r" x1="100%" y1="0%" x2="0%" y2="0%"><stop offset="0%" stop-color="#0000"/><stop offset="100%" stop-color="red"/></linearGradient>'
-  + '<linearGradient id="b" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="#0000"/><stop offset="100%" stop-color="blue"/></linearGradient></defs>'
+  + '<linearGradient id="g" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="#0000"/><stop offset="100%" stop-color="lime"/></linearGradient></defs>'
   + '<rect width="100" height="100" fill="black"/>'
   + '<rect width="100" height="100" rx="16" fill="url(#r)"/>'
-  + '<rect width="100" height="100" rx="16" fill="url(#b)" style="mix-blend-mode: difference"/>'
-  + '<rect x="3.5" y="3.5" width="93" height="93" rx="16" fill="hsl(0 0% 50% / 0.93)" style="filter: blur(11px)"/></svg>'
-const LG_URI = 'data:image/svg+xml,' + encodeURIComponent(LG_MAP)
-const LG_FILTER =
-  '<filter id="vx-lg" x="0" y="0" width="100%" height="100%" color-interpolation-filters="sRGB">'
-  + '<feImage href="' + LG_URI + '" result="map" x="0" y="0" width="100%" height="100%" preserveAspectRatio="none"/>'
-  + '<feDisplacementMap in="SourceGraphic" in2="map" xChannelSelector="R" yChannelSelector="B" scale="-180" result="d"/>'
-  + '<feGaussianBlur in="d" stdDeviation="4"/></filter>'
+  + '<rect width="100" height="100" rx="16" fill="url(#g)" style="mix-blend-mode: difference"/>'
+  + '<rect x="4.5" y="4.5" width="91" height="91" rx="5" fill="hsl(0 0% 50%)" style="filter: blur(4px)"/></svg>'
 
-function ensureLiquidGlass(): void {
+/**
+ * Build the displacement map from the rounded-rect signed distance field:
+ * neutral grey in the middle, an outward normal in the bevel band, alpha 255
+ * (Chromium premultiplies transparent PNGs and turns the map into zeros).
+ * The map is square and stretched by feImage; objectBoundingBox units keep
+ * the bevel aligned on every card size.
+ */
+function liquidGlassMap(): string {
   const d = typeof document !== 'undefined' ? document : null
+  const fallback = 'data:image/svg+xml,' + encodeURIComponent(LG_MAP_FALLBACK)
+  if (d === null) return fallback
+  try {
+    const size = 384
+    const canvas = d.createElement('canvas')
+    canvas.width = size
+    canvas.height = size
+    const ctx = canvas.getContext('2d')
+    if (ctx === null) return fallback
+    const image = ctx.createImageData(size, size)
+    const half = size / 2
+    const radius = size * 0.045
+    const bevel = size * 0.06
+    const sdf = (x: number, y: number): number => {
+      const qx = Math.abs(x) - (half - radius)
+      const qy = Math.abs(y) - (half - radius)
+      return Math.hypot(Math.max(qx, 0), Math.max(qy, 0)) + Math.min(Math.max(qx, qy), 0) - radius
+    }
+    for (let py = 0; py < size; py++) {
+      for (let px = 0; px < size; px++) {
+        const x = px + 0.5 - half
+        const y = py + 0.5 - half
+        // sd is negative inside; t runs 0 in the flat centre to 1 at the edge.
+        const t = Math.max(0, Math.min(1, 1 + sdf(x, y) / bevel))
+        let r = 128
+        let g = 128
+        if (t > 0) {
+          const dx = sdf(x + 0.75, y) - sdf(x - 0.75, y)
+          const dy = sdf(x, y + 0.75) - sdf(x, y - 0.75)
+          const length = Math.hypot(dx, dy) || 1
+          const amount = 0.5 * Math.pow(t, 1.6)
+          r = Math.round(128 + (dx / length) * amount * 127)
+          g = Math.round(128 + (dy / length) * amount * 127)
+        }
+        const i = (py * size + px) * 4
+        image.data[i] = r
+        image.data[i + 1] = g
+        image.data[i + 2] = 128
+        image.data[i + 3] = 255
+      }
+    }
+    ctx.putImageData(image, 0, 0)
+    return canvas.toDataURL('image/png')
+  } catch {
+    return fallback
+  }
+}
+
+function liquidGlassFilter(map: string): string {
+  // objectBoundingBox units keep the map aligned on every card size; the
+  // percentage form only refracted the bottom/right edge in Chromium. The
+  // filter region reaches past the box so the rim can sample the mirrored
+  // backdrop, and feMerge outputs only the displacement (never the map).
+  return '<filter id="vx-lg" x="-0.25" y="-0.25" width="1.5" height="1.5" primitiveUnits="objectBoundingBox" color-interpolation-filters="sRGB">'
+    + '<feImage href="' + map + '" result="map" x="0" y="0" width="1" height="1" preserveAspectRatio="none"/>'
+    + '<feDisplacementMap in="SourceGraphic" in2="map" xChannelSelector="R" yChannelSelector="G" scale="0.18" result="disp"/>'
+    + '<feMerge><feMergeNode in="disp"/></feMerge></filter>'
+}
+
+function ensureLiquidGlass(target?: Document): void {
+  const d = target ?? (typeof document !== 'undefined' ? document : null)
   if (d === null || d.getElementById('vx-lg-filter') !== null) return
   try {
     const svg = d.createElementNS('http://www.w3.org/2000/svg', 'svg')
@@ -246,7 +313,7 @@ function ensureLiquidGlass(): void {
     svg.setAttribute('width', '0')
     svg.setAttribute('height', '0')
     svg.setAttribute('style', 'position:absolute;width:0;height:0;overflow:hidden')
-    svg.innerHTML = LG_FILTER
+    svg.innerHTML = liquidGlassFilter(liquidGlassMap())
     d.documentElement.appendChild(svg)
   } catch (error) {
     apiDiagReport('ensureLiquidGlass: ' + String((error as Error)?.message ?? error))
@@ -290,7 +357,10 @@ export interface OverlayProps {
   useSessions: SnapshotSelectorHook<SessionListLike>
   useWorkspaces: SnapshotSelectorHook<WorkspaceListLike>
 }
-export interface QuoteDockProps extends SessionScopedProps {
+/** Bridges the host's input actions into `insertDraft` so prompts and the
+ *  command palette can write into the composer. Quote selection lives in DSH
+ *  itself now, so this no longer owns a selection popup. */
+export interface InputBridgeProps extends SessionScopedProps {
   input: InputStateLike
   inputActions: InputActionsLike
 }
@@ -309,35 +379,33 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     folders: [],
     prompts: [],
     stars: {},
-    apiKey: '',
-    apiKeyDirty: false,
-    apiKeyConfigured: false,
-    credentialStorage: 'none',
     usage: {},
     sessionId: null,
     turns: null,
     turnsBySeq: null,
     anchors: new Map(),
     panelOpen: false,
-    panelTab: 'look',
-    panelPos: null,
+    settingsSection: 'appearance',
+    sessionIndex: null,
+    workspaceIndex: null,
+    settingsSurfaceOpen: false,
     foldersOpen: false,
     folderAdd: null,
     folderWsPick: null,
     dragFolder: null,
     dropHint: null,
-    promptOpen: null,
+    promptOpen: false,
     promptQuery: '',
     balanceOpen: false,
     batchModal: false,
     mermaidModal: null,
-    quoteSel: null,
     ask: null,
     confirmAsk: null,
     toasts: [],
     booted: false,
     dark: false,
     balance: null,
+    balanceUpdatedAt: null,
     exporting: false,
     usageRange: 7,
     templatePrompt: null,
@@ -421,65 +489,21 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     }, [])
     return reduced
   }
-  const DIALOG_FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
-  /**
-   * Modal semantics for the six overlays: focus enters the panel, Tab wraps,
-   * Escape closes, and closing restores the element that opened it.
-   */
-  function useDialogFocus(onClose: () => void): React.RefObject<HTMLDivElement> {
-    const ref = React.useRef<HTMLDivElement>(null)
-    const closeRef = React.useRef(onClose)
-    closeRef.current = onClose
-    React.useEffect(() => {
-      const node = ref.current
-      if (node === null) return
-      const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null
-      const focusables = (): HTMLElement[] => Array.from(node.querySelectorAll<HTMLElement>(DIALOG_FOCUSABLE))
-        .filter((el) => el.getClientRects().length > 0)
-      if (!node.contains(document.activeElement)) {
-        const first = focusables()[0]
-        ;(first ?? node).focus()
-      }
-      const onKeyDown = (event: KeyboardEvent): void => {
-        if (event.key === 'Escape') {
-          event.preventDefault()
-          event.stopPropagation()
-          closeRef.current()
-          return
-        }
-        if (event.key !== 'Tab') return
-        const items = focusables()
-        if (items.length === 0) {
-          event.preventDefault()
-          node.focus()
-          return
-        }
-        const first = items[0]
-        const last = items[items.length - 1]
-        const active = document.activeElement
-        if (event.shiftKey && (active === first || active === node)) {
-          event.preventDefault()
-          last.focus()
-        } else if (!event.shiftKey && active === last) {
-          event.preventDefault()
-          first.focus()
-        }
-      }
-      node.addEventListener('keydown', onKeyDown)
-      return () => {
-        node.removeEventListener('keydown', onKeyDown)
-        if (previous !== null && previous.isConnected) {
-          try { previous.focus() } catch { /* opener is gone */ }
-        }
-      }
-    }, [])
-    return ref
-  }
   function useSessionsSafe(props: { useSessions: OverlayProps['useSessions'] }): SessionListLike | null {
     try { return props.useSessions(st => st) } catch { return null }
   }
   function useWorkspacesSafe(props: { useWorkspaces: OverlayProps['useWorkspaces'] }): WorkspaceListLike | null {
     try { return props.useWorkspaces(st => st) } catch { return null }
+  }
+  const EMPTY_SESSION_INDEX: SessionListLike = { ids: [], byId: {}, phase: 'pending' }
+  const EMPTY_WORKSPACE_INDEX: WorkspaceListLike = { items: [], state: 'idle' }
+  /** Snapshot hooks backed by the overlay's mirrored indexes; safe to call
+   *  from settings.section, which may not receive the product slot hooks. */
+  function useBridgedSessions<T>(selector: (state: SessionListLike) => T, equal?: (a: T, b: T) => boolean): T {
+    return useSSelector((state) => selector(state.sessionIndex ?? EMPTY_SESSION_INDEX), equal)
+  }
+  function useBridgedWorkspaces<T>(selector: (state: WorkspaceListLike) => T, equal?: (a: T, b: T) => boolean): T {
+    return useSSelector((state) => selector(state.workspaceIndex ?? EMPTY_WORKSPACE_INDEX), equal)
   }
   /**
    * Follow the Session the conversation is showing. The 0.1.7 session list
@@ -488,7 +512,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
    * `sessionId` prop that every session-scoped slot entry receives.
    *
    * Several entries carry it at once (two header actions, the utilities entry,
-   * the quote dock, and one tail entry per turn), and a turn-level entry can
+   * the input bridge, and one tail entry per turn), and a turn-level entry can
    * unmount while the same Session stays open. Only the LAST mounted holder may
    * clear the identity, otherwise the rail would go blank under the surviving
    * entries, whose props never change and so never re-run their effect.
@@ -536,7 +560,6 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     star: [['path', { d: 'M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z' }]],
     copy: [['rect', { x: 9, y: 9, width: 13, height: 13, rx: 2 }], ['path', { d: 'M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1' }]],
     check: [['polyline', { points: '20 6 9 17 4 12' }]],
-    quote: [['path', { d: 'M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z' }]],
     search: [['circle', { cx: 11, cy: 11, r: 8 }], ['line', { x1: 21, y1: 21, x2: 16.65, y2: 16.65 }]],
     trash: [['polyline', { points: '3 6 5 6 21 6' }], ['path', { d: 'M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2' }], ['line', { x1: 10, y1: 11, x2: 10, y2: 17 }], ['line', { x1: 14, y1: 11, x2: 14, y2: 17 }]],
     plus: [['line', { x1: 12, y1: 5, x2: 12, y2: 19 }], ['line', { x1: 5, y1: 12, x2: 19, y2: 12 }]],
@@ -550,6 +573,9 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     flower: [['circle', { cx: 12, cy: 12, r: 3 }], ['circle', { cx: 12, cy: 4.5, r: 2.1 }], ['circle', { cx: 18.5, cy: 8.3, r: 2.1 }], ['circle', { cx: 16, cy: 15.7, r: 2.1 }], ['circle', { cx: 8, cy: 15.7, r: 2.1 }], ['circle', { cx: 5.5, cy: 8.3, r: 2.1 }]],
     minimize: [['polyline', { points: '4 14 10 14 10 20' }], ['polyline', { points: '20 10 14 10 14 4' }], ['line', { x1: 14, y1: 10, x2: 21, y2: 3 }], ['line', { x1: 3, y1: 21, x2: 10, y2: 14 }]],
     list: [['line', { x1: 8, y1: 6, x2: 21, y2: 6 }], ['line', { x1: 8, y1: 12, x2: 21, y2: 12 }], ['line', { x1: 8, y1: 18, x2: 21, y2: 18 }], ['line', { x1: 3, y1: 6, x2: 3.01, y2: 6 }], ['line', { x1: 3, y1: 12, x2: 3.01, y2: 12 }], ['line', { x1: 3, y1: 18, x2: 3.01, y2: 18 }]],
+    pencil: [['path', { d: 'M12 20h9' }], ['path', { d: 'M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z' }]],
+    arrowUp: [['line', { x1: 12, y1: 19, x2: 12, y2: 5 }], ['polyline', { points: '5 12 12 5 19 12' }]],
+    arrowDown: [['line', { x1: 12, y1: 5, x2: 12, y2: 19 }], ['polyline', { points: '5 12 12 19 19 12' }]],
   }
 
   function Icon(props: { n: string; size?: number; filled?: boolean; sw?: number; cls?: string; style?: React.CSSProperties }): React.ReactElement {
@@ -580,12 +606,14 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
   function toast(text: string, kind?: string, action?: { label: string; run: () => void } | null): void {
     const id = Date.now() + Math.floor(Math.random() * 9999)
     const item = { id, text, kind: kind ?? 'info', action: action ?? null }
-    S.toasts = S.toasts.concat(item).slice(-4)
+    // Auto-dismiss timing and hover-pause live in ToastStack; the store only
+    // holds the visible queue.
+    S.toasts = S.toasts.concat(item).slice(-3)
     setS({ toasts: S.toasts })
-    void new Promise<void>((resolve) => setTimeout(resolve, kind === 'error' ? 6000 : 3800)).then(() => {
-      S.toasts = S.toasts.filter((t) => t.id !== id)
-      setS({ toasts: S.toasts })
-    }).catch(() => {})
+  }
+  function dismissToast(id: number): void {
+    S.toasts = S.toasts.filter((item) => item.id !== id)
+    setS({ toasts: S.toasts })
   }
 
   function askText(title: string, value: string, cb: (text: string) => void, allowEmpty = false): void {
@@ -610,11 +638,31 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
   // Left null after a dispose so the next repaint registers again.
   let lastTokenKey: string | null = null
   let lastTokenTheme: ThemeRuntime | undefined
+  // A page renderer that failed to append on the first paint (the shell can
+  // still be settling) is retried a few times instead of staying absent until
+  // the next slider tick — that gap is what read as "the effect sometimes
+  // works". The retries stop once the owned node exists.
+  let bgLayerHealTimer: ReturnType<typeof setTimeout> | null = null
+  let bgLayerHealAttempts = 0
+  function healBackgroundLayer(): void {
+    const d = typeof document !== 'undefined' ? document : null
+    if (d === null) return
+    if (d.getElementById(BG_LAYER_ID) !== null) { bgLayerHealAttempts = 0; return }
+    if (bgLayerHealTimer !== null || bgLayerHealAttempts >= 3) return
+    bgLayerHealAttempts++
+    bgLayerHealTimer = setTimeout(() => {
+      bgLayerHealTimer = null
+      if (disposed) return
+      applyAppearance()
+      healBackgroundLayer()
+    }, 160 * bgLayerHealAttempts)
+  }
   function applyAppearance(): void {
     const cfg = S.cfg
     const dEl = typeof document !== 'undefined' ? document.documentElement : null
     if (dEl !== null) {
       try { dEl.classList.toggle('vx-liquid', cfg.glass === true && cfg.glassMode === 'liquid') } catch { /* classList unavailable */ }
+      try { dEl.classList.toggle('vx-glass-off', cfg.glass !== true) } catch { /* classList unavailable */ }
     }
     const theme = C.get('theme') as ThemeRuntime | undefined
     // The layer verdict is computed before the token override: a layer behind
@@ -629,6 +677,13 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     // column canvas owns the effect.
     const conversationScope = bgLayerScope(cfg.bgFx, cfg.bgFxPreset) === 'conversation'
     const pageVerdict: BgFxVerdict = conversationScope ? { mount: false, reason: 'disabled' } : bgVerdict
+    // Only a page-level renderer sits behind the glass surfaces. Ocean's
+    // column canvas must not switch the page material to the live variant:
+    // there is no page texture behind the header/settings, and the class would
+    // claim a layer that is not there.
+    if (dEl !== null) {
+      try { dEl.classList.toggle('vx-bg-live', pageVerdict.mount) } catch { /* classList unavailable */ }
+    }
     // A mounted page renderer is behind every shell surface, and the stacked
     // translucent surfaces multiply the ink away (see BACKDROP_ALPHA_*). The
     // backdrop token set is what makes the layer visible at all — with or
@@ -678,7 +733,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
           tokenDisposer = theme.overrideTokens('custom-plugin-appearance', {
             '--dsw-alias-bg-base': { light: mk(base, 0.5), dark: mk(darkBase, 0.5) },
             '--dsw-alias-bg-layer-1': { light: mk(tab, 0.6), dark: mk(darkTab, 0.6) },
-            '--dsw-alias-bg-layer-2': { light: mk(shade(base, 0.96), 0.7), dark: mk(shade(darkBase, 0.94), 0.7) },
+            '--dsw-alias-bg-layer-2': { light: shade(base, 0.96), dark: shade(darkBase, 0.94) },
             '--dsw-alias-bg-overlay': { light: mk(shade(base, 1.04), 0.8), dark: mk(shade(darkBase, 0.86), 0.8) },
             '--dsw-specific-sidebar-fill': { light: mk(tab, 0.62), dark: mk(darkTab, 0.62) },
           })
@@ -717,11 +772,19 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       const liquidGlobal = cfg.glass === true && cfg.glassMode === 'liquid'
         && typeof CSS !== 'undefined' && typeof CSS.supports === 'function'
         && CSS.supports('backdrop-filter', 'url(#vx-lg)')
-      const filter = liquidGlobal ? 'url(#vx-lg) blur(2.5px) saturate(1.12)' : 'blur(8px) saturate(1.2)'
+      const bgLive = pageVerdict.mount
+      const liquidFilter = bgLive
+        ? 'url(#vx-lg) blur(9px) saturate(1.5) contrast(1.25) brightness(1.03)'
+        : 'url(#vx-lg) blur(10px) saturate(1.45) brightness(1.03)'
+      const frostFilter = bgLive ? 'blur(12px) saturate(1.3) contrast(1.25)' : 'blur(8px) saturate(1.2)'
+      const filter = liquidGlobal ? liquidFilter : frostFilter
       dyn += ` [role='dialog'], [role='menu'], [role='tooltip'], [role='listbox'], [data-radix-popper-content-wrapper] { backdrop-filter: ${filter} !important; -webkit-backdrop-filter: ${filter} !important; }`
     }
     setDynCss(dyn)
     syncBackgroundLayer(pageVerdict)
+    if (pageVerdict.mount && typeof document !== 'undefined' && document.getElementById(BG_LAYER_ID) === null) {
+      healBackgroundLayer()
+    }
   }
 
   // The 2D-canvas and WebGL probes create throwaway contexts; cache the
@@ -1036,6 +1099,19 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
   // defaults would replace stored folders/prompts/stars with factory
   // empties, so saveCfg refuses to POST until this is true.
   let cfgLoaded = false
+  // Cross-window appearance sync: the host settings page can be rendered in a
+  // separate webview with its own plugin instance and store. Without this, a
+  // glass/background change made there never reaches the main window, and the
+  // main instance's quit-save reverts it on the next launch.
+  const stateChannel = typeof BroadcastChannel === 'undefined' ? null : new BroadcastChannel('vx-custom-plugin-state')
+  stateChannel?.addEventListener('message', (event) => {
+    if (disposed) return
+    const data = event.data as { type?: unknown; cfg?: unknown } | null
+    if (data === null || typeof data !== 'object' || data.type !== 'cfg') return
+    if (data.cfg === null || typeof data.cfg !== 'object') return
+    S.cfg = { ...S.cfg, ...(data.cfg as Partial<CustomPluginConfig>) }
+    setS({})
+  })
   async function loadCfg(): Promise<void> {
     if (disposed) return
     if (loadRetryTimer !== null) {
@@ -1063,8 +1139,6 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
         if (Array.isArray(data.folders)) S.folders = data.folders
         if (Array.isArray(data.prompts)) S.prompts = data.prompts
         if (data.stars !== undefined && data.stars !== null && typeof data.stars === 'object') S.stars = data.stars
-        if (typeof data.apiKeyConfigured === 'boolean') S.apiKeyConfigured = data.apiKeyConfigured
-        if (data.credentialStorage === 'system' || data.credentialStorage === 'legacy-state' || data.credentialStorage === 'environment' || data.credentialStorage === 'dsh' || data.credentialStorage === 'none') S.credentialStorage = data.credentialStorage
         if (data.usage !== undefined && data.usage !== null && typeof data.usage === 'object') S.usage = data.usage
         loadCfgAttempt = 0
         cfgLoaded = true
@@ -1119,24 +1193,17 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     const cfg = { ...S.cfg }
     delete (cfg as Record<string, unknown>).clouds
     delete (cfg as Record<string, unknown>).wind
-    const keyDirty = S.apiKeyDirty
-    const edit = { cfg, folders: S.folders, prompts: S.prompts, stars: S.stars, ...(keyDirty ? { apiKey: S.apiKey } : {}) }
+    const edit = { cfg, folders: S.folders, prompts: S.prompts, stars: S.stars }
     void apiStateSave(edit).then((result) => {
       if (result.ok !== true) {
-        // Saving used to stay quiet unless an API key was involved, so a
-        // rejected write looked like a toggle that "worked". Make it loud.
+        // Saving used to stay quiet, so a rejected write looked like a toggle
+        // that "worked". Make it loud.
         const message = result.error ?? '设置保存失败'
         apiDiagReport('saveCfg: ' + message)
         toast(message, 'error')
         return
       }
-      if (keyDirty && S.apiKeyDirty && S.apiKey === (edit.apiKey ?? '')) {
-        setS({
-          apiKeyDirty: false,
-          apiKeyConfigured: result.apiKeyConfigured ?? S.apiKey.trim() !== '',
-          credentialStorage: result.credentialStorage ?? S.credentialStorage,
-        })
-      }
+      try { stateChannel?.postMessage({ type: 'cfg', cfg: { ...S.cfg } }) } catch { /* channel closed */ }
     }).catch((error) => {
       const message = String((error as Error)?.message ?? error)
       apiDiagReport('saveCfg: ' + message)
@@ -1666,7 +1733,6 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     try {
       const result = await apiBalanceGet()
       S.balance = result as unknown as Record<string, unknown>
-      S.apiKeyConfigured = result.keyConfigured === true
       balanceRetries = 0
       // The route also carries the host's live usage ledger; fold today's row
       // in so the 「今日 N 次」 badge refreshes together with the figure.
@@ -1674,24 +1740,24 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       if (usageToday !== undefined && usageToday !== null && typeof usageToday === 'object') {
         S.usage = { ...S.usage }
         S.usage[dayKey()] = usageToday as Store['usage'][string]
-        setS({ balance: S.balance, usage: S.usage, apiKeyConfigured: S.apiKeyConfigured })
+        setS({ balance: S.balance, usage: S.usage, balanceUpdatedAt: Date.now() })
       } else {
-        setS({ balance: S.balance, apiKeyConfigured: S.apiKeyConfigured })
+        setS({ balance: S.balance, balanceUpdatedAt: Date.now() })
       }
     } catch (error) {
-      // Keep the configured flag: a route-level failure with a key present is
-      // "额度" (retry-worthy), not "no key" (which would read as an estimate).
-      S.balance = { ok: false, keyConfigured: S.apiKeyConfigured === true, error: String((error as Error)?.message ?? error) }
+      S.balance = { ok: false, error: String((error as Error)?.message ?? error) }
       setS({ balance: S.balance })
     }
     const failed = (S.balance as { ok?: boolean }).ok === false
-    const keyPresent = (S.balance as { keyConfigured?: boolean }).keyConfigured === true
-    if (failed && keyPresent && balanceRetries < 3) {
+    const accountPending = (S.balance as { accountPending?: boolean }).accountPending === true
+    const retryableError = typeof (S.balance as { accountError?: unknown }).accountError === 'string'
+      && (S.balance as { accountError: string }).accountError !== ''
+    if (failed && (accountPending || retryableError) && balanceRetries < 3) {
       balanceRetries++
       balanceRetryTimer = setTimeout(() => { balanceRetryTimer = null; void refreshBalance() }, balanceRetries === 1 ? 8000 : 30000)
     }
   }
-  async function refreshUsageScan(): Promise<void> {
+  async function refreshUsageScan(silent = false): Promise<void> {
     try {
       const result = await apiUsageScan()
       if (result.ok === true) {
@@ -1699,7 +1765,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
         const scanDay = result.day || dayKey()
         S.usage[scanDay] = result.usageToday as Store['usage'][string]
         setS({ usage: S.usage })
-        toast(`已扫描 ${scanDay} 会话日志（${String(result.scannedSessions)} 个活跃会话）`, 'info')
+        if (!silent) toast(`已扫描 ${scanDay} 会话日志（${String(result.scannedSessions)} 个活跃会话）`, 'info')
       } else {
         toast(result.error ?? '扫描失败', 'error')
       }
@@ -1725,45 +1791,40 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     if (vars.length > 0) {
       const values: Record<string, string> = {}
       for (const name of vars) values[name] = ''
-      setS({ templatePrompt: prompt, templateValues: values, promptOpen: null })
+      setS({ templatePrompt: prompt, templateValues: values, promptOpen: false })
       return
     }
     const ok = S.insertDraft !== null ? S.insertDraft(prompt.text, false) : false
     if (!ok) { toast('请在会话输入框中重试', 'error'); return }
     S.prompts = S.prompts.map((item) => item.id === prompt.id ? { ...item, useCount: (item.useCount ?? 0) + 1, lastUsedAt: Date.now() } : item)
-    setS({ prompts: S.prompts, promptOpen: null })
+    setS({ prompts: S.prompts, promptOpen: false })
     saveCfg()
     toast('已插入提示词: ' + prompt.name, 'info')
   }
 
-  function runExport(format: string): void {
-    if (S.sessionId === null) { toast('当前没有打开的会话', 'error'); return }
+  function runExport(format: string, signal?: AbortSignal): Promise<{ ok: boolean; fileName?: string; bytes?: number }> {
+    if (S.sessionId === null) { toast('当前没有打开的会话', 'error'); return Promise.resolve({ ok: false }) }
     setS({ exporting: true })
-    void apiExportRun(S.sessionId, format).then((result) => {
+    return apiExportRun(S.sessionId, format, signal).then((result) => {
       if (result.ok !== true) {
-        toast(result.error ?? '导出失败', 'error')
-        return
+        if (signal?.aborted !== true) toast(result.error ?? '导出失败', 'error')
+        return { ok: false }
       }
       try {
         downloadText(result.content, result.fileName, result.mime)
         toast('已导出 ' + result.fileName, 'info')
+        const bytes = typeof TextEncoder !== 'undefined'
+          ? new TextEncoder().encode(result.content).length
+          : result.content.length
+        return { ok: true, fileName: result.fileName, bytes }
       } catch (error) {
         toast('导出失败: ' + String((error as Error)?.message ?? error), 'error')
+        return { ok: false }
       }
-    }).catch((error) => toast('导出失败: ' + String((error as Error)?.message ?? error), 'error')).finally(() => setS({ exporting: false }))
-  }
-  function findFolder(arr: FolderNode[], id: string): FolderNode | null {
-    for (const f of arr) {
-      if (f.id === id) return f
-      const child = findFolder(f.children ?? [], id)
-      if (child !== null) return child
-    }
-    return null
-  }
-  function folderCount(node: FolderNode): number {
-    let n = (node.sessionIds ?? []).length + (node.workspaceIds ?? []).length
-    for (const child of node.children ?? []) n += folderCount(child)
-    return n
+    }).catch((error) => {
+      if (signal?.aborted !== true) toast('导出失败: ' + String((error as Error)?.message ?? error), 'error')
+      return { ok: false }
+    }).finally(() => setS({ exporting: false }))
   }
   /**
    * The `ctx.remote` namespaces this plugin calls, read fail-soft so a profile
@@ -1827,20 +1888,34 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
    * two-character label wrapped into a vertical stack beside the icon, so the
    * text renders only while the sidebar is wide; a host that passes no `wide`
    * keeps the label. */
+  const foldersAnchorRef: { current: HTMLElement | null } = { current: null }
+
   function FolderSidebarButton(props: { wide?: boolean }): React.ReactElement {
+    const open = useSSelector((state) => state.foldersOpen === true)
     return React.createElement('button', {
       className: 'vx-foot-btn',
       title: '项目文件夹',
-      onClick: () => setS({ foldersOpen: !S.foldersOpen, panelOpen: false, promptOpen: null, balanceOpen: false }),
+      'aria-haspopup': 'dialog',
+      'aria-expanded': open,
+      onClick: (event: React.MouseEvent<HTMLButtonElement>) => {
+        foldersAnchorRef.current = event.currentTarget
+        setS({ foldersOpen: !S.foldersOpen, panelOpen: false, promptOpen: false, balanceOpen: false })
+      },
     }, React.createElement(Icon, { n: 'folder', size: 15 }), props.wide === false ? null : React.createElement('span', { className: 'vx-foot-label' }, '项目'))
   }
 
   function HeaderPanelButton(props: SessionScopedProps): React.ReactElement {
     useViewedSession(props)
+    const open = useSSelector((state) => state.panelOpen === true)
     return React.createElement('button', {
       className: 'vx-header-btn',
-      title: '个性化中心',
-      onClick: () => setS({ panelOpen: !S.panelOpen, foldersOpen: false, promptOpen: null, balanceOpen: false }),
+      title: '个性化',
+      'aria-haspopup': 'dialog',
+      'aria-expanded': open,
+      onClick: (event: React.MouseEvent<HTMLButtonElement>) => {
+        panelAnchorRef.current = event.currentTarget
+        setS({ panelOpen: !S.panelOpen, foldersOpen: false, promptOpen: false, balanceOpen: false })
+      },
     }, React.createElement(Icon, { n: 'sliders', size: 13 }), React.createElement('span', null, '个性化'))
   }
 
@@ -2021,48 +2096,93 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     return React.createElement('span', { ref: anchorRef, 'data-vx-column-bg-anchor': '', style: { display: 'none' } })
   }
 
+  const promptAnchorRef: { current: HTMLElement | null } = { current: null }
+  const balanceAnchorRef: { current: HTMLElement | null } = { current: null }
+
   function PromptQuickButton(props: SessionScopedProps): React.ReactElement {
     useViewedSession(props)
+    const open = useSSelector((state) => state.promptOpen === true)
     return React.createElement('button', {
       className: 'vx-header-btn',
       title: '快速调用提示词',
-      onClick: (e: React.MouseEvent<HTMLButtonElement>) => {
-        // Same contract as the other header surfaces: click toggles, and
-        // opening one closes the others.
-        const open = S.promptOpen !== null
-        const r = e.currentTarget.getBoundingClientRect()
-        setS({ promptOpen: open ? null : { x: Math.max(8, r.left), y: r.bottom + 6 }, promptQuery: '', panelOpen: false, foldersOpen: false, balanceOpen: false })
+      'aria-haspopup': 'dialog',
+      'aria-expanded': open,
+      onClick: (event: React.MouseEvent<HTMLButtonElement>) => {
+        promptAnchorRef.current = event.currentTarget
+        setS({ promptOpen: !S.promptOpen, promptQuery: '', panelOpen: false, foldersOpen: false, balanceOpen: false })
       },
     }, React.createElement(Icon, { n: 'zap', size: 13 }), React.createElement('span', null, '提示词'))
   }
 
-  function PromptPopover(): React.ReactElement | null {
+  function PromptPopover(): React.ReactElement {
     const s = useS()
-    if (s.promptOpen === null) return null
-    const p = s.promptOpen
     const q = (s.promptQuery ?? '').toLowerCase()
     const list = s.prompts.filter((x) => q === '' || String(x.name ?? '').toLowerCase().includes(q) || String(x.text ?? '').toLowerCase().includes(q) || (x.tags ?? []).some((tag) => tag.toLowerCase().includes(q)))
       .sort((a, b) => Number(b.favorite === true) - Number(a.favorite === true) || (b.lastUsedAt ?? 0) - (a.lastUsedAt ?? 0))
-    return React.createElement('div', { className: 'vx-glass vx-prompt-pop', style: { left: p.x, top: p.y } },
+    const favorites = list.filter((item) => item.favorite === true)
+    const others = list.filter((item) => item.favorite !== true)
+    const row = (x: PromptItem): React.ReactElement => React.createElement('button', {
+      key: x.id,
+      type: 'button',
+      className: 'vx-prompt-row',
+      title: x.text,
+      onClick: () => insertPrompt(x),
+    },
+      React.createElement('span', { className: 'vx-prompt-row-name' }, x.name),
+      React.createElement('span', { className: 'vx-prompt-row-text' }, x.text),
+      (x.tags ?? []).length > 0
+        ? React.createElement('span', { className: 'vx-prompt-row-tags' }, (x.tags ?? []).map((tag) => `#${tag}`).join(' '))
+        : null,
+    )
+    const group = (label: string, items: PromptItem[]): React.ReactElement => React.createElement(React.Fragment, { key: label },
+      React.createElement('div', { className: 'vx-pop-group' }, label),
+      items.map(row),
+    )
+    return React.createElement(Popover, {
+      open: s.promptOpen === true,
+      anchor: promptAnchorRef,
+      onClose: () => setS({ promptOpen: false }),
+      ariaLabel: '提示词库',
+      width: 340,
+      maxHeight: 460,
+      align: 'start',
+      className: 'vx-prompt-pop',
+      initialFocus: 'none',
+    },
       React.createElement('div', { className: 'vx-pop-head' },
+        React.createElement(Icon, { n: 'zap', size: 13 }),
         React.createElement('span', null, '提示词库'),
-        React.createElement('button', { className: 'vx-chip', title: '关闭', 'aria-label': '关闭提示词面板', onClick: () => setS({ promptOpen: null }) }, React.createElement(Icon, { n: 'x', size: 12 })),
+        React.createElement('span', { className: 'vx-badge' }, String(list.length)),
+        React.createElement('span', { className: 'vx-flex1' }),
+        React.createElement(IconButton, {
+          label: '关闭提示词面板',
+          size: 'sm',
+          icon: React.createElement(Icon, { n: 'x', size: 12 }),
+          onClick: () => setS({ promptOpen: false }),
+        }),
       ),
-      React.createElement('div', { className: 'vx-row vx-pad-sm' },
+      React.createElement('div', { className: 'vx-pop-search' },
         React.createElement(Icon, { n: 'search', size: 13 }),
-        React.createElement('input', { className: 'vx-input', placeholder: '搜索提示词…', value: s.promptQuery, onChange: (e: React.ChangeEvent<HTMLInputElement>) => setS({ promptQuery: e.target.value }) }),
+        React.createElement('input', {
+          className: 'vx-input',
+          placeholder: '搜索名称、内容或标签…',
+          value: s.promptQuery,
+          autoFocus: true,
+          onChange: (event: React.ChangeEvent<HTMLInputElement>) => setS({ promptQuery: event.target.value }),
+        }),
       ),
-      React.createElement('div', { className: 'vx-list' },
-        list.length > 0
-          ? list.map((x) => React.createElement('button', {
-            key: x.id,
-            className: 'vx-list-item',
-            title: x.text,
-            onClick: () => insertPrompt(x),
-          },
-          React.createElement('div', { className: 'vx-prompt-title' }, x.name),
-          React.createElement('div', { className: 'vx-prompt-body' }, x.text)))
-          : React.createElement('div', { className: 'vx-muted vx-pad-sm' }, '暂无匹配提示词'),
+      React.createElement('div', { className: 'vx-pop-body' },
+        React.createElement('div', { className: 'vx-list vx-prompt-list' },
+          list.length === 0
+            ? React.createElement(EmptyState, { title: '暂无匹配提示词', hint: '在设置 → 提示词中新增，或换个关键词。' })
+            : React.createElement(React.Fragment, null,
+              favorites.length > 0 ? group('收藏', favorites) : null,
+              others.length > 0 ? group(favorites.length > 0 ? '最近使用' : '全部', others) : null,
+            ),
+        ),
+      ),
+      React.createElement('div', { className: 'vx-pop-foot' },
+        React.createElement(Button, { variant: 'ghost', size: 'sm', onClick: () => { setS({ promptOpen: false, settingsSection: 'prompts' }); openHostSettings('提示词') } }, '管理提示词'),
       ),
     )
   }
@@ -2104,52 +2224,238 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     const bal = (b?.ok === true && b.balance !== null && b.balance !== undefined)
       ? b.balance as { currency?: string, total?: string }
       : null
-    const keyConfigured = b?.ok === false && (b as { keyConfigured?: boolean }).keyConfigured === true
-    // With a working key the real balance shows as before; without one the
-    // pill falls back to the local cost estimate (today's tokens priced from
-    // the official tariff — no key, no network). '额度' keeps meaning "a key
-    // exists but the upstream call failed".
+    const accountPending = (b as { accountPending?: unknown } | null)?.accountPending === true
+    const accountSignedOut = (b as { accountSignedOut?: unknown } | null)?.accountSignedOut === true
+    const accountUnavailable = (b as { accountUnavailable?: unknown } | null)?.accountUnavailable === true
+    const accountError = typeof (b as { accountError?: unknown } | null)?.accountError === 'string'
+      ? (b as { accountError: string }).accountError
+      : null
+    // The official wallet balance comes from the DSH account; local usage is
+    // the fallback when signed out or while the account query settles.
     const balance = bal !== null
       ? ((bal.currency ?? 'CNY') === 'CNY' ? '¥' + (bal.total ?? '') : `${bal.total ?? ''} ${bal.currency ?? ''}`)
-      : (keyConfigured ? '额度' : b === null ? '额度…' : `≈¥${estimate.toFixed(2)}`)
-    const estimateTitle = `按本机 token 用量与官方价目表折算的估算值（${DEEPSEEK_PRICING_CHECKED_ON} 核对），非账号账单；配置 API Key 后显示真实余额`
-    const balanceError = keyConfigured && b?.ok === false ? String((b as { error?: unknown }).error ?? '未知错误') : null
+      : (accountPending || b === null ? '额度…' : `≈¥${estimate.toFixed(2)}`)
+    const estimateTitle = `按本机 token 用量与官方价目表折算的估算值（${DEEPSEEK_PRICING_CHECKED_ON} 核对），非账号账单；登录 DSH 账号后显示官方余额`
     const pillTitle = bal !== null ? undefined
-      : balanceError !== null ? `余额查询失败：${balanceError}（失败后会自动重试，也可在面板中手动刷新）`
+      : accountPending ? '账号余额加载中，稍后自动重试'
+      : accountSignedOut ? 'DSH 账号未登录；登录后显示官方余额，当前为本机费用估算'
+      : accountUnavailable ? '当前环境没有 DSH 账号余额服务，当前为本机费用估算'
+      : accountError !== null ? `账号余额读取失败：${accountError}（当前为本机费用估算）`
       : b === null ? undefined
       : estimateTitle
     // Same contract as the other header surfaces: click toggles, hover does
-    // nothing, and opening this closes the others.
-    const togglePanel = (): void => setS({ balanceOpen: !open, panelOpen: false, promptOpen: null, foldersOpen: false })
+    // nothing, and opening this closes the others. The panel itself renders
+    // from OverlayRoot (`.vx-root`); rendering it inside the header put it
+    // below the conversation content, where chat text painted over the card.
+    const togglePanel = (): void => setS({ balanceOpen: !open, panelOpen: false, promptOpen: false, foldersOpen: false })
     return React.createElement('span', { className: 'vx-balance-wrap' },
-      React.createElement('span', {
-        className: 'vx-balance-text' + (open ? ' vx-balance-open' : ''),
-        role: 'button',
-        tabIndex: 0,
+      React.createElement('button', {
+        type: 'button',
+        className: 'vx-header-btn vx-balance-text' + (open ? ' vx-balance-open' : ''),
         'aria-expanded': open,
         'aria-haspopup': 'dialog',
         title: open ? '再次点击收起面板' : '点击打开面板',
-        onClick: togglePanel,
-        onKeyDown: (e: React.KeyboardEvent) => {
-          if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault()
-            togglePanel()
-          }
+        onClick: (event: React.MouseEvent<HTMLButtonElement>) => {
+          balanceAnchorRef.current = event.currentTarget
+          togglePanel()
         },
       },
         React.createElement(Icon, { n: 'wallet', size: 13 }),
         React.createElement('span', { title: pillTitle }, balance),
         calls > 0 ? React.createElement('span', { className: 'vx-balance-today' }, `今日 ${calls} 次`) : null,
       ),
-      open
-        ? React.createElement('div', { className: 'vx-glass vx-balance-hover', role: 'dialog', 'aria-label': '额度面板' },
-          React.createElement(BalancePanelContent, null),
-        )
-        : null,
     )
   }
 
-  function UsageTable(): React.ReactElement {
+  /** Balance card at overlay level so it shares the prompt popover's surface
+   *  material and stacking, instead of sitting under the chat content. */
+  function BalancePopover(): React.ReactElement {
+    const open = useSSelector((state) => state.balanceOpen === true)
+    // Leave the composer visible: the old 600px cap reached over the input
+    // dock at 1280×822. Cap against the viewport instead of a fixed number.
+    const [maxHeight, setMaxHeight] = React.useState(500)
+    const [scanning, setScanning] = React.useState(false)
+    React.useEffect(() => {
+      if (!open || typeof window === 'undefined') return
+      const compute = (): void => setMaxHeight(Math.max(360, Math.min(600, window.innerHeight - 320)))
+      compute()
+      window.addEventListener('resize', compute)
+      return () => { window.removeEventListener('resize', compute) }
+    }, [open])
+    const scan = async (): Promise<void> => {
+      setScanning(true)
+      try { await refreshUsageScan() } finally { setScanning(false) }
+    }
+    // The live ledger only sees events while this host runs, and a title
+    // generation can land before its own request/context. The first time the
+    // card is opened, replay today's logs when the ledger is empty or still
+    // carries an unknown-model row, so the numbers are not silently partial.
+    const autoScanned = React.useRef(false)
+    React.useEffect(() => {
+      if (!open || autoScanned.current) return
+      autoScanned.current = true
+      const today = Object.keys(S.usage[dayKey()] ?? {})
+      if (today.length === 0 || today.includes('unknown')) void refreshUsageScan(true)
+    }, [open])
+    return React.createElement(Popover, {
+      open,
+      anchor: balanceAnchorRef,
+      onClose: () => setS({ balanceOpen: false }),
+      ariaLabel: '额度与用量',
+      width: 380,
+      maxHeight,
+      align: 'end',
+      className: 'vx-balance-pop',
+    },
+      React.createElement('div', { className: 'vx-pop-head' },
+        React.createElement(Icon, { n: 'wallet', size: 13 }),
+        React.createElement('span', null, '额度与用量'),
+        React.createElement('span', { className: 'vx-flex1' }),
+        React.createElement(IconButton, {
+          label: '关闭额度面板',
+          size: 'sm',
+          icon: React.createElement(Icon, { n: 'x', size: 12 }),
+          onClick: () => setS({ balanceOpen: false }),
+        }),
+      ),
+      React.createElement('div', { className: 'vx-pop-body' },
+        React.createElement(BalanceSummary, null),
+      ),
+      React.createElement('div', { className: 'vx-pop-foot' },
+        React.createElement(Button, {
+          variant: 'ghost',
+          size: 'sm',
+          icon: React.createElement(Icon, { n: 'refresh', size: 12 }),
+          onClick: () => { void refreshBalance() },
+        }, '刷新'),
+        React.createElement(Button, {
+          variant: 'ghost',
+          size: 'sm',
+          icon: React.createElement(Icon, { n: 'refresh', size: 12, cls: scanning ? 'vx-icon-spin' : '' }),
+          onClick: () => { void scan() },
+          disabled: scanning,
+        }, scanning ? '扫描中…' : '扫描日志'),
+        React.createElement('span', { className: 'vx-flex1' }),
+        React.createElement(Button, {
+          variant: 'ghost',
+          size: 'sm',
+          onClick: () => {
+            setS({ balanceOpen: false, settingsSection: 'usage' })
+            openHostSettings('用量与额度')
+          },
+        }, '完整用量'),
+      ),
+    )
+  }
+
+  /** One-screen summary: today's totals, the per-model table and the monthly
+   *  budget. Ranges, CSV, balance details and the API key stay in the settings
+   *  hub, where the same card has room for them. */
+  function BalanceSummary(): React.ReactElement {
+    const s = useS()
+    const day = s.usage[dayKey()] ?? {}
+    const models = Object.keys(day)
+    const calls = models.reduce((n, model) => n + (day[model].calls ?? 0), 0)
+    const tokens = models.reduce((n, model) => n + (day[model].in ?? 0) + (day[model].out ?? 0) + (day[model].cacheIn ?? 0) + (day[model].cacheW ?? 0), 0)
+    const cost = models.reduce((n, model) => n + estimateUsageCostCny(day[model], model), 0)
+    const b = s.balance
+    const accountPending = (b as { accountPending?: unknown } | null)?.accountPending === true
+    const accountSignedOut = (b as { accountSignedOut?: unknown } | null)?.accountSignedOut === true
+    const accountUnavailable = (b as { accountUnavailable?: unknown } | null)?.accountUnavailable === true
+    const accountError = typeof (b as { accountError?: unknown } | null)?.accountError === 'string'
+      ? (b as { accountError: string }).accountError
+      : null
+    const balanceOk = b?.ok === true && b.balance !== null && b.balance !== undefined
+    const info = balanceOk ? b.balance as { currency?: string, total?: string, granted?: string, toppedUp?: string } : null
+    const sym = info === null ? '' : (info.currency ?? 'CNY') === 'CNY' ? '¥' : `${info.currency ?? ''} `
+    const links = (b as { links?: { usageUrl?: string, topUpUrl?: string } } | null)?.links
+    const empty = info !== null && Number(info.total ?? '0') <= 0
+    return React.createElement('div', { className: 'vx-col' },
+      info !== null
+        ? React.createElement(React.Fragment, null,
+          React.createElement('div', { className: 'vx-pop-group' }, '可用额度'),
+          React.createElement('div', { className: 'vx-balance-totals' }, `${sym}${info.total ?? '0.00'}`),
+          React.createElement('div', { className: 'vx-muted' }, `赠送 ${sym}${info.granted ?? '0'} · 充值 ${sym}${info.toppedUp ?? '0'} · 来源：DSH 账号`),
+          empty
+            ? React.createElement('div', { className: 'vx-muted' }, '余额不足，充值后即可继续使用。')
+            : null,
+          links !== undefined && (links.usageUrl !== undefined || links.topUpUrl !== undefined)
+            ? React.createElement('div', { className: 'vx-row wrap' },
+              links.usageUrl !== undefined
+                ? React.createElement('a', { className: 'vx-link', href: links.usageUrl, target: '_blank', rel: 'noreferrer' }, '用量明细')
+                : null,
+              links.topUpUrl !== undefined
+                ? React.createElement('a', { className: 'vx-link', href: links.topUpUrl, target: '_blank', rel: 'noreferrer' }, '充值')
+                : null,
+            )
+            : null,
+        )
+        : null,
+      accountPending
+        ? React.createElement('div', { className: 'vx-muted' }, '账号余额加载中，稍后自动重试；当前显示本机费用估算。')
+        : null,
+      accountSignedOut
+        ? React.createElement('div', { className: 'vx-muted' }, 'DSH 账号未登录；请到 设置 → 账号与余额 登录，登录后自动显示官方余额。当前显示本机费用估算。')
+        : null,
+      accountUnavailable
+        ? React.createElement('div', { className: 'vx-muted' }, '当前环境没有 DSH 账号余额服务；当前显示本机费用估算。')
+        : null,
+      accountError !== null && accountError !== ''
+        ? React.createElement('div', { className: 'vx-error' }, `账号余额读取失败：${accountError}`)
+        : null,
+      models.length === 0
+        ? React.createElement('div', { className: 'vx-muted' }, '今日暂无 token 用量记录；会话产生用量后会自动累计，也可点「扫描日志」从本机会话补算。')
+        : React.createElement(React.Fragment, null,
+          React.createElement('div', { className: 'vx-pop-group' }, '今日用量'),
+          React.createElement('div', { className: 'vx-balance-totals' }, `${formatTokenCount(tokens)} token · ${calls} 次调用 · 估算 ¥${cost.toFixed(4)}`),
+          React.createElement(UsageTable, { compact: true }),
+        ),
+      React.createElement('div', { className: 'vx-pop-group' }, '本月预算'),
+      React.createElement(BudgetMeter, {
+        usage: s.usage,
+        budget: Math.max(0, Number(s.cfg.monthlyBudgetCny ?? 0)),
+        warning: Math.max(1, Math.min(100, Number(s.cfg.budgetWarningPercent ?? 80))),
+      }),
+      React.createElement('div', { className: 'vx-muted vx-balance-hint' }, '用量来自本机会话记录，费用为按官方价目折算的估算值，非账号账单。'),
+    )
+  }
+
+  /** Monthly budget line + ratio bar. Shared by the settings history and the
+   *  header balance card so both surfaces report the same month and the same
+   *  progress track. */
+  function BudgetMeter(props: { usage: Store['usage']; budget: number; warning: number }): React.ReactElement {
+    const { ratio, state } = React.useMemo(() => {
+      const prefix = dayKey().slice(0, 7) + '-'
+      const days = new Set(Object.keys(props.usage).filter((day) => day.startsWith(prefix)))
+      const month = summarizeUsage(props.usage, days)
+      const ratio = props.budget > 0 && month.exact ? month.costCny / props.budget * 100 : 0
+      return { ratio, state: budgetState(month, props.budget, props.warning) }
+    }, [props.usage, props.budget, props.warning])
+    const text = state === 'disabled'
+      ? '预算提醒已关闭'
+      : state === 'unknown'
+        ? '历史峰闲数据不完整，无法判断预算'
+        : state === 'over'
+          ? `已超出月预算（${ratio.toFixed(0)}%）`
+          : state === 'warning'
+            ? `已达到月预算 ${ratio.toFixed(0)}%`
+            : `本月预算使用 ${ratio.toFixed(0)}%`
+    return React.createElement(React.Fragment, null,
+      React.createElement('div', { className: state === 'over' ? 'vx-error' : 'vx-muted' }, text),
+      state === 'disabled' || state === 'unknown'
+        ? null
+        : React.createElement('div', {
+          className: 'vx-budget-track',
+          role: 'progressbar',
+          'aria-label': '本月预算使用比例',
+          'aria-valuemin': 0,
+          'aria-valuemax': 100,
+          'aria-valuenow': Math.min(100, Math.round(ratio)),
+        }, React.createElement('div', { className: 'vx-budget-fill' + (state === 'over' || state === 'warning' ? ' over' : ''), style: { width: `${Math.min(100, Math.max(0, ratio))}%` } })),
+    )
+  }
+
+  function UsageTable(props: { compact?: boolean }): React.ReactElement {
     const s = useS()
     const day = s.usage[dayKey()] ?? {}
     const models = Object.keys(day)
@@ -2163,26 +2469,35 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     return React.createElement('div', null,
       React.createElement('table', { className: 'vx-table' },
         React.createElement('thead', null, React.createElement('tr', null,
-          React.createElement('th', null, '模型'), React.createElement('th', null, '输入'), React.createElement('th', null, '缓存'), React.createElement('th', null, '输出'), React.createElement('th', null, '调用'), React.createElement('th', null, '费用 ¥'),
+          React.createElement('th', null, '模型'),
+          React.createElement('th', { title: '未命中缓存的输入 tokens' }, '输入'),
+          React.createElement('th', { title: '缓存命中输入 tokens' }, '缓存'),
+          React.createElement('th', null, '输出'),
+          React.createElement('th', null, '调用'),
+          React.createElement('th', null, '费用 ¥'),
         )),
         React.createElement('tbody', null, rows.map(({ model, row, breakdown }) => {
           return React.createElement('tr', { key: model },
-            React.createElement('td', null, model),
-            React.createElement('td', null, row.in ?? 0),
-            React.createElement('td', null, row.cacheIn ?? 0),
-            React.createElement('td', null, row.out ?? 0),
+            React.createElement('td', { title: model }, model),
+            React.createElement('td', null, formatTokenCount(row.in ?? 0)),
+            React.createElement('td', null, formatTokenCount(row.cacheIn ?? 0)),
+            React.createElement('td', null, formatTokenCount(row.out ?? 0)),
             React.createElement('td', null, row.calls ?? 0),
-            React.createElement('td', { title: breakdown.exact ? `峰 ¥${breakdown.peakCostCny.toFixed(4)} · 闲 ¥${breakdown.offPeakCostCny.toFixed(4)}` : '旧用量缺少峰闲时拆分，请先扫描今日会话日志' }, breakdown.exact ? breakdown.totalCostCny.toFixed(4) : '—'),
+            React.createElement('td', { title: breakdown.exact ? `峰时 ¥${breakdown.peakCostCny.toFixed(6)} · 空闲 ¥${breakdown.offPeakCostCny.toFixed(6)}` : '旧用量缺少峰闲时拆分，请先扫描今日会话日志' }, breakdown.exact ? breakdown.totalCostCny.toFixed(4) : '—'),
           )
         })),
       ),
-      allSplitsKnown
-        ? React.createElement('div', { className: 'vx-muted' }, `峰 token ${formatTokenCount(totalPeakTokens)} · 闲 token ${formatTokenCount(totalOffPeakTokens)} · 峰费用 ¥${totalPeakCost.toFixed(4)} · 闲费用 ¥${totalOffPeakCost.toFixed(4)}`)
-        : React.createElement('div', { className: 'vx-muted' }, '部分旧用量缺少峰闲时拆分，费用暂不估算；请先扫描今日会话日志。'),
-      React.createElement('div', { className: 'vx-muted' }, `规则核对于 ${DEEPSEEK_PRICING_CHECKED_ON} · `,
-        React.createElement('a', { href: DEEPSEEK_PRICING_SOURCE_URL, target: '_blank', rel: 'noreferrer' }, 'DeepSeek 官方价目'),
-        ' · 费用仅供参考',
-      ),
+      props.compact === true
+        ? null
+        : React.createElement(React.Fragment, null,
+          allSplitsKnown
+            ? React.createElement('div', { className: 'vx-muted' }, `峰时 token ${formatTokenCount(totalPeakTokens)} · 空闲 token ${formatTokenCount(totalOffPeakTokens)} · 峰时费用 ¥${totalPeakCost.toFixed(4)} · 空闲费用 ¥${totalOffPeakCost.toFixed(4)}`)
+            : React.createElement('div', { className: 'vx-muted' }, '部分旧用量缺少峰闲时拆分，费用暂不估算；请先扫描今日会话日志。'),
+          React.createElement('div', { className: 'vx-muted' }, `${DEEPSEEK_PRICING_NOTE}（${DEEPSEEK_PRICING_CHECKED_ON} 核对）· `,
+            React.createElement('a', { href: DEEPSEEK_PRICING_SOURCE_URL, target: '_blank', rel: 'noreferrer' }, 'DeepSeek 官方价目'),
+            ' · 费用仅供参考',
+          ),
+        ),
     )
   }
 
@@ -2198,7 +2513,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     // range that is dozens of passes, and the budget inputs re-render this
     // component on every keystroke. The memo keys cover both inputs that
     // change the result; budget keystrokes change neither.
-    const { summary, daily, maxTokens, byModel, month } = React.useMemo(() => {
+    const { summary, daily, maxTokens, byModel } = React.useMemo(() => {
       const keys = recentDayKeys(s.usageRange)
       const selected = new Set(keys)
       const summary = summarizeUsage(s.usage, selected)
@@ -2211,19 +2526,18 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
           mergeUsageRow(target, row)
         }
       }
-      const monthPrefix = dayKey().slice(0, 7) + '-'
-      const monthDays = new Set(Object.keys(s.usage).filter((day) => day.startsWith(monthPrefix)))
-      const month = summarizeUsage(s.usage, monthDays)
-      return { summary, daily, maxTokens, byModel, month }
+      return { summary, daily, maxTokens, byModel }
     }, [s.usage, s.usageRange])
     const budget = Math.max(0, Number(s.cfg.monthlyBudgetCny ?? 0))
     const warning = Math.max(1, Math.min(100, Number(s.cfg.budgetWarningPercent ?? 80)))
-    const ratio = budget > 0 && month.exact ? month.costCny / budget * 100 : 0
-    const state = budgetState(month, budget, warning)
-    const budgetText = state === 'disabled' ? '预算提醒已关闭' : state === 'unknown' ? '历史峰闲数据不完整，无法判断预算' : state === 'over' ? `已超出月预算（${ratio.toFixed(0)}%）` : state === 'warning' ? `已达到月预算 ${ratio.toFixed(0)}%` : `本月预算使用 ${ratio.toFixed(0)}%`
     return React.createElement('div', { className: 'vx-col' },
       React.createElement('div', { className: 'vx-row wrap' },
-        ([7, 30, 90] as const).map((range) => React.createElement('button', { key: range, className: 'vx-btn' + (s.usageRange === range ? ' on' : ''), onClick: () => setS({ usageRange: range }) }, `${range} 天`)),
+        React.createElement(Segmented, {
+          value: String(s.usageRange),
+          options: [{ value: '7', label: '7 天' }, { value: '30', label: '30 天' }, { value: '90', label: '90 天' }],
+          onChange: (value) => setS({ usageRange: Number(value) as 7 | 30 | 90 }),
+          ariaLabel: '用量统计范围',
+        }),
         React.createElement('span', { className: 'vx-flex1' }),
         React.createElement('button', { className: 'vx-btn', onClick: () => { try { downloadText(usageCsv(s.usage), `custom-usage-${dayKey()}.csv`, 'text/csv;charset=utf-8') } catch { toast('CSV 导出失败', 'error') } } }, React.createElement(Icon, { n: 'download', size: 12 }), ' CSV'),
       ),
@@ -2232,13 +2546,15 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       ),
       React.createElement('div', { className: 'vx-col', style: { gap: 3 } }, daily.map((row) => React.createElement('div', { key: row.day, className: 'vx-row', title: `${row.day} · ${formatTokenCount(row.tokens)} token · ${row.calls} 次` },
         React.createElement('span', { className: 'vx-muted', style: { width: 46 } }, row.day.slice(5)),
-        React.createElement('span', { style: { height: 7, borderRadius: 8, minWidth: 2, width: `${Math.max(1, row.tokens / maxTokens * 100)}%`, background: 'var(--dsw-alias-color-primary, #4876d9)' } }),
+        React.createElement('span', { className: 'vx-bar-track' },
+          React.createElement('span', { className: 'vx-bar-fill', style: { width: `${Math.max(1, row.tokens / maxTokens * 100)}%` } }),
+        ),
       ))),
       Object.keys(byModel).length > 0 ? React.createElement('table', { className: 'vx-table' },
         React.createElement('thead', null, React.createElement('tr', null, React.createElement('th', null, '模型'), React.createElement('th', null, 'Token'), React.createElement('th', null, '调用'), React.createElement('th', null, '费用 ¥'))),
         React.createElement('tbody', null, Object.entries(byModel).map(([model, row]) => { const cost = usageCostBreakdown(row, model); return React.createElement('tr', { key: model }, React.createElement('td', null, model), React.createElement('td', null, formatTokenCount(row.in + row.out + row.cacheIn + row.cacheW)), React.createElement('td', null, row.calls), React.createElement('td', null, cost.exact ? cost.totalCostCny.toFixed(4) : '—')) })),
       ) : null,
-      React.createElement('div', { className: state === 'over' ? 'vx-error' : 'vx-muted' }, budgetText),
+      React.createElement(BudgetMeter, { usage: s.usage, budget, warning }),
       React.createElement('div', { className: 'vx-row wrap' },
         React.createElement('label', { className: 'vx-muted' }, '月预算 ¥ ', React.createElement('input', { className: 'vx-input', style: { width: 100 }, type: 'number', min: 0, step: 1, value: budget, onChange: (e: React.ChangeEvent<HTMLInputElement>) => setS({ cfg: { ...S.cfg, monthlyBudgetCny: Math.max(0, Number(e.target.value) || 0) } }), onBlur: saveCfg })),
         React.createElement('label', { className: 'vx-muted' }, '预警 ', React.createElement('input', { className: 'vx-input', style: { width: 72 }, type: 'number', min: 1, max: 100, value: warning, onChange: (e: React.ChangeEvent<HTMLInputElement>) => setS({ cfg: { ...S.cfg, budgetWarningPercent: Math.max(1, Math.min(100, Number(e.target.value) || 80)) } }), onBlur: saveCfg }), ' %'),
@@ -2249,64 +2565,82 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
   function BalancePanelContent(): React.ReactElement {
     const s = useS()
     const b = s.balance
-    // The balance query needs a personal sk- key that account-login Desktop
-    // installs never have, so it is an opt-in section; everything else (usage,
-    // cost estimate, budget) works key-free. A configured key starts expanded.
-    const configured = s.apiKeyConfigured === true
-    const [balanceOpen, setBalanceOpen] = React.useState(configured)
-    const keyConfigured = b?.ok === false && (b as { keyConfigured?: boolean }).keyConfigured === true
+    const [scanning, setScanning] = React.useState(false)
+    const accountPending = (b as { accountPending?: unknown } | null)?.accountPending === true
+    const accountSignedOut = (b as { accountSignedOut?: unknown } | null)?.accountSignedOut === true
+    const accountUnavailable = (b as { accountUnavailable?: unknown } | null)?.accountUnavailable === true
+    const accountError = typeof (b as { accountError?: unknown } | null)?.accountError === 'string'
+      ? (b as { accountError: string }).accountError
+      : null
+    const balanceOk = b?.ok === true && b.balance !== null && b.balance !== undefined
+    const info = balanceOk ? b.balance as { currency?: string, total?: string, granted?: string, toppedUp?: string } : null
+    const sym = info === null ? '' : (info.currency ?? 'CNY') === 'CNY' ? '¥' : `${info.currency ?? ''} `
+    const links = (b as { links?: { usageUrl?: string, topUpUrl?: string } } | null)?.links
+    const empty = info !== null && Number(info.total ?? '0') <= 0
+    const badge = accountPending
+      ? React.createElement(Badge, null, '账号余额加载中')
+      : accountSignedOut
+        ? React.createElement(Badge, null, '账号未登录')
+        : accountError !== null && accountError !== ''
+          ? React.createElement(Badge, { tone: 'danger' }, '余额读取失败')
+          : null
+    const scan = async (): Promise<void> => {
+      setScanning(true)
+      try { await refreshUsageScan() } finally { setScanning(false) }
+    }
     return React.createElement('div', { className: 'vx-col' },
-      React.createElement('div', { className: 'vx-muted' }, '以下用量与费用全部来自本机会话记录，不需要 API Key；费用为按官方价目表折算的估算值，可能与账号账单有差异。'),
+      React.createElement('div', { className: 'vx-row wrap' },
+        React.createElement(Button, { variant: 'secondary', size: 'sm', onClick: () => { void refreshBalance() } }, '刷新余额'),
+        React.createElement(Button, { variant: 'ghost', size: 'sm', onClick: () => { void scan() }, disabled: scanning },
+          scanning ? React.createElement(Spinner, { label: '扫描中' }) : null, scanning ? ' 扫描中…' : '扫描今日日志'),
+        React.createElement('span', { className: 'vx-flex1' }),
+        React.createElement('span', { className: 'vx-muted' }, s.balanceUpdatedAt === null
+          ? '尚未读取账号余额'
+          : `更新于 ${new Date(s.balanceUpdatedAt).toLocaleTimeString('zh-CN')}`),
+        badge,
+      ),
+      React.createElement('div', { className: 'vx-section-title' }, '账号余额'),
+      info !== null
+        ? React.createElement(React.Fragment, null,
+          React.createElement('div', { className: 'vx-balance-totals' }, `可用额度 ${sym}${info.total ?? '0.00'}`),
+          React.createElement('div', { className: 'vx-muted' }, `赠送 ${sym}${info.granted ?? '0'} · 充值 ${sym}${info.toppedUp ?? '0'}`),
+          React.createElement('div', { className: 'vx-muted' }, '余额来源：DSH 账号余额（与「设置 → 账号与余额」一致）'),
+          empty ? React.createElement('div', { className: 'vx-muted' }, '余额不足，充值后即可继续使用。') : null,
+          links !== undefined && (links.usageUrl !== undefined || links.topUpUrl !== undefined)
+            ? React.createElement('div', { className: 'vx-row wrap' },
+              links.usageUrl !== undefined
+                ? React.createElement('a', { className: 'vx-link', href: links.usageUrl, target: '_blank', rel: 'noreferrer' }, '用量明细')
+                : null,
+              links.topUpUrl !== undefined
+                ? React.createElement('a', { className: 'vx-link', href: links.topUpUrl, target: '_blank', rel: 'noreferrer' }, '充值')
+                : null,
+            )
+            : null,
+        )
+        : b === null
+          ? React.createElement('div', { className: 'vx-muted' }, '点「刷新余额」读取 DSH 账号余额。')
+          : null,
+      accountPending
+        ? React.createElement('div', { className: 'vx-muted' }, '账号余额加载中，稍后自动重试。')
+        : null,
+      accountSignedOut
+        ? React.createElement('div', { className: 'vx-muted' }, 'DSH 账号未登录；请到「设置 → 账号与余额」登录，登录后这里会自动显示官方余额。')
+        : null,
+      accountUnavailable
+        ? React.createElement('div', { className: 'vx-muted' }, '当前环境没有 DSH 账号余额服务。')
+        : null,
+      accountError !== null && accountError !== ''
+        ? React.createElement('div', { className: 'vx-error' }, `账号余额读取失败：${accountError}，请点「刷新余额」重试。`)
+        : null,
       React.createElement('div', { className: 'vx-section-title' }, '用量趋势与预算'),
       React.createElement(UsageHistory, null),
       React.createElement('div', { className: 'vx-section-title' }, '今日模型明细'),
       React.createElement(UsageTable, null),
-      React.createElement('button', { className: 'vx-btn', onClick: () => { void refreshUsageScan() } }, React.createElement(Icon, { n: 'list', size: 13 }), ' 扫描今日会话日志更新用量'),
-      React.createElement('div', { className: 'vx-row' },
-        React.createElement('button', { className: 'vx-chip', onClick: () => setBalanceOpen(!balanceOpen) },
-          React.createElement(Icon, { n: balanceOpen ? 'chevronDown' : 'chevronRight', size: 11 }),
-          balanceOpen ? ' 收起余额查询' : ' 余额查询（可选，需要 API Key）'),
-      ),
-      balanceOpen
-        ? React.createElement('div', { className: 'vx-col' },
-          React.createElement('div', { className: 'vx-row' },
-            React.createElement('input', {
-              className: 'vx-input',
-              type: 'password',
-              placeholder: configured ? '已配置 Key；输入新 Key 覆盖' : 'DeepSeek API Key (sk-…)',
-              value: s.apiKey,
-              onChange: (e: React.ChangeEvent<HTMLInputElement>) => { setS({ apiKey: e.target.value, apiKeyDirty: true }) },
-              onBlur: () => { if (S.apiKeyDirty) saveCfg() },
-            }),
-            React.createElement('button', { className: 'vx-btn', onClick: () => { if (S.apiKeyDirty) saveCfg() } }, '保存'),
-            React.createElement('button', { className: 'vx-btn', onClick: () => { void refreshBalance() } }, React.createElement(Icon, { n: 'refresh', size: 13 }), ' 刷新'),
-          ),
-          React.createElement('div', { className: 'vx-muted' }, configured
-            ? `Key 不回传浏览器；当前来源：${s.credentialStorage === 'system' ? '系统凭据' : s.credentialStorage === 'legacy-state' ? '旧状态文件（待迁移）' : s.credentialStorage === 'environment' ? '环境变量' : s.credentialStorage === 'dsh' ? 'DSH 凭据' : '未配置'}。留空后保存可清除插件自定义 Key。`
-            : '填写 sk- 开头的 DeepSeek API Key 即可查询官方余额；Key 不回传浏览器，留空保存可清除已存 Key。'),
-          b !== null && b.ok === true && b.balance !== null && b.balance !== undefined
-            ? (() => {
-              const info = b.balance as { currency?: string, total?: string, granted?: string, toppedUp?: string }
-              const sym = (info.currency ?? 'CNY') === 'CNY' ? '¥' : `${info.currency ?? ''} `
-              return React.createElement('div', { className: 'vx-balance-lines' },
-                React.createElement('div', null, `可用额度: ${sym}${info.total ?? ''}`),
-                React.createElement('div', { className: 'vx-muted' }, `赠送 ${sym}${info.granted ?? ''} · 充值 ${sym}${info.toppedUp ?? ''}${(b as { available?: boolean }).available === false ? ' · 余额不足不可用' : ''}`),
-              )
-            })()
-            : null,
-          // A real upstream failure (401/403, network) is worth showing; an
-          // unconfigured key is the normal desktop state, not an error.
-          keyConfigured && b !== null && b.ok === false
-            ? React.createElement('div', { className: 'vx-error' }, String((b as { error?: unknown }).error ?? '未知错误'))
-            : null,
-        )
-        : null,
     )
   }
 
-  function QuoteDock(props: QuoteDockProps): React.ReactElement | null {
+  function InputBridge(props: InputBridgeProps): React.ReactElement | null {
     useViewedSession(props)
-    const quoteEnabled = useSSelector((state) => state.cfg.quote === true)
     const inputRef = React.useRef(props.input)
     inputRef.current = props.input
     const actionsRef = React.useRef(props.inputActions)
@@ -2326,74 +2660,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       }
       return () => { S.insertDraft = null }
     }, [])
-    React.useEffect(() => {
-      if (!quoteEnabled) {
-        if (S.quoteSel !== null) setS({ quoteSel: null })
-        return
-      }
-      const d = typeof document !== 'undefined' ? document : null
-      if (d === null) return
-      const inVxRoot = (node: Node | null): boolean => {
-        let n: Node | null = node
-        while (n !== null && n.nodeType === 1) {
-          if ((n as HTMLElement).classList !== undefined && (n as HTMLElement).classList.contains('vx-root')) return true
-          n = n.parentNode
-        }
-        return false
-      }
-      const onSel = (): void => {
-        try {
-          const sel = d.getSelection?.() ?? null
-          if (sel === null || sel.isCollapsed) {
-            if (S.quoteSel !== null) setS({ quoteSel: null })
-            return
-          }
-          const text = String(sel.toString() ?? '').trim()
-          if (text === '') {
-            if (S.quoteSel !== null) setS({ quoteSel: null })
-            return
-          }
-          if (sel.rangeCount === 0) return
-          const range = sel.getRangeAt(0)
-          if (inVxRoot(range.commonAncestorContainer)) return
-          const node = sel.anchorNode
-          if (node !== null && node.nodeType === 1 && /TEXTAREA|INPUT/.test((node as HTMLElement).nodeName)) return
-          const r = range.getBoundingClientRect()
-          const next = { text: text.slice(0, 8000), x: r.left + r.width / 2, y: r.top - 6 }
-          // selectionchange fires continuously while a selection is being
-          // dragged; a sub-pixel move over unchanged text must not re-render
-          // every store subscriber (one TurnTailEntry per rendered turn).
-          const prev = S.quoteSel
-          if (prev !== null && prev.text === next.text && Math.abs(prev.x - next.x) < 1 && Math.abs(prev.y - next.y) < 1) return
-          setS({ quoteSel: next })
-        } catch { /* selection read failed */ }
-      }
-      d.addEventListener('selectionchange', onSel)
-      return () => d.removeEventListener('selectionchange', onSel)
-    }, [quoteEnabled])
     return null
-  }
-
-  function QuoteButton(): React.ReactElement | null {
-    const quoteSel = useSSelector((state) => state.quoteSel)
-    if (quoteSel === null) return null
-    const q = quoteSel
-    const fmt = q.text.split('\n').map((l) => '> ' + l).join('\n')
-    return React.createElement('button', {
-      className: 'vx-quote-btn',
-      style: { left: q.x, top: q.y },
-      onClick: () => {
-        const text = fmt + '\n\n'
-        const ok = S.insertDraft !== null ? S.insertDraft(text, false) : false
-        if (!ok) toast('输入框不可用（当前不在会话中）', 'error')
-        try {
-          const d = typeof document !== 'undefined' ? document : null
-          d?.getSelection()?.removeAllRanges()
-        } catch { /* selection clear failed */ }
-        setS({ quoteSel: null })
-        if (ok) toast('已引用到输入框', 'info')
-      },
-    }, React.createElement(Icon, { n: 'quote', size: 12 }), React.createElement('span', null, '引用回复'))
   }
 
   function TurnTailEntry(props: TurnTailProps): React.ReactElement {
@@ -2433,216 +2700,6 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       },
     }, btns.length > 0 ? React.createElement('span', { className: 'vx-turn-actions' }, btns) : null)
   }
-  const PRESET_LABELS: Record<string, string> = {
-    flow: '流动', rain: '数字雨', ocean: '海面', ripple: '涟漪', starfield: '星野', static: '静态',
-    liquid: '液态墨', grain: '颗粒',
-  }
-
-  function AppearanceTab(): React.ReactElement {
-    // Narrow subscription: this tab renders the config and the theme only. A
-    // streaming turn, a toast or a usage write must not re-render it.
-    const { cfg, dark } = useSSelector(selectAppearanceSlice, shallowEqual)
-    const set = (k: keyof CustomPluginConfig, v: string | boolean): void => {
-      setS({ cfg: { ...S.cfg, [k]: v } })
-      saveCfg()
-    }
-    const tier = tierFromCfg(cfg)
-    const preset = presetForTier(tier, cfg.bgFxPreset)
-    const params = panelParamKeys(tier)
-    // A discrete pick repaints through the appearance effect and saves at
-    // once; only the continuous slider drag is debounced.
-    const pickTier = (next: BgTier): void => {
-      if (next === tier) return
-      bgSaveDebounced.cancel()
-      setS({ cfg: { ...S.cfg, bgFx: next, bgFxPreset: presetForTier(next, S.cfg.bgFxPreset) } })
-      saveCfg()
-    }
-    const pickPreset = (next: BgFxPreset): void => {
-      bgSaveDebounced.cancel()
-      setS({ cfg: { ...S.cfg, bgFxPreset: next } })
-      saveCfg()
-    }
-    const moveParam = (key: BgParamKey, value: number): void => {
-      // The store write is immediate (the renderer repaints from it); only the
-      // host POST waits for the drag to pause.
-      setS({ cfg: setParamInCfg(S.cfg, tier, preset, key, value) })
-      bgSaveDebounced.push()
-    }
-    const strength = strengthFromCfg(cfg)
-    // Discrete like tier/preset: one save, no debounce.
-    const pickStrength = (next: BgStrength): void => {
-      if (next === strength) return
-      bgSaveDebounced.cancel()
-      setS({ cfg: setStrengthInCfg(S.cfg, next) })
-      saveCfg()
-    }
-    // "避让正文" is discrete like tier/preset: one save, no debounce. It is
-    // deliberately *not* one of the six params "恢复默认参数" resets, so a
-    // reset never turns the mask back on behind the user's back.
-    const pickFocus = (next: boolean): void => {
-      if ((S.cfg.bgFocus !== false) === next) return
-      bgSaveDebounced.cancel()
-      setS({ cfg: { ...S.cfg, bgFocus: next } })
-      saveCfg()
-    }
-    const restoreDefaults = (): void => {
-      bgSaveDebounced.cancel()
-      setS({ cfg: resetBgParams(S.cfg) })
-      saveCfg()
-    }
-    const stillNote = presetStillNote(tier, preset)
-    return React.createElement('div', { className: 'vx-col' },
-      React.createElement('div', { className: 'vx-muted' }, '主题背景、天气特效、背景动效与玻璃质感，选择后即时生效。'),
-      React.createElement('div', { className: 'vx-section-title' }, '背景颜色'),
-      React.createElement('div', { className: 'vx-muted' }, '20 组低饱和色板，深浅色模式均可用；深色下自动使用同色系的深色变体（预览即实际效果）。'),
-      React.createElement('div', { className: 'vx-swatches' },
-        React.createElement('button', { key: 'default', className: 'vx-swatch' + (cfg.bg === 'default' ? ' on' : ''), onClick: () => set('bg', 'default'), title: '无颜色（默认主题）' },
-          React.createElement('span', { className: 'vx-swatch-box', style: { background: 'repeating-conic-gradient(#ccc 0 25%, #eee 0 50%) 0 0/10px 10px' } }),
-          React.createElement('span', { className: 'vx-swatch-label' }, '无颜色')),
-        PALETTE.map((p) => {
-          // Preview shows what the canvas will actually paint in the current
-          // theme: the light pastel in light mode, its same-hue dark variant
-          // in dark mode.
-          const preview = dark ? toDarkRamp(p[1], DARK_CANVAS_LIGHTNESS) : p[1]
-          return React.createElement('button', { key: p[0], className: 'vx-swatch' + (cfg.bg === p[0] ? ' on' : ''), onClick: () => set('bg', p[0]), title: p[0] + ' ' + p[1] },
-            React.createElement('span', { className: 'vx-swatch-box', style: { background: preview } }),
-            React.createElement('span', { className: 'vx-swatch-label' }, p[0]))
-        }),
-      ),
-      React.createElement('div', { className: 'vx-section-title' }, '天气特效'),
-      React.createElement('div', { className: 'vx-row wrap' },
-        (['none', 'snow', 'rain', 'sakura'] as const).map((w) => {
-          const iconNames: Record<string, string> = { none: 'minimize', snow: 'snowflake', rain: 'cloudRain', sakura: 'flower' }
-          const weatherNames: Record<string, string> = { none: '无', snow: '飘雪', rain: '电影感雨滴', sakura: '樱花飘落' }
-          return React.createElement('button', {
-            key: w,
-            className: 'vx-btn' + (cfg.weather === w ? ' on' : ''),
-            'aria-pressed': cfg.weather === w,
-            onClick: () => set('weather', w),
-          },
-          React.createElement(Icon, { n: iconNames[w], size: 12 }),
-          ' ' + weatherNames[w])
-        }),
-      ),
-      React.createElement('div', { className: 'vx-section-title' }, '玻璃效果'),
-      React.createElement(Toggle, { label: '启用玻璃', checked: cfg.glass === true, onChange: (v) => set('glass', v) }),
-      React.createElement('div', { className: 'vx-row wrap' },
-        React.createElement('button', { className: 'vx-btn' + (cfg.glassMode !== 'liquid' ? ' on' : ''), 'aria-pressed': cfg.glassMode !== 'liquid', onClick: () => set('glassMode', 'frost') }, '毛玻璃'),
-        React.createElement('button', { className: 'vx-btn' + (cfg.glassMode === 'liquid' ? ' on' : ''), 'aria-pressed': cfg.glassMode === 'liquid', onClick: () => set('glassMode', 'liquid') }, '液态玻璃'),
-      ),
-      React.createElement(Toggle, { label: '全局浮层玻璃', checked: cfg.globalGlass === true, onChange: (v) => set('globalGlass', v), hint: '对弹窗/菜单等浮层应用玻璃质感；液态玻璃模式下浮层同样位移折射' }),
-      React.createElement('div', { className: 'vx-section-title' }, '背景动效'),
-      React.createElement('div', { className: 'vx-muted' }, '整页铺一层很淡的背景动效，垫在内容下面，不挡任何操作。「字符」是细密的字符纹理，「光影」是缓慢流动的明暗；选「关闭」不创建任何图层。'),
-      React.createElement('div', { className: 'vx-row wrap', role: 'group', 'aria-label': '背景动效档位' },
-        ([['none', '关闭'], ['ascii', '字符'], ['shader', '光影']] as const).map(([id, label]) => {
-          const active = tier === id
-          return React.createElement('button', {
-            key: id,
-            className: 'vx-btn' + (active ? ' on' : ''),
-            'aria-pressed': active,
-            onClick: () => pickTier(id),
-          }, label)
-        }),
-      ),
-      tier === 'none'
-        ? React.createElement('div', { className: 'vx-muted' }, '背景动效已关闭，页面只用当前色板的底色。')
-        : React.createElement(React.Fragment, null,
-            React.createElement('div', { className: 'vx-row wrap', role: 'group', 'aria-label': '背景动效预设' },
-              tierPresets(tier).map((id) => {
-                const active = preset === id
-                return React.createElement('button', {
-                  key: id,
-                  className: 'vx-btn' + (active ? ' on' : ''),
-                  'aria-pressed': active,
-                  onClick: () => pickPreset(id),
-                }, PRESET_LABELS[id] ?? id)
-              }),
-            ),
-            // The interactive pieces say what the pointer does instead of
-            // letting the user discover it by accident.
-            tier === 'ascii' && preset === 'ocean'
-              ? React.createElement('div', { className: 'vx-muted' }, '海面会随鼠标拖动泛起涟漪，点击溅起水花；鱼群会被惊动，随后慢慢重新聚拢。')
-              : tier === 'ascii' && preset === 'flow'
-                ? React.createElement('div', { className: 'vx-muted' }, '拖动会搅动雾面，点击会推开一圈涟漪。')
-                : tier === 'ascii' && preset === 'rain'
-                  ? React.createElement('div', { className: 'vx-muted' }, '鼠标划过像一阵风，会把雨丝吹斜；点击向两侧拨开雨帘，随后慢慢合拢。')
-                  : tier === 'ascii' && preset === 'ripple'
-                    ? React.createElement('div', { className: 'vx-muted' }, '点击会在落点漾开一圈新的涟漪，拖动会沿途留下小水纹。')
-                    : tier === 'ascii' && preset === 'starfield'
-                      ? React.createElement('div', { className: 'vx-muted' }, '点击会在落点点亮一小片星尘，拖动会沿途撒下星光，随后渐渐暗去。')
-                      : tier === 'shader' && preset === 'liquid'
-                        ? React.createElement('div', { className: 'vx-muted' }, '鼠标划过会卷动墨云，点击会从落点扩散出一圈涟漪。')
-                        : null,
-            // The intuitive "it looks too faint / too loud" outlet: scales the
-            // ink step only, so density, speed and frame rate stay put.
-            React.createElement('div', { className: 'vx-row wrap', role: 'group', 'aria-label': '背景墨色强度' },
-              React.createElement('span', { className: 'vx-param-label' }, '墨色强度'),
-              BG_STRENGTH_META.map((item) => {
-                const active = strength === item.value
-                return React.createElement('button', {
-                  key: item.value,
-                  className: 'vx-btn' + (active ? ' on' : ''),
-                  'aria-pressed': active,
-                  onClick: () => pickStrength(item.value),
-                }, item.label)
-              }),
-            ),
-            React.createElement('div', { className: 'vx-muted' }, '「墨色强度」只改整片墨色的深浅：觉得淡就点「强烈」，觉得抢眼就点「柔和」；密度、帧率与预设都不变。'),
-          ),
-      // The calm-zone preference is a stored setting, not part of the visible
-      // renderer, so the switch stays in the panel while the tier is off —
-      // hiding it made the default look like the option had been removed.
-      // It applies to the conversation canvas as well: ColumnBgAnchor shifts
-      // the same viewport rect into the column's local coordinates.
-      React.createElement(Toggle, {
-        label: '避让正文',
-        checked: cfg.bgFocus !== false,
-        onChange: pickFocus,
-        hint: '打开时内容区域会更淡、四周更浓；关掉则整页均匀。',
-      }),
-      tier === 'none'
-        ? null
-        : React.createElement(React.Fragment, null,
-            // A still preset paints exactly one frame, so switching to it looks
-            // like nothing happened. Say so inside the panel — never a toast.
-            stillNote === null ? null : React.createElement('div', { className: 'vx-note' }, stillNote),
-            React.createElement('div', { className: 'vx-param-list' },
-              params.map((key) => {
-                const meta = BG_PARAM_META[key]
-                const range = paramRange(tier, preset, key)
-                const value = effectiveParam(cfg, tier, preset, key)
-                return React.createElement('div', { className: 'vx-param-row', key },
-                  React.createElement('span', { className: 'vx-param-label' }, meta.label),
-                  React.createElement('input', {
-                    type: 'range',
-                    className: 'vx-range',
-                    min: range === null ? 0 : range.min,
-                    max: range === null ? 0 : range.max,
-                    step: meta.step,
-                    value,
-                    'aria-label': '背景' + meta.label,
-                    onChange: (e: React.ChangeEvent<HTMLInputElement>) => moveParam(key, Number(e.currentTarget.value)),
-                  }),
-                  React.createElement('span', { className: 'vx-param-val' }, value.toFixed(meta.decimals) + meta.unit),
-                )
-              }),
-            ),
-            React.createElement('div', { className: 'vx-row' },
-              React.createElement('button', {
-                className: 'vx-btn',
-                onClick: restoreDefaults,
-                title: '只把上面六项参数恢复为「跟随预设」，不改变动效档位与预设。',
-              }, '恢复默认参数'),
-              React.createElement('span', { className: 'vx-muted' }, '仅重置参数，不改档位与预设')),
-            // Say what the page does while a renderer is mounted: the shell's
-            // own background fills drop to a low alpha so the ink reaches the
-            // eye (cards and dialogs keep their opaque fills). This applies to
-            // both glass states and never flips the glass toggle for the user.
-            React.createElement('div', { className: 'vx-note' }, '提示：动效开启时，页面底色会调成半透明以便透出纹理（卡片和弹窗保持不透明）；你的玻璃设置不会被改动。'),
-          ),
-    )
-  }
-
   function FolderNode(props: { node: FolderNode; useSessions: OverlayProps['useSessions']; useWorkspaces: OverlayProps['useWorkspaces'] }): React.ReactElement {
     const { folderAdd, folderWsPick, dropHint } = useSSelector(
       (state) => ({ folderAdd: state.folderAdd, folderWsPick: state.folderWsPick, dropHint: state.dropHint }),
@@ -2655,44 +2712,45 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     const workspaces = useWorkspacesSafe(props)
     const wsItems = workspaces !== null && workspaces.items !== undefined ? (workspaces.items as unknown as WorkspaceRowLike[]) : []
     const wsTitle = (w: WorkspaceRowLike): string => w.title || w.path || w.workspaceId
+    const [renaming, setRenaming] = React.useState(false)
+    const [draftName, setDraftName] = React.useState(node.name)
+    const beginRename = (): void => {
+      setDraftName(node.name)
+      setRenaming(true)
+    }
+    const commitRename = (): void => {
+      if (!renaming) return
+      setRenaming(false)
+      if (draftName.trim() === '' || draftName.trim() === node.name) { setDraftName(node.name); return }
+      setS({ folders: renameFolderNode(S.folders, node.id, draftName) })
+      saveCfg()
+    }
     const addChildFolder = (): void => {
       askText('文件夹名称：', '', (name) => {
-        const folders = JSON.parse(JSON.stringify(S.folders)) as FolderNode[]
-        const target = findFolder(folders, node.id)
-        if (target === null) return
-        target.children = target.children ?? []
-        target.children.push({ id: 'f' + Date.now() + Math.floor(Math.random() * 9999), name, children: [], sessionIds: [], workspaceIds: [], prompts: [] })
-        setS({ folders })
-        saveCfg()
-      })
-    }
-    const renameFolder = (): void => {
-      askText('重命名文件夹：', node.name, (name) => {
-        const folders = JSON.parse(JSON.stringify(S.folders)) as FolderNode[]
-        const target = findFolder(folders, node.id)
-        if (target !== null) target.name = name
-        setS({ folders })
+        const trimmed = name.trim()
+        if (trimmed === '') return
+        setS({
+          folders: addFolderNode(S.folders, node.id, {
+            id: 'f' + Date.now() + Math.floor(Math.random() * 9999),
+            name: trimmed,
+            children: [],
+            sessionIds: [],
+            workspaceIds: [],
+            prompts: [],
+          }),
+        })
         saveCfg()
       })
     }
     const delFolder = (): void => {
       askConfirm(`删除文件夹「${node.name}」及其子文件夹？（会话与提示词不会被删除）`, (ok) => {
         if (!ok) return
-        const folders = JSON.parse(JSON.stringify(S.folders)) as FolderNode[]
-        const cut = (arr: FolderNode[]): boolean => {
-          for (let i = 0; i < arr.length; i++) {
-            if (arr[i].id === node.id) { arr.splice(i, 1); return true }
-            if (cut(arr[i].children ?? [])) return true
-          }
-          return false
-        }
-        cut(folders)
-        setS({ folders })
+        setS({ folders: deleteFolderNode(S.folders, node.id) })
         saveCfg()
       })
     }
     const removeRef = (kind: 'session' | 'workspace', id: string): void => {
-      const folders = JSON.parse(JSON.stringify(S.folders)) as FolderNode[]
+      const folders = cloneFolders(S.folders)
       const target = findFolder(folders, node.id)
       if (target === null) return
       if (kind === 'session') target.sessionIds = (target.sessionIds ?? []).filter((x) => x !== id)
@@ -2702,28 +2760,13 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     }
     const moveNode = (srcId: string, targetId: string, mode: string): void => {
       if (srcId === '' || srcId === targetId) return
-      const folders = JSON.parse(JSON.stringify(S.folders)) as FolderNode[]
-      let src: FolderNode | null = null
-      const take = (arr: FolderNode[]): boolean => {
-        for (let i = 0; i < arr.length; i++) {
-          if (arr[i].id === srcId) { src = arr.splice(i, 1)[0]; return true }
-          if (take(arr[i].children ?? [])) return true
-        }
-        return false
-      }
-      const place = (arr: FolderNode[]): boolean => {
-        for (const f of arr) {
-          if (f.id === targetId) {
-            if (mode === 'inside') (f.children = f.children ?? []).push(src as FolderNode)
-            else if (mode === 'before') arr.splice(arr.indexOf(f), 0, src as FolderNode)
-            else arr.splice(arr.indexOf(f) + 1, 0, src as FolderNode)
-            return true
-          }
-          if (place(f.children ?? [])) return true
-        }
-        return false
-      }
-      if (src !== null && take(folders) && place(folders)) { setS({ folders }); saveCfg() }
+      const zone = mode === 'before' || mode === 'after' ? mode : 'inside'
+      setS({ folders: moveFolderNode(S.folders, srcId, targetId, zone) })
+      saveCfg()
+    }
+    const moveSelf = (direction: -1 | 1): void => {
+      setS({ folders: moveFolderOrder(S.folders, node.id, direction) })
+      saveCfg()
     }
     const rowDrop = (e: React.DragEvent): void => {
       e.preventDefault()
@@ -2761,10 +2804,30 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
         React.createElement('button', { className: 'vx-mini', title: open ? '折叠' : '展开', onClick: (e: React.MouseEvent) => { e.stopPropagation(); setOpen(!open) } },
           React.createElement(Icon, { n: open ? 'chevronDown' : 'chevronRight', size: 12 })),
         React.createElement(Icon, { n: 'folder', size: 14 }),
-        React.createElement('span', { className: 'vx-folder-name', title: node.name }, node.name),
+        renaming
+          ? React.createElement('input', {
+            className: 'vx-input vx-rename-input',
+            value: draftName,
+            autoFocus: true,
+            'aria-label': '文件夹名称',
+            onClick: (e: React.MouseEvent) => e.stopPropagation(),
+            onChange: (e: React.ChangeEvent<HTMLInputElement>) => setDraftName(e.currentTarget.value),
+            onBlur: commitRename,
+            onKeyDown: (e: React.KeyboardEvent<HTMLInputElement>) => {
+              if (e.key === 'Enter') { e.preventDefault(); commitRename() }
+              else if (e.key === 'Escape') { e.preventDefault(); setRenaming(false); setDraftName(node.name) }
+            },
+          })
+          : React.createElement('span', {
+            className: 'vx-folder-name',
+            title: node.name,
+            onDoubleClick: (e: React.MouseEvent) => { e.stopPropagation(); beginRename() },
+          }, node.name),
         React.createElement('span', { className: 'vx-badge' }, folderCount(node)),
-        React.createElement('button', { className: 'vx-mini', title: '重命名', onClick: (e: React.MouseEvent) => { e.stopPropagation(); renameFolder() } }, React.createElement(Icon, { n: 'sliders', size: 11 })),
-        React.createElement('button', { className: 'vx-mini', title: '删除', onClick: (e: React.MouseEvent) => { e.stopPropagation(); delFolder() } }, React.createElement(Icon, { n: 'trash', size: 11 })),
+        React.createElement('button', { className: 'vx-mini', title: '上移', 'aria-label': '上移文件夹', onClick: (e: React.MouseEvent) => { e.stopPropagation(); moveSelf(-1) } }, React.createElement(Icon, { n: 'arrowUp', size: 11 })),
+        React.createElement('button', { className: 'vx-mini', title: '下移', 'aria-label': '下移文件夹', onClick: (e: React.MouseEvent) => { e.stopPropagation(); moveSelf(1) } }, React.createElement(Icon, { n: 'arrowDown', size: 11 })),
+        React.createElement('button', { className: 'vx-mini', title: '重命名', 'aria-label': '重命名文件夹', onClick: (e: React.MouseEvent) => { e.stopPropagation(); beginRename() } }, React.createElement(Icon, { n: 'pencil', size: 11 })),
+        React.createElement('button', { className: 'vx-mini', title: '删除', 'aria-label': '删除文件夹', onClick: (e: React.MouseEvent) => { e.stopPropagation(); delFolder() } }, React.createElement(Icon, { n: 'trash', size: 11 })),
       ),
       open
         ? React.createElement('div', { className: 'vx-folder-body' },
@@ -2833,100 +2896,370 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
   }
 
   function FoldersTab(props: { useSessions: OverlayProps['useSessions']; useWorkspaces: OverlayProps['useWorkspaces'] }): React.ReactElement {
+    const [query, setQuery] = React.useState('')
     const addRoot = (): void => {
       askText('文件夹名称：', '', (name) => {
-        const folders = JSON.parse(JSON.stringify(S.folders)) as FolderNode[]
-        folders.push({ id: 'f' + Date.now() + Math.floor(Math.random() * 9999), name, children: [], sessionIds: [], workspaceIds: [], prompts: [] })
-        setS({ folders })
+        const trimmed = name.trim()
+        if (trimmed === '') return
+        setS({
+          folders: addFolderNode(S.folders, null, {
+            id: 'f' + Date.now() + Math.floor(Math.random() * 9999),
+            name: trimmed,
+            children: [],
+            sessionIds: [],
+            workspaceIds: [],
+            prompts: [],
+          }),
+        })
         saveCfg()
       })
     }
+    const visible = filterFolders(S.folders, query)
     return React.createElement('div', { className: 'vx-col' },
-      React.createElement('div', { className: 'vx-muted' }, '跨工作区共享的会话与工作区收藏夹，支持多级嵌套与拖拽排序；数据保存在本机状态文件。'),
-      S.folders.length === 0 ? React.createElement('div', { className: 'vx-muted vx-pad-sm' }, '暂无文件夹，点击下方按钮创建。') : null,
-      S.folders.map((f) => React.createElement(FolderNode, { key: f.id, node: f, useSessions: props.useSessions, useWorkspaces: props.useWorkspaces })),
-      React.createElement('div', { className: 'vx-row vx-pad-sm' },
-        React.createElement('button', { className: 'vx-btn', onClick: addRoot }, React.createElement(Icon, { n: 'folderPlus', size: 13 }), ' 新建文件夹'),
+      React.createElement('div', { className: 'vx-toolbar' },
+        React.createElement('input', {
+          className: 'vx-input',
+          placeholder: '搜索文件夹或引用…',
+          value: query,
+          onChange: (event: React.ChangeEvent<HTMLInputElement>) => setQuery(event.currentTarget.value),
+        }),
+        React.createElement(Button, { variant: 'primary', size: 'sm', onClick: addRoot }, '新建文件夹'),
       ),
+      S.folders.length === 0
+        ? React.createElement(EmptyState, {
+          title: '还没有文件夹',
+          hint: '新建一个文件夹，把常用会话、工作区和提示词收在一起。',
+          action: React.createElement(Button, { variant: 'primary', size: 'sm', onClick: addRoot }, '新建文件夹'),
+        })
+        : (visible.length === 0
+          ? React.createElement(EmptyState, { title: '没有匹配的文件夹', hint: '换个关键词，或清空搜索。' })
+          : React.createElement('div', { className: 'vx-folder-list' },
+            visible.map((folder) => React.createElement(FolderNode, { key: folder.id, node: folder, useSessions: props.useSessions, useWorkspaces: props.useWorkspaces })),
+          )),
+    )
+  }
+
+  function PromptEditorDialog(props: { open: boolean; item: PromptItem | null; onClose: () => void }): React.ReactElement {
+    const [name, setName] = React.useState('')
+    const [text, setText] = React.useState('')
+    const [tags, setTags] = React.useState('')
+    const [favorite, setFavorite] = React.useState(false)
+    const [errors, setErrors] = React.useState<string[]>([])
+    const [confirmDiscard, setConfirmDiscard] = React.useState(false)
+    React.useEffect(() => {
+      if (!props.open) return
+      setName(props.item?.name ?? '')
+      setText(props.item?.text ?? '')
+      setTags((props.item?.tags ?? []).join(', '))
+      setFavorite(props.item?.favorite === true)
+      setErrors([])
+      setConfirmDiscard(false)
+    }, [props.open, props.item?.id])
+    const baseline = {
+      name: props.item?.name ?? '',
+      text: props.item?.text ?? '',
+      tags: (props.item?.tags ?? []).join(', '),
+      favorite: props.item?.favorite === true,
+    }
+    const dirty = name !== baseline.name || text !== baseline.text || tags !== baseline.tags || favorite !== baseline.favorite
+    const requestClose = (): void => {
+      if (!dirty) { props.onClose(); return }
+      setConfirmDiscard(true)
+    }
+    const save = (): void => {
+      const draft = { name: name.trim(), text, tags: normalizeTags(tags) }
+      const issues = validatePromptDraft(draft)
+      if (issues.length > 0) { setErrors(issues); return }
+      const item: PromptItem = props.item === null
+        ? { id: 'p' + Date.now() + Math.floor(Math.random() * 9999), ...draft, favorite, useCount: 0 }
+        : { ...props.item, ...draft, favorite }
+      S.prompts = props.item === null
+        ? S.prompts.concat(item)
+        : S.prompts.map((old) => old.id === item.id ? item : old)
+      setS({ prompts: S.prompts })
+      saveCfg()
+      setConfirmDiscard(false)
+      props.onClose()
+    }
+    return React.createElement(Dialog, {
+      open: props.open,
+      onClose: requestClose,
+      title: props.item === null ? '新增提示词' : '编辑提示词',
+      description: '支持 {{变量}} 模板；插入时会要求填写。',
+      size: 'md',
+      footer: React.createElement(React.Fragment, null,
+        React.createElement(Button, { variant: 'ghost', onClick: requestClose }, '取消'),
+        React.createElement(Button, { variant: 'primary', onClick: save }, '保存'),
+      ),
+    },
+      confirmDiscard
+        ? React.createElement('div', { className: 'vx-discard-bar', role: 'alert' },
+          React.createElement('span', { className: 'vx-flex1' }, '有未保存的修改。'),
+          React.createElement(Button, { variant: 'ghost', size: 'sm', onClick: () => setConfirmDiscard(false) }, '继续编辑'),
+          React.createElement(Button, { variant: 'danger', size: 'sm', onClick: () => { setConfirmDiscard(false); props.onClose() } }, '放弃修改'),
+        )
+        : null,
+      errors.length > 0 ? React.createElement('div', { className: 'vx-field-error', role: 'alert' }, errors.join('；')) : null,
+      React.createElement(Field, { label: '名称', htmlFor: 'vx-prompt-name' },
+        React.createElement('input', {
+          id: 'vx-prompt-name',
+          className: 'vx-input',
+          value: name,
+          autoFocus: true,
+          'data-autofocus': true,
+          placeholder: '例如：周报总结',
+          onChange: (event: React.ChangeEvent<HTMLInputElement>) => setName(event.currentTarget.value),
+        }),
+      ),
+      React.createElement(Field, { label: '内容', htmlFor: 'vx-prompt-content' },
+        React.createElement('textarea', {
+          id: 'vx-prompt-content',
+          className: 'vx-input vx-textarea',
+          rows: 8,
+          value: text,
+          placeholder: '输入提示词正文；可用 {{主题}} 这样的变量。',
+          onChange: (event: React.ChangeEvent<HTMLTextAreaElement>) => setText(event.currentTarget.value),
+          onKeyDown: (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+            if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); save() }
+          },
+        }),
+      ),
+      React.createElement(Field, { label: '标签', hint: '用逗号分隔，例如：写作, 周报', htmlFor: 'vx-prompt-tags' },
+        React.createElement('input', {
+          id: 'vx-prompt-tags',
+          className: 'vx-input',
+          value: tags,
+          placeholder: '写作, 周报',
+          onChange: (event: React.ChangeEvent<HTMLInputElement>) => setTags(event.currentTarget.value),
+        }),
+      ),
+      React.createElement(Switch, { label: '收藏', checked: favorite, onChange: setFavorite, hint: '收藏项会显示在快捷面板顶部。' }),
     )
   }
 
   function PromptsTab(): React.ReactElement {
     const s = useS()
     const [query, setQuery] = React.useState('')
+    const [tag, setTag] = React.useState<string | null>(null)
+    const [favoritesOnly, setFavoritesOnly] = React.useState(false)
+    const [sort, setSort] = React.useState<PromptSort>('manual')
+    const [editor, setEditor] = React.useState<PromptItem | 'new' | null>(null)
+    const [importState, setImportState] = React.useState<{ fileName: string; incoming: PromptItem[]; invalid: number } | null>(null)
+    const [importMode, setImportMode] = React.useState<PromptImportMode>('merge')
     const dragId = React.useRef<string | null>(null)
-    const addPrompt = (): void => {
-      askText('提示词名称：', '', (name) => {
-        askText('提示词内容：', '', (text) => {
-          if (text.trim() === '') { toast('内容不能为空', 'error'); return }
-          S.prompts = S.prompts.concat({ id: 'p' + Date.now() + Math.floor(Math.random() * 9999), name: name || '未命名', text, tags: [], favorite: false, useCount: 0 })
-          setS({ prompts: S.prompts })
-          saveCfg()
-        })
-      })
-    }
-    const delPrompt = (id: string): void => {
-      S.prompts = S.prompts.filter((x) => x.id !== id)
-      setS({ prompts: S.prompts })
+    const tags = allTags(s.prompts)
+    const visible = sortPrompts(filterPrompts(s.prompts, { query, tag, favoritesOnly }), sort)
+    const savePrompts = (next: PromptItem[]): void => {
+      S.prompts = next
+      setS({ prompts: next })
       saveCfg()
     }
-    const editPrompt = (prompt: PromptItem): void => {
-      askText('提示词名称：', prompt.name, (name) => askText('提示词内容：', prompt.text, (text) => askText('标签（逗号分隔）：', (prompt.tags ?? []).join(', '), (tags) => {
-        if (text.trim() === '') { toast('内容不能为空', 'error'); return }
-        S.prompts = S.prompts.map((item) => item.id === prompt.id ? { ...item, name: name.trim() || '未命名', text, tags: [...new Set(tags.split(/[,，]/).map((tag) => tag.trim()).filter(Boolean))] } : item)
-        setS({ prompts: S.prompts }); saveCfg()
-      }, true)))
+    const delPrompt = (prompt: PromptItem): void => {
+      const index = S.prompts.findIndex((item) => item.id === prompt.id)
+      savePrompts(S.prompts.filter((item) => item.id !== prompt.id))
+      toast(`已删除「${prompt.name}」`, 'info', {
+        label: '撤销',
+        run: () => {
+          const next = S.prompts.slice()
+          next.splice(Math.max(0, Math.min(index, next.length)), 0, prompt)
+          savePrompts(next)
+        },
+      })
     }
-    const importPrompts = async (file: File): Promise<void> => {
+    const toggleFavorite = (prompt: PromptItem): void => {
+      savePrompts(S.prompts.map((item) => item.id === prompt.id ? { ...item, favorite: item.favorite !== true } : item))
+    }
+    const parseImport = async (file: File): Promise<void> => {
       try {
         const text = await file.text()
         let incoming: PromptItem[]
-        let skipped = 0
+        let invalid = 0
         if (/\.md$/i.test(file.name)) incoming = parsePromptsMarkdown(text)
         else {
           const doc = JSON.parse(text) as { format?: unknown; version?: unknown; prompts?: unknown }
           if (doc.format !== 'dsh-custom-plugin-prompts' || doc.version !== 1 || !Array.isArray(doc.prompts)) throw new Error('不支持的提示词文件')
           incoming = doc.prompts.map(normalizePromptItem).filter((item): item is PromptItem => item !== null)
-          skipped = doc.prompts.length - incoming.length
+          invalid = doc.prompts.length - incoming.length
         }
-        // A portable file may repeat an id; use its last occurrence once so
-        // the conflict result is deterministic and the count is not inflated.
+        // A portable file may repeat an id; keep the last occurrence once so
+        // the conflict result is deterministic.
         incoming = [...new Map(incoming.map((item) => [item.id, item])).values()]
-        const map = new Map(incoming.map((item) => [item.id, item]))
-        S.prompts = S.prompts.map((item) => map.get(item.id) ?? item)
-        for (const item of incoming) if (!S.prompts.some((old) => old.id === item.id)) S.prompts.push(item)
-        setS({ prompts: S.prompts }); saveCfg(); toast(skipped > 0 ? `已导入 ${incoming.length} 条提示词，跳过 ${skipped} 条无效记录` : `已导入 ${incoming.length} 条提示词`, skipped > 0 ? 'error' : 'info')
-      } catch (error) { toast('提示词导入失败: ' + String((error as Error)?.message ?? error), 'error') }
+        setImportMode('merge')
+        setImportState({ fileName: file.name, incoming, invalid })
+      } catch (error) {
+        toast('提示词导入失败: ' + String((error as Error)?.message ?? error), 'error')
+      }
     }
-    const visible = s.prompts.filter((prompt) => query === '' || prompt.name.toLowerCase().includes(query.toLowerCase()) || prompt.text.toLowerCase().includes(query.toLowerCase()) || (prompt.tags ?? []).some((tag) => tag.toLowerCase().includes(query.toLowerCase())))
+    const confirmImport = (): void => {
+      if (importState === null) return
+      const result = mergePromptImport(S.prompts, importState.incoming, importMode)
+      savePrompts(result.next)
+      setImportState(null)
+      toast(importMode === 'replace' ? `已替换为 ${result.next.length} 条提示词` : `已导入 ${result.added} 条、更新 ${result.updated} 条`, 'info')
+    }
+    const movePrompt = (fromId: string, toId: string): void => {
+      if (fromId === toId) return
+      const next = S.prompts.slice()
+      const oldIndex = next.findIndex((item) => item.id === fromId)
+      const newIndex = next.findIndex((item) => item.id === toId)
+      if (oldIndex < 0 || newIndex < 0) return
+      const moved = next.splice(oldIndex, 1)[0]
+      next.splice(newIndex, 0, moved)
+      savePrompts(next)
+    }
+    const card = (p: PromptItem): React.ReactElement => React.createElement('div', {
+      key: p.id,
+      className: 'vx-prompt-card',
+      draggable: sort === 'manual',
+      onDragStart: () => { dragId.current = p.id },
+      onDragOver: (event: React.DragEvent) => { if (sort === 'manual') event.preventDefault() },
+      onDrop: (event: React.DragEvent) => {
+        event.preventDefault()
+        if (sort !== 'manual' || dragId.current === null) return
+        movePrompt(dragId.current, p.id)
+        dragId.current = null
+      },
+    },
+      React.createElement('div', { className: 'vx-row' },
+        React.createElement(IconButton, {
+          label: p.favorite === true ? '取消收藏' : '收藏',
+          size: 'sm',
+          icon: React.createElement(Icon, { n: 'star', size: 12, filled: p.favorite === true }),
+          onClick: () => toggleFavorite(p),
+        }),
+        React.createElement('span', { className: 'vx-prompt-title' }, p.name),
+        React.createElement('span', { className: 'vx-flex1' }),
+        React.createElement('span', { className: 'vx-muted' }, `使用 ${p.useCount ?? 0} 次`),
+        React.createElement(Button, { variant: 'secondary', size: 'sm', onClick: () => insertPrompt(p) }, '插入'),
+        React.createElement(IconButton, {
+          label: '编辑',
+          size: 'sm',
+          icon: React.createElement(Icon, { n: 'wrench', size: 12 }),
+          onClick: () => setEditor(p),
+        }),
+        React.createElement(IconButton, {
+          label: '复制',
+          size: 'sm',
+          icon: React.createElement(Icon, { n: 'copy', size: 12 }),
+          onClick: () => { void copyText(p.text).then((ok) => toast(ok ? '已复制提示词' : '复制失败', ok ? 'info' : 'error')) },
+        }),
+        React.createElement(IconButton, {
+          label: '删除',
+          size: 'sm',
+          icon: React.createElement(Icon, { n: 'trash', size: 12 }),
+          onClick: () => delPrompt(p),
+        }),
+      ),
+      (p.tags ?? []).length > 0
+        ? React.createElement('div', { className: 'vx-prompt-tags' }, (p.tags ?? []).map((value) => React.createElement('span', { key: value, className: 'vx-badge' }, `#${value}`)))
+        : null,
+      React.createElement('div', { className: 'vx-prompt-body' }, p.text),
+    )
     return React.createElement('div', { className: 'vx-col' },
-      React.createElement('div', { className: 'vx-muted' }, '支持收藏、标签、变量模板与拖拽排序；同 ID 导入项会更新现有内容。'),
-      React.createElement('input', { className: 'vx-input', placeholder: '搜索名称、内容或标签…', value: query, onChange: (e: React.ChangeEvent<HTMLInputElement>) => setQuery(e.target.value) }),
-      visible.map((p) => React.createElement('div', { key: p.id, className: 'vx-prompt-card', draggable: true, onDragStart: () => { dragId.current = p.id }, onDragOver: (e: React.DragEvent) => e.preventDefault(), onDrop: (e: React.DragEvent) => { e.preventDefault(); const from = dragId.current; if (from === null || from === p.id) return; const next = [...S.prompts]; const oldIndex = next.findIndex((item) => item.id === from); const newIndex = next.findIndex((item) => item.id === p.id); if (oldIndex < 0 || newIndex < 0) return; const moved = next.splice(oldIndex, 1)[0]; next.splice(newIndex, 0, moved); setS({ prompts: next }); saveCfg() } },
-        React.createElement('div', { className: 'vx-row' },
-          React.createElement('button', { className: 'vx-mini', title: p.favorite ? '取消收藏' : '收藏', onClick: () => { S.prompts = S.prompts.map((item) => item.id === p.id ? { ...item, favorite: !item.favorite } : item); setS({ prompts: S.prompts }); saveCfg() } }, React.createElement(Icon, { n: 'star', size: 11, filled: p.favorite === true })),
-          React.createElement('span', { className: 'vx-prompt-title' }, p.name),
-          React.createElement('span', { className: 'vx-flex1' }),
-          React.createElement('span', { className: 'vx-muted' }, `使用 ${p.useCount ?? 0} 次`),
-          React.createElement('button', { className: 'vx-mini', title: '插入', onClick: () => insertPrompt(p) }, React.createElement(Icon, { n: 'zap', size: 11 })),
-          React.createElement('button', { className: 'vx-mini', title: '编辑', onClick: () => editPrompt(p) }, React.createElement(Icon, { n: 'wrench', size: 11 })),
-          React.createElement('button', { className: 'vx-mini', title: '复制', onClick: () => void copyText(p.text).then((ok) => toast(ok ? '已复制提示词' : '复制失败', ok ? 'info' : 'error')) }, React.createElement(Icon, { n: 'copy', size: 11 })),
-          React.createElement('button', { className: 'vx-mini', title: '删除', onClick: () => delPrompt(p.id) }, React.createElement(Icon, { n: 'trash', size: 11 })),
+      React.createElement('div', { className: 'vx-toolbar' },
+        React.createElement('input', {
+          className: 'vx-input',
+          placeholder: '搜索名称、内容或标签…',
+          value: query,
+          onChange: (event: React.ChangeEvent<HTMLInputElement>) => setQuery(event.currentTarget.value),
+        }),
+        React.createElement(Button, {
+          variant: favoritesOnly ? 'secondary' : 'ghost',
+          size: 'sm',
+          'aria-pressed': favoritesOnly,
+          onClick: () => setFavoritesOnly(!favoritesOnly),
+        }, '收藏'),
+        React.createElement('select', {
+          className: 'vx-input vx-select',
+          value: tag ?? '',
+          'aria-label': '按标签筛选',
+          onChange: (event: React.ChangeEvent<HTMLSelectElement>) => setTag(event.currentTarget.value === '' ? null : event.currentTarget.value),
+        },
+          React.createElement('option', { value: '' }, '全部标签'),
+          tags.map((value) => React.createElement('option', { key: value, value }, value)),
         ),
-        (p.tags ?? []).length > 0 ? React.createElement('div', { className: 'vx-muted' }, (p.tags ?? []).map((tag) => `#${tag}`).join(' ')) : null,
-        React.createElement('div', { className: 'vx-prompt-body' }, p.text),
-      )),
-      React.createElement('div', { className: 'vx-row vx-pad-sm' },
-        React.createElement('button', { className: 'vx-btn', onClick: addPrompt }, React.createElement(Icon, { n: 'plus', size: 13 }), ' 新增提示词'),
-        React.createElement('button', { className: 'vx-btn', onClick: () => downloadText(JSON.stringify({ format: 'dsh-custom-plugin-prompts', version: 1, prompts: S.prompts }, null, 2), `custom-prompts-${dayKey()}.json`, 'application/json') }, '导出 JSON'),
-        React.createElement('button', { className: 'vx-btn', onClick: () => downloadText(promptsMarkdown(S.prompts), `custom-prompts-${dayKey()}.md`, 'text/markdown') }, '导出 Markdown'),
-        React.createElement('label', { className: 'vx-btn' }, '导入', React.createElement('input', { type: 'file', accept: '.json,.md,application/json,text/markdown', style: { display: 'none' }, onChange: (e: React.ChangeEvent<HTMLInputElement>) => { const file = e.target.files?.[0]; if (file !== undefined) void importPrompts(file); e.target.value = '' } })),
+        React.createElement('select', {
+          className: 'vx-input vx-select',
+          value: sort,
+          'aria-label': '排序方式',
+          onChange: (event: React.ChangeEvent<HTMLSelectElement>) => setSort(event.currentTarget.value as PromptSort),
+        },
+          React.createElement('option', { value: 'manual' }, '手动排序'),
+          React.createElement('option', { value: 'recent' }, '最近使用'),
+          React.createElement('option', { value: 'used' }, '使用次数'),
+          React.createElement('option', { value: 'name' }, '名称'),
+        ),
+        React.createElement(Button, { variant: 'primary', size: 'sm', onClick: () => setEditor('new') }, '新增'),
+      ),
+      visible.length === 0
+        ? React.createElement(EmptyState, {
+          title: s.prompts.length === 0 ? '还没有提示词' : '没有匹配的提示词',
+          hint: s.prompts.length === 0 ? '新增第一条，或从 JSON / Markdown 导入。' : '换个关键词、标签或关掉收藏筛选。',
+          action: React.createElement(Button, { variant: 'primary', size: 'sm', onClick: () => setEditor('new') }, '新增提示词'),
+        })
+        : React.createElement('div', { className: 'vx-prompt-grid' }, visible.map(card)),
+      React.createElement('div', { className: 'vx-row wrap vx-pad-sm' },
+        React.createElement(Button, {
+          variant: 'ghost',
+          size: 'sm',
+          onClick: () => downloadText(JSON.stringify({ format: 'dsh-custom-plugin-prompts', version: 1, prompts: S.prompts }, null, 2), `custom-prompts-${dayKey()}.json`, 'application/json'),
+        }, '导出 JSON'),
+        React.createElement(Button, {
+          variant: 'ghost',
+          size: 'sm',
+          onClick: () => downloadText(promptsMarkdown(S.prompts), `custom-prompts-${dayKey()}.md`, 'text/markdown'),
+        }, '导出 Markdown'),
+        React.createElement('label', { className: 'vx-button vx-button-ghost vx-button-sm' }, '导入文件',
+          React.createElement('input', {
+            type: 'file',
+            accept: '.json,.md,application/json,text/markdown',
+            style: { display: 'none' },
+            onChange: (event: React.ChangeEvent<HTMLInputElement>) => {
+              const file = event.currentTarget.files?.[0]
+              if (file !== undefined) void parseImport(file)
+              event.currentTarget.value = ''
+            },
+          }),
+        ),
+        React.createElement('span', { className: 'vx-flex1' }),
+        React.createElement('span', { className: 'vx-muted' }, `共 ${s.prompts.length} 条 · 当前显示 ${visible.length} 条`),
+      ),
+      React.createElement(PromptEditorDialog, {
+        open: editor !== null,
+        item: editor === 'new' || editor === null ? null : editor,
+        onClose: () => setEditor(null),
+      }),
+      React.createElement(Dialog, {
+        open: importState !== null,
+        onClose: () => setImportState(null),
+        title: '导入提示词',
+        description: importState?.fileName,
+        size: 'sm',
+        footer: React.createElement(React.Fragment, null,
+          React.createElement(Button, { variant: 'ghost', onClick: () => setImportState(null) }, '取消'),
+          React.createElement(Button, { variant: 'primary', onClick: confirmImport }, importMode === 'replace' ? '替换导入' : '合并导入'),
+        ),
+      },
+        importState === null ? null : React.createElement(React.Fragment, null,
+          React.createElement('div', { className: 'vx-muted' }, `有效 ${importState.incoming.length} 条，跳过 ${importState.invalid} 条无效记录；同 ID 的记录会被更新。`),
+          React.createElement(Segmented, {
+            value: importMode,
+            options: [{ value: 'merge', label: '合并' }, { value: 'replace', label: '替换现有' }],
+            onChange: (value) => setImportMode(value as PromptImportMode),
+            ariaLabel: '导入方式',
+          }),
+          React.createElement('div', { className: 'vx-muted' }, importMode === 'replace'
+            ? `替换后库中将有 ${importState.incoming.length} 条提示词，现有 ${S.prompts.length} 条会全部移除。`
+            : `合并后库中将有 ${mergePromptImport(S.prompts, importState.incoming, 'merge').next.length} 条提示词。`),
+        ),
       ),
     )
   }
 
   function BackupControls(): React.ReactElement {
-    const [mode, setMode] = React.useState<'merge' | 'replace'>('merge')
+    const [mode, setMode] = React.useState<BackupImportMode>('merge')
+    const [preview, setPreview] = React.useState<{ document: unknown; preview: BackupImportPreview; fileName: string } | null>(null)
+    const [importing, setImporting] = React.useState(false)
     const exportBackup = async (): Promise<void> => {
       try {
         const result = await apiBackupExport()
@@ -2940,26 +3273,73 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       let documentValue: unknown
       try { documentValue = JSON.parse(await file.text()) as unknown } catch { toast('备份文件不是有效 JSON', 'error'); return }
       try {
-        const preview = await apiBackupImport(documentValue, mode, true)
-        if (!preview.ok) { toast(preview.error ?? '备份校验失败', 'error'); return }
-        const p = preview.preview
-        askConfirm(`导入 ${p.folders} 个文件夹、${p.prompts} 条提示词、${p.starredSessions} 个星标会话、${p.usageDays} 天用量？冲突：文件夹 ${p.conflicts.folders}、提示词 ${p.conflicts.prompts}、用量 ${p.conflicts.usageDays}。`, (ok) => {
-          if (!ok) return
-          void apiBackupImport(documentValue, mode, false).then(async (result) => {
-            if (!result.ok) { toast(result.error ?? '备份导入失败', 'error'); return }
-            await loadCfg()
-            toast('备份导入完成；原状态已生成恢复副本', 'info')
-          }).catch((error) => toast(String((error as Error)?.message ?? error), 'error'))
-        })
+        const dry = await apiBackupImport(documentValue, 'merge', true)
+        if (!dry.ok) { toast(dry.error ?? '备份校验失败', 'error'); return }
+        setMode('merge')
+        setPreview({ document: documentValue, preview: dry.preview, fileName: file.name })
       } catch (error) { toast(String((error as Error)?.message ?? error), 'error') }
     }
+    const confirmImport = async (): Promise<void> => {
+      if (preview === null) return
+      setImporting(true)
+      try {
+        const result = await apiBackupImport(preview.document, mode, false)
+        if (!result.ok) { toast(result.error ?? '备份导入失败', 'error'); return }
+        await loadCfg()
+        setPreview(null)
+        toast('备份导入完成；原状态已生成恢复副本', 'info')
+      } catch (error) {
+        toast(String((error as Error)?.message ?? error), 'error')
+      } finally {
+        setImporting(false)
+      }
+    }
+    const p = preview?.preview ?? null
     return React.createElement('div', { className: 'vx-col' },
-      React.createElement('div', { className: 'vx-section-title' }, '本地状态备份'),
-      React.createElement('div', { className: 'vx-muted' }, '包含外观、文件夹、提示词、星标、用量和预算；不会包含 API Key。'),
+      React.createElement('div', { className: 'vx-muted' }, '备份包含外观、文件夹、提示词、星标、用量和预算；不会包含账号凭据。'),
       React.createElement('div', { className: 'vx-row wrap' },
-        React.createElement('button', { className: 'vx-btn', onClick: () => { void exportBackup() } }, React.createElement(Icon, { n: 'download', size: 12 }), ' 导出 JSON 备份'),
-        React.createElement('select', { className: 'vx-input', value: mode, onChange: (e: React.ChangeEvent<HTMLSelectElement>) => setMode(e.target.value === 'replace' ? 'replace' : 'merge') }, React.createElement('option', { value: 'merge' }, '合并导入'), React.createElement('option', { value: 'replace' }, '覆盖非敏感状态')),
-        React.createElement('label', { className: 'vx-btn' }, '选择备份文件', React.createElement('input', { type: 'file', accept: 'application/json,.json', style: { display: 'none' }, onChange: (e: React.ChangeEvent<HTMLInputElement>) => { const file = e.target.files?.[0]; if (file !== undefined) void importFile(file); e.target.value = '' } })),
+        React.createElement(Button, { variant: 'secondary', size: 'sm', onClick: () => { void exportBackup() } }, '导出 JSON 备份'),
+        React.createElement('label', { className: 'vx-button vx-button-secondary vx-button-sm' }, '选择备份文件',
+          React.createElement('input', {
+            type: 'file',
+            accept: 'application/json,.json',
+            style: { display: 'none' },
+            onChange: (event: React.ChangeEvent<HTMLInputElement>) => {
+              const file = event.currentTarget.files?.[0]
+              if (file !== undefined) void importFile(file)
+              event.currentTarget.value = ''
+            },
+          }),
+        ),
+      ),
+      React.createElement(Dialog, {
+        open: preview !== null,
+        onClose: () => { if (!importing) setPreview(null) },
+        title: '导入备份',
+        description: preview?.fileName,
+        size: 'md',
+        dismissible: !importing,
+        footer: React.createElement(React.Fragment, null,
+          React.createElement(Button, { variant: 'ghost', onClick: () => setPreview(null), disabled: importing }, '取消'),
+          React.createElement(Button, { variant: 'primary', onClick: () => { void confirmImport() }, disabled: importing }, importing ? '导入中…' : (mode === 'replace' ? '覆盖导入' : '合并导入')),
+        ),
+      },
+        p === null ? null : React.createElement(React.Fragment, null,
+          React.createElement('div', { className: 'vx-count-grid' },
+            [['文件夹', p.folders], ['提示词', p.prompts], ['星标会话', p.starredSessions], ['用量天数', p.usageDays]].map(([label, value]) => React.createElement('div', { key: String(label), className: 'vx-count-cell' },
+              React.createElement('div', { className: 'vx-count-value' }, String(value)),
+              React.createElement('div', { className: 'vx-count-label' }, String(label)),
+            )),
+          ),
+          React.createElement('div', { className: 'vx-muted' }, `冲突：文件夹 ${p.conflicts.folders}、提示词 ${p.conflicts.prompts}、用量 ${p.conflicts.usageDays}。合并会按 ID 更新；覆盖会移除现有非敏感状态。`),
+          React.createElement(Segmented, {
+            value: mode,
+            options: [{ value: 'merge', label: '合并导入' }, { value: 'replace', label: '覆盖导入' }],
+            onChange: (value) => setMode(value as BackupImportMode),
+            ariaLabel: '导入方式',
+          }),
+          React.createElement('div', { className: 'vx-muted' }, '导入前会自动生成一份恢复副本；账号登录不受影响。'),
+        ),
       ),
     )
   }
@@ -2992,53 +3372,230 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     return React.createElement('span', null, props.text.slice(0, index), React.createElement('mark', null, props.text.slice(index, index + q.length)), props.text.slice(index + q.length))
   }
 
+  interface SearchRow {
+    key: string
+    sessionId: string
+    snippet: string
+    kind?: ConversationSearchKind
+    time?: number
+    anchorSeq?: number
+    seq?: number
+  }
+
   function SearchTab(): React.ReactElement {
+    const [scope, setScope] = React.useState<'current' | 'all'>('current')
     const [query, setQuery] = React.useState('')
     const [kinds, setKinds] = React.useState<ConversationSearchKind[]>(['user', 'assistant', 'tool'])
-    const [items, setItems] = React.useState<ConversationSearchItem[]>([])
-    const [status, setStatus] = React.useState('')
+    const [rows, setRows] = React.useState<SearchRow[]>([])
+    const [status, setStatus] = React.useState<'idle' | 'loading' | 'done' | 'error'>('idle')
+    const [error, setError] = React.useState('')
     const [hasMore, setHasMore] = React.useState(false)
     const [scanned, setScanned] = React.useState(false)
+    const [active, setActive] = React.useState(0)
     React.useEffect(() => {
-      if (query.trim() === '' || S.sessionId === null) { setItems([]); setStatus(''); setHasMore(false); setScanned(false); return }
+      const q = query.trim()
+      if (q === '') { setRows([]); setStatus('idle'); setError(''); setHasMore(false); setScanned(false); return }
       const controller = new AbortController()
       const timer = setTimeout(() => {
-        setStatus('搜索中…')
-        void apiConversationSearch(S.sessionId as string, query.trim(), kinds, controller.signal).then((result) => {
+        setStatus('loading')
+        setError('')
+        if (scope === 'all') {
+          const remote = sessionRemote()
+          if (remote === undefined) {
+            setRows([])
+            setStatus('error')
+            setError(CROSS_SEARCH_UNAVAILABLE)
+            return
+          }
+          void remote.search({ query: q }, controller.signal).then((result) => {
+            if (controller.signal.aborted) return
+            if (result.ok) {
+              setRows(result.value.items.map((item, index) => ({ key: `r-${item.sessionId}-${index}`, sessionId: item.sessionId, snippet: item.snippet })))
+              setStatus('done')
+              setHasMore(false)
+            } else {
+              setRows([])
+              setStatus('error')
+              setError(remoteErrorMessage(result.error, CROSS_SEARCH_UNAVAILABLE))
+            }
+          }).catch(() => {
+            if (!controller.signal.aborted) { setRows([]); setStatus('error'); setError(CROSS_SEARCH_UNAVAILABLE) }
+          })
+          return
+        }
+        if (S.sessionId === null) {
+          setRows([])
+          setStatus('error')
+          setError('当前没有打开的会话')
+          return
+        }
+        void apiConversationSearch(S.sessionId, q, kinds, controller.signal).then((result) => {
           if (controller.signal.aborted) return
-          if (!result.ok) { setItems([]); setStatus(result.error ?? '搜索不可用'); return }
-          setItems(result.items); setHasMore(result.hasMore); setScanned(result.source === 'scan'); setStatus(result.items.length === 0 ? '没有匹配结果' : '')
+          if (!result.ok) { setRows([]); setStatus('error'); setError(result.error ?? '搜索不可用'); return }
+          setRows(result.items.map((item) => ({ ...item, key: `${item.seq}-${item.kind}` })))
+          setHasMore(result.hasMore)
+          setScanned(result.source === 'scan')
+          setStatus('done')
+        }).catch(() => {
+          if (!controller.signal.aborted) { setRows([]); setStatus('error'); setError('搜索失败') }
         })
       }, 250)
       return () => { clearTimeout(timer); controller.abort() }
-    }, [query, kinds.join(','), S.sessionId])
+    }, [query, kinds.join(','), scope, S.sessionId])
+    React.useEffect(() => { setActive(0) }, [rows])
+    React.useEffect(() => {
+      const node = document.getElementById(`vx-search-row-${active}`)
+      if (node !== null) node.scrollIntoView({ block: 'nearest' })
+    }, [active])
     const toggle = (kind: ConversationSearchKind): void => setKinds((old) => old.includes(kind) ? (old.length > 1 ? old.filter((item) => item !== kind) : old) : [...old, kind])
     const names: Record<ConversationSearchKind, string> = { user: '用户', assistant: '助手', tool: '工具' }
+    const openRow = (row: SearchRow): void => {
+      if (scope === 'all' || row.anchorSeq === undefined) { openSessionItem(row.sessionId); return }
+      void revealSearchResult(row as unknown as ConversationSearchItem)
+    }
+    const onKeyDown = (event: React.KeyboardEvent<HTMLInputElement>): void => {
+      if (event.key === 'ArrowDown') { event.preventDefault(); if (rows.length > 0) setActive((index) => Math.min(rows.length - 1, index + 1)) }
+      else if (event.key === 'ArrowUp') { event.preventDefault(); if (rows.length > 0) setActive((index) => Math.max(0, index - 1)) }
+      else if (event.key === 'Enter') {
+        const row = rows[active]
+        if (row !== undefined) { event.preventDefault(); openRow(row) }
+      }
+    }
     return React.createElement('div', { className: 'vx-col' },
-      React.createElement('div', { className: 'vx-muted' }, '搜索当前会话的消息与工具记录；结果只在本次请求中使用。'),
-      scanned ? React.createElement('div', { className: 'vx-muted' }, '本部署未开启 dsh 的事件全文索引，已改为直接扫描会话日志（结果按出现顺序，最多 100 条）。') : null,
-      React.createElement('input', { className: 'vx-input', autoFocus: true, placeholder: '输入搜索词…', value: query, onChange: (e: React.ChangeEvent<HTMLInputElement>) => setQuery(e.target.value) }),
-      React.createElement('div', { className: 'vx-row' }, (['user', 'assistant', 'tool'] as const).map((kind) => React.createElement('label', { key: kind, className: 'vx-muted' }, React.createElement('input', { type: 'checkbox', checked: kinds.includes(kind), onChange: () => toggle(kind) }), ' ', names[kind]))),
-      status !== '' ? React.createElement('div', { className: 'vx-muted' }, status) : null,
-      React.createElement('div', { className: 'vx-list' }, items.map((item) => React.createElement('button', { key: `${item.seq}-${item.kind}`, className: 'vx-list-item', onClick: () => { void revealSearchResult(item) } },
-        React.createElement('div', { className: 'vx-row' }, React.createElement('span', { className: 'vx-badge' }, names[item.kind]), React.createElement('span', { className: 'vx-muted' }, new Date(item.time).toLocaleString('zh-CN'))),
-        React.createElement('div', { className: 'vx-prompt-body' }, React.createElement(Highlight, { text: item.snippet, query })),
-      ))),
+      React.createElement(Segmented, {
+        value: scope,
+        options: [{ value: 'current', label: '当前会话' }, { value: 'all', label: '全部会话' }],
+        onChange: (value) => setScope(value as 'current' | 'all'),
+        ariaLabel: '搜索范围',
+      }),
+      React.createElement('input', {
+        className: 'vx-input',
+        autoFocus: true,
+        placeholder: scope === 'all' ? '搜索全部会话…' : '搜索当前会话…',
+        value: query,
+        onChange: (event: React.ChangeEvent<HTMLInputElement>) => setQuery(event.currentTarget.value),
+        onKeyDown,
+        role: 'combobox',
+        'aria-expanded': rows.length > 0,
+        'aria-controls': 'vx-search-results',
+        'aria-activedescendant': rows.length > 0 ? `vx-search-row-${active}` : undefined,
+      }),
+      scope === 'current'
+        ? React.createElement('div', { className: 'vx-row wrap' }, (['user', 'assistant', 'tool'] as const).map((kind) => React.createElement(Button, {
+          key: kind,
+          variant: kinds.includes(kind) ? 'secondary' : 'ghost',
+          size: 'sm',
+          'aria-pressed': kinds.includes(kind),
+          onClick: () => toggle(kind),
+        }, names[kind])))
+        : null,
+      scanned ? React.createElement('div', { className: 'vx-muted' }, '本部署未开启事件全文索引，已改为直接扫描会话日志（最多 100 条）。') : null,
+      status === 'loading' ? React.createElement('div', { className: 'vx-row vx-muted' }, React.createElement(Spinner, { label: '搜索中' }), ' 搜索中…') : null,
+      status === 'error' ? React.createElement('div', { className: 'vx-error', role: 'alert' }, error) : null,
+      React.createElement('div', { className: 'vx-list', id: 'vx-search-results', role: 'listbox', 'aria-label': '搜索结果' },
+        rows.map((row, index) => React.createElement('button', {
+          key: row.key,
+          id: `vx-search-row-${index}`,
+          type: 'button',
+          role: 'option',
+          'aria-selected': index === active,
+          className: 'vx-list-item' + (index === active ? ' on' : ''),
+          onMouseEnter: () => setActive(index),
+          onClick: () => openRow(row),
+        },
+          React.createElement('div', { className: 'vx-row' },
+            React.createElement('span', { className: 'vx-badge' }, scope === 'all' ? '会话' : names[row.kind ?? 'user']),
+            row.time === undefined ? null : React.createElement('span', { className: 'vx-muted' }, new Date(row.time).toLocaleString('zh-CN')),
+          ),
+          React.createElement('div', { className: 'vx-prompt-body' }, React.createElement(Highlight, { text: row.snippet, query })),
+        )),
+      ),
+      status === 'done' && rows.length === 0
+        ? React.createElement(EmptyState, { title: '没有匹配结果', hint: scope === 'all' ? '换个关键词，或切回当前会话。' : '换个关键词或放宽角色筛选。' })
+        : null,
       hasMore ? React.createElement('div', { className: 'vx-muted' }, '结果超过 100 条，请缩小搜索范围。') : null,
     )
   }
 
   function ExportTab(): React.ReactElement {
     const s = useS()
+    const [format, setFormat] = React.useState<'markdown' | 'json' | 'pdf'>('markdown')
+    const [phase, setPhase] = React.useState<'idle' | 'running' | 'done' | 'error'>('idle')
+    const [result, setResult] = React.useState<{ fileName: string; bytes: number } | null>(null)
+    const [error, setError] = React.useState('')
+    const controllerRef = React.useRef<AbortController | null>(null)
+    React.useEffect(() => () => { controllerRef.current?.abort() }, [])
+    const formats = [
+      { value: 'markdown', label: 'Markdown', hint: '便于阅读与分享' },
+      { value: 'json', label: 'JSON', hint: '可导入其他工具' },
+      { value: 'pdf', label: 'HTML', hint: '内嵌图片，可打印为 PDF' },
+    ] as const
+    const start = async (): Promise<void> => {
+      if (s.sessionId === null) { setPhase('error'); setError('当前没有打开的会话'); return }
+      controllerRef.current?.abort()
+      const controller = new AbortController()
+      controllerRef.current = controller
+      setPhase('running')
+      setError('')
+      setResult(null)
+      const outcome = await runExport(format, controller.signal)
+      if (controller.signal.aborted) { setPhase('idle'); return }
+      if (outcome.ok && outcome.fileName !== undefined) {
+        setResult({ fileName: outcome.fileName, bytes: outcome.bytes ?? 0 })
+        setPhase('done')
+      } else {
+        setPhase('error')
+        setError('导出失败，请重试')
+      }
+    }
+    const cancel = (): void => {
+      controllerRef.current?.abort()
+      controllerRef.current = null
+      setPhase('idle')
+    }
     return React.createElement('div', { className: 'vx-col' },
-      React.createElement('div', { className: 'vx-muted' }, '将当前会话导出为文件：JSON 可导入其他工具，Markdown 便于阅读分享，HTML 内嵌图片（导出 .html 文件，浏览器打开后打印即可另存为 PDF）。'),
-      React.createElement('div', { className: 'vx-row wrap' },
-        React.createElement('button', { className: 'vx-btn big', disabled: s.exporting === true, onClick: () => runExport('json') }, React.createElement(Icon, { n: 'download', size: 14 }), ' JSON'),
-        React.createElement('button', { className: 'vx-btn big', disabled: s.exporting === true, onClick: () => runExport('markdown') }, React.createElement(Icon, { n: 'download', size: 14 }), ' Markdown'),
-        React.createElement('button', { className: 'vx-btn big', disabled: s.exporting === true, onClick: () => runExport('pdf') }, React.createElement(Icon, { n: 'download', size: 14 }), ' HTML（含图片）'),
+      React.createElement('div', { className: 'vx-muted' }, '将当前会话导出为文件。Markdown 便于阅读分享；JSON 可导入其他工具；HTML 内嵌图片，用浏览器打开后可打印为 PDF。'),
+      React.createElement('div', { className: 'vx-format-grid', role: 'radiogroup', 'aria-label': '导出格式' },
+        formats.map((item) => React.createElement('button', {
+          key: item.value,
+          type: 'button',
+          role: 'radio',
+          'aria-checked': format === item.value,
+          className: 'vx-format-card' + (format === item.value ? ' on' : ''),
+          onClick: () => setFormat(item.value),
+        },
+          React.createElement('span', { className: 'vx-format-title' }, item.label),
+          React.createElement('span', { className: 'vx-format-hint' }, item.hint),
+        )),
       ),
-      s.exporting === true ? React.createElement('div', { className: 'vx-muted vx-pad-sm' }, '导出中…') : null,
-      React.createElement(BackupControls, null),
+      React.createElement('div', { className: 'vx-row' },
+        React.createElement(Button, {
+          variant: 'primary',
+          onClick: () => { void start() },
+          disabled: phase === 'running' || s.sessionId === null,
+        }, phase === 'done' ? '再次导出' : '开始导出'),
+        phase === 'running' ? React.createElement(Button, { variant: 'ghost', onClick: cancel }, '取消') : null,
+        React.createElement('span', { className: 'vx-flex1' }),
+        s.sessionId === null ? React.createElement('span', { className: 'vx-muted' }, '当前没有打开的会话') : null,
+      ),
+      phase === 'running'
+        ? React.createElement('div', { className: 'vx-export-progress', role: 'status' },
+          React.createElement('div', { className: 'vx-row vx-muted' }, React.createElement(Spinner, { label: '导出中' }), ' 读取会话'),
+          React.createElement('div', { className: 'vx-muted' }, '整理内容 → 生成文件'),
+        )
+        : null,
+      phase === 'error'
+        ? React.createElement('div', { className: 'vx-error', role: 'alert' }, error)
+        : null,
+      phase === 'done' && result !== null
+        ? React.createElement('div', { className: 'vx-export-result' },
+          React.createElement(Icon, { n: 'check', size: 14 }),
+          React.createElement('div', { className: 'vx-export-result-copy' },
+            React.createElement('div', { className: 'vx-prompt-title' }, result.fileName),
+            React.createElement('div', { className: 'vx-muted' }, `${formatTokenCount(result.bytes)} 字节 · 已开始下载`),
+          ),
+        )
+        : null,
     )
   }
 
@@ -3076,7 +3633,6 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     }
     return React.createElement('div', { className: 'vx-col' },
       React.createElement('div', { className: 'vx-section-title' }, '效率工具'),
-      React.createElement(Toggle, { label: '引用回复', checked: s.cfg.quote === true, onChange: (v) => set('quote', v), hint: '选中对话文本后出现引用按钮（个性化面板内不触发）' }),
       React.createElement(Toggle, { label: '防自动跳转', checked: s.cfg.antiScroll === true, onChange: (v) => set('antiScroll', v), hint: '拦截发送后强制滚动到底部' }),
       React.createElement(Toggle, { label: '公式复制', checked: s.cfg.formula === true, onChange: (v) => set('formula', v), hint: '消息下方显示 LaTeX/MathML 复制按钮' }),
       React.createElement('div', { className: 'vx-row vx-pad-sm' },
@@ -3093,14 +3649,34 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       try { setInfo(await apiDebugInfo()) } catch { setInfo({ ok: false }) }
     }
     React.useEffect(() => { void loadInfo() }, [])
-    return React.createElement('div', { className: 'vx-col vx-pad' },
-      React.createElement('div', null, 'Custom 便利套件'),
-      React.createElement('div', { className: 'vx-muted' }, '外观与天气特效 · 项目文件夹 · 提示词 · 会话导出 · Mermaid 渲染 · 额度面板'),
-      info !== null && info.ok === true
-        ? React.createElement('pre', { className: 'vx-pre' },
-          `状态文件: ${String(info.statePath ?? '')}\n今日: ${String(info.today ?? '')}\nMermaid: ${String(info.mermaidBytes ?? 0)} bytes\n今日用量: ${JSON.stringify(info.usageToday ?? {})}\n客户端诊断: ${Array.isArray(info.diagReports) ? `${String(info.diagReports.length)} 条` : '0 条'}`)
-        : null,
-      React.createElement('button', { className: 'vx-btn', onClick: () => void loadInfo() }, React.createElement(Icon, { n: 'refresh', size: 12 }), ' 刷新调试信息'),
+    const rows: Array<[string, string]> = []
+    if (info?.ok === true) {
+      rows.push(['状态文件', String(info.statePath ?? '')])
+      rows.push(['Mermaid 引擎', `${String(info.mermaidBytes ?? 0)} 字节`])
+      rows.push(['客户端诊断', Array.isArray(info.diagReports) ? `${info.diagReports.length} 条` : '0 条'])
+    }
+    return React.createElement('div', { className: 'vx-col' },
+      React.createElement('div', { className: 'vx-muted' }, 'Custom 便利套件：外观与天气特效、项目文件夹、提示词、会话导出、Mermaid、额度与备份。'),
+      info === null
+        ? React.createElement('div', { className: 'vx-row vx-muted' }, React.createElement(Spinner, { label: '读取信息' }), ' 读取信息…')
+        : (info.ok !== true
+          ? React.createElement('div', { className: 'vx-error', role: 'alert' }, '调试信息不可用')
+          : React.createElement('div', { className: 'vx-col' },
+            rows.map(([label, value]) => React.createElement('div', { className: 'vx-row', key: label },
+              React.createElement('span', { className: 'vx-param-label' }, label),
+              React.createElement('span', { className: 'vx-flex1' }),
+              React.createElement('span', { className: 'vx-muted vx-ellipsis', title: value }, value),
+              React.createElement(IconButton, {
+                label: '复制' + label,
+                size: 'sm',
+                icon: React.createElement(Icon, { n: 'copy', size: 11 }),
+                onClick: () => { void copyText(value).then((ok) => toast(ok ? '已复制' : '复制失败', ok ? 'info' : 'error')) },
+              }),
+            )),
+          )),
+      React.createElement('div', { className: 'vx-row' },
+        React.createElement(Button, { variant: 'ghost', size: 'sm', onClick: () => { void loadInfo() } }, '刷新信息'),
+      ),
     )
   }
 
@@ -3108,32 +3684,31 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     const s = useS()
     const [val, setVal] = React.useState('')
     React.useEffect(() => { if (s.ask !== null) setVal(s.ask.value ?? '') }, [s.ask?.title])
-    const dialogRef = useDialogFocus(() => setS({ ask: null }))
     const ask = s.ask
-    if (ask === null) return null
     const submit = (): void => {
+      if (ask === null) return
       const cb = ask.cb
       setS({ ask: null })
       if (ask.allowEmpty === true || val.trim() !== '') cb(ask.allowEmpty === true ? val : val.trim())
     }
-    return React.createElement('div', { className: 'vx-modal-mask', onClick: () => setS({ ask: null }) },
-      React.createElement('div', {
-        className: 'vx-glass vx-modal',
-        style: { width: 'min(360px, 92vw)' },
-        role: 'dialog',
-        'aria-modal': true,
-        'aria-label': ask.title,
-        tabIndex: -1,
-        ref: dialogRef,
-        onClick: (e: React.MouseEvent) => e.stopPropagation(),
-      },
-        React.createElement('div', { className: 'vx-pop-head' }, React.createElement('span', null, ask.title)),
-        React.createElement('input', { className: 'vx-input', value: val, autoFocus: true, onChange: (e: React.ChangeEvent<HTMLInputElement>) => setVal(e.target.value), onKeyDown: (e: React.KeyboardEvent) => { if (e.key === 'Enter') submit() } }),
-        React.createElement('div', { className: 'vx-row vx-pad-sm' },
-          React.createElement('button', { className: 'vx-btn', onClick: submit }, '确定'),
-          React.createElement('button', { className: 'vx-btn', onClick: () => setS({ ask: null }) }, '取消'),
-        ),
+    return React.createElement(Dialog, {
+      open: ask !== null,
+      onClose: () => setS({ ask: null }),
+      title: ask?.title ?? '输入',
+      size: 'sm',
+      footer: ask === null ? undefined : React.createElement(React.Fragment, null,
+        React.createElement(Button, { variant: 'ghost', onClick: () => setS({ ask: null }) }, '取消'),
+        React.createElement(Button, { variant: 'primary', onClick: submit }, '确定'),
       ),
+    },
+      ask === null ? null : React.createElement('input', {
+        className: 'vx-input',
+        value: val,
+        autoFocus: true,
+        'data-autofocus': true,
+        onChange: (event: React.ChangeEvent<HTMLInputElement>) => setVal(event.currentTarget.value),
+        onKeyDown: (event: React.KeyboardEvent<HTMLInputElement>) => { if (event.key === 'Enter') submit() },
+      }),
     )
   }
 
@@ -3146,35 +3721,27 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       setS({ confirmAsk: null })
       cb(ok)
     }
-    const dialogRef = useDialogFocus(() => answer(false))
-    if (c === null) return null
-    return React.createElement('div', { className: 'vx-modal-mask', onClick: () => answer(false) },
-      React.createElement('div', {
-        className: 'vx-glass vx-modal',
-        style: { width: 'min(380px, 92vw)' },
-        role: 'dialog',
-        'aria-modal': true,
-        'aria-label': '确认操作',
-        tabIndex: -1,
-        ref: dialogRef,
-        onClick: (e: React.MouseEvent) => e.stopPropagation(),
-      },
-        React.createElement('div', { className: 'vx-pad' }, c.message),
-        React.createElement('div', { className: 'vx-row vx-pad-sm' },
-          React.createElement('button', { className: 'vx-btn vx-btn-danger', onClick: () => answer(true) }, '确定'),
-          React.createElement('button', { className: 'vx-btn', autoFocus: true, onClick: () => answer(false) }, '取消'),
-        ),
+    return React.createElement(Dialog, {
+      open: c !== null,
+      onClose: () => answer(false),
+      title: '确认操作',
+      size: 'sm',
+      footer: c === null ? undefined : React.createElement(React.Fragment, null,
+        React.createElement(Button, { variant: 'ghost', autoFocus: true, onClick: () => answer(false) }, '取消'),
+        React.createElement(Button, { variant: 'danger', onClick: () => answer(true) }, '确定'),
       ),
+    },
+      c === null ? null : React.createElement('div', { className: 'vx-dialog-text' }, c.message),
     )
   }
 
   function TemplateModal(): React.ReactElement | null {
     const s = useS()
     const prompt = s.templatePrompt
-    const dialogRef = useDialogFocus(() => setS({ templatePrompt: null, templateValues: {} }))
-    if (prompt === null) return null
-    const names = promptVariables(prompt.text)
+    const close = (): void => setS({ templatePrompt: null, templateValues: {} })
+    const names = prompt === null ? [] : promptVariables(prompt.text)
     const submit = (): void => {
+      if (prompt === null) return
       if (names.some((name) => (S.templateValues[name] ?? '').trim() === '')) { toast('请填写所有变量', 'error'); return }
       const text = fillPromptTemplate(prompt.text, S.templateValues)
       const ok = S.insertDraft !== null ? S.insertDraft(text, false) : false
@@ -3182,21 +3749,25 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       S.prompts = S.prompts.map((item) => item.id === prompt.id ? { ...item, useCount: (item.useCount ?? 0) + 1, lastUsedAt: Date.now() } : item)
       setS({ prompts: S.prompts, templatePrompt: null, templateValues: {} }); saveCfg(); toast('已插入提示词: ' + prompt.name, 'info')
     }
-    return React.createElement('div', { className: 'vx-modal-mask', onClick: () => setS({ templatePrompt: null, templateValues: {} }) },
-      React.createElement('div', {
-        className: 'vx-glass vx-modal',
-        style: { width: 'min(440px, 92vw)' },
-        role: 'dialog',
-        'aria-modal': true,
-        'aria-label': `填写变量 · ${prompt.name}`,
-        tabIndex: -1,
-        ref: dialogRef,
-        onClick: (e: React.MouseEvent) => e.stopPropagation(),
-      },
-        React.createElement('div', { className: 'vx-pop-head' }, React.createElement('span', null, `填写变量 · ${prompt.name}`)),
-        names.map((name) => React.createElement('label', { key: name, className: 'vx-col' }, React.createElement('span', { className: 'vx-muted' }, name), React.createElement('input', { className: 'vx-input', value: s.templateValues[name] ?? '', onChange: (e: React.ChangeEvent<HTMLInputElement>) => setS({ templateValues: { ...S.templateValues, [name]: e.target.value } }) }))),
-        React.createElement('div', { className: 'vx-row vx-pad-sm' }, React.createElement('button', { className: 'vx-btn', onClick: submit }, '插入'), React.createElement('button', { className: 'vx-btn', onClick: () => setS({ templatePrompt: null, templateValues: {} }) }, '取消')),
+    return React.createElement(Dialog, {
+      open: prompt !== null,
+      onClose: close,
+      title: prompt === null ? '填写变量' : `填写变量 · ${prompt.name}`,
+      size: 'md',
+      footer: prompt === null ? undefined : React.createElement(React.Fragment, null,
+        React.createElement(Button, { variant: 'ghost', onClick: close }, '取消'),
+        React.createElement(Button, { variant: 'primary', onClick: submit }, '插入'),
       ),
+    },
+      prompt === null ? null : names.map((name, index) => React.createElement(Field, { key: name, label: name, htmlFor: `vx-template-${index}` },
+        React.createElement('input', {
+          id: `vx-template-${index}`,
+          className: 'vx-input',
+          value: s.templateValues[name] ?? '',
+          'data-autofocus': index === 0 ? true : undefined,
+          onChange: (event: React.ChangeEvent<HTMLInputElement>) => setS({ templateValues: { ...S.templateValues, [name]: event.currentTarget.value } }),
+        }),
+      )),
     )
   }
 
@@ -3242,7 +3813,6 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     const [err, setErr] = React.useState<string | null>(null)
     const [loading, setLoading] = React.useState(false)
     const [liveUrl, setLiveUrl] = React.useState('#')
-    const dialogRef = useDialogFocus(() => setS({ mermaidModal: null }))
     React.useEffect(() => {
       if (mm === null) return
       let alive = true
@@ -3264,28 +3834,20 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       })()
       return () => { alive = false }
     }, [mm])
-    if (mm === null) return null
-    return React.createElement('div', { className: 'vx-modal-mask', onClick: () => setS({ mermaidModal: null }) },
-      React.createElement('div', {
-        className: 'vx-glass vx-modal',
-        role: 'dialog',
-        'aria-modal': true,
-        'aria-label': 'Mermaid 图表',
-        tabIndex: -1,
-        ref: dialogRef,
-        onClick: (e: React.MouseEvent) => e.stopPropagation(),
-      },
-        React.createElement('div', { className: 'vx-pop-head' },
-          React.createElement('span', null, `${mm.title} (${mm.index + 1}/${mm.codes.length})`),
-          React.createElement('span', { className: 'vx-row' },
-            mm.codes.length > 1 ? React.createElement('button', { className: 'vx-chip', title: '上一个', 'aria-label': '上一个图表', onClick: () => setS({ mermaidModal: { ...mm, index: (mm.index + mm.codes.length - 1) % mm.codes.length } }) }, React.createElement(Icon, { n: 'chevronRight', size: 12, style: { transform: 'rotate(180deg)' } })) : null,
-            mm.codes.length > 1 ? React.createElement('button', { className: 'vx-chip', title: '下一个', 'aria-label': '下一个图表', onClick: () => setS({ mermaidModal: { ...mm, index: (mm.index + 1) % mm.codes.length } }) }, React.createElement(Icon, { n: 'chevronRight', size: 12 })) : null,
-            React.createElement('a', { className: 'vx-chip vx-link', href: liveUrl, target: '_blank', rel: 'noopener noreferrer' }, '在 mermaid.live 打开'),
-            React.createElement('button', { className: 'vx-chip', title: '关闭', 'aria-label': '关闭图表', onClick: () => setS({ mermaidModal: null }) }, React.createElement(Icon, { n: 'x', size: 12 })),
-          ),
-        ),
-        loading ? React.createElement('div', { className: 'vx-muted vx-pad' }, '渲染中…') : null,
-        err !== null ? React.createElement('div', { className: 'vx-error vx-pad' }, err) : null,
+    return React.createElement(Dialog, {
+      open: mm !== null,
+      onClose: () => setS({ mermaidModal: null }),
+      title: mm === null ? 'Mermaid 图表' : `${mm.title} (${mm.index + 1}/${mm.codes.length})`,
+      size: 'lg',
+      footer: mm === null ? undefined : React.createElement('div', { className: 'vx-row' },
+        mm.codes.length > 1 ? React.createElement(Button, { variant: 'ghost', size: 'sm', onClick: () => setS({ mermaidModal: { ...mm, index: (mm.index + mm.codes.length - 1) % mm.codes.length } }) }, '上一个') : null,
+        mm.codes.length > 1 ? React.createElement(Button, { variant: 'ghost', size: 'sm', onClick: () => setS({ mermaidModal: { ...mm, index: (mm.index + 1) % mm.codes.length } }) }, '下一个') : null,
+        React.createElement('a', { className: 'vx-button vx-button-secondary vx-button-sm vx-link', href: liveUrl, target: '_blank', rel: 'noopener noreferrer' }, '在 mermaid.live 打开'),
+      ),
+    },
+      mm === null ? null : React.createElement(React.Fragment, null,
+        loading ? React.createElement('div', { className: 'vx-row vx-muted' }, React.createElement(Spinner, { label: '渲染中' }), ' 渲染中…') : null,
+        err !== null ? React.createElement('div', { className: 'vx-error', role: 'alert' }, err) : null,
         svg !== null ? React.createElement('div', { className: 'vx-svgbox', dangerouslySetInnerHTML: { __html: svg } }) : null,
       ),
     )
@@ -3304,7 +3866,14 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     const [index, setIndex] = React.useState(0)
     const [remote, setRemote] = React.useState<Array<{ sessionId: string; snippet: string }>>([])
     const [remoteStatus, setRemoteStatus] = React.useState('')
-    const dialogRef = useDialogFocus(() => setS({ commandOpen: false }))
+    const [recent, setRecent] = React.useState<string[]>([])
+    React.useEffect(() => {
+      if (!s.commandOpen) return
+      const storage = typeof window === 'undefined' ? null : window.localStorage
+      setRecent(loadRecent(storage))
+      setQuery('')
+      setIndex(0)
+    }, [s.commandOpen])
     React.useEffect(() => {
       if (!s.commandOpen || query.trim().length < 2) { setRemote([]); setRemoteStatus(''); return }
       const controller = new AbortController()
@@ -3324,41 +3893,104 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       }, 250)
       return () => { clearTimeout(timer); controller.abort() }
     }, [query, s.commandOpen])
-    if (!s.commandOpen) return null
-    interface Command { key: string; label: string; detail: string; run: () => void; disabled?: boolean }
-    const commands: Command[] = [
-      { key: 'balance', label: '打开额度与用量', detail: '功能', run: () => setS({ commandOpen: false, panelOpen: true, panelTab: 'balance' }) },
-      { key: 'export', label: '导出当前会话', detail: S.sessionId === null ? '当前没有打开的会话' : 'Markdown', disabled: S.sessionId === null, run: () => { setS({ commandOpen: false }); runExport('markdown') } },
-      { key: 'search-current', label: '搜索当前会话', detail: S.sessionId === null ? '当前没有打开的会话' : '功能', disabled: S.sessionId === null, run: () => setS({ commandOpen: false, panelOpen: true, panelTab: 'search' }) },
-      { key: 'folders', label: '打开项目文件夹', detail: '功能', run: () => setS({ commandOpen: false, foldersOpen: true, panelOpen: false }) },
-      { key: 'prompts', label: '打开提示词库', detail: '功能', run: () => setS({ commandOpen: false, panelOpen: true, panelTab: 'prompt' }) },
-      { key: 'tools', label: '打开效率工具', detail: '功能', run: () => setS({ commandOpen: false, panelOpen: true, panelTab: 'tools' }) },
-      ...(sessionsUnavailable ? [{ key: 'sessions-unavailable', label: '打开会话', detail: sessionsState === null ? '会话服务不可用' : '会话列表加载失败', disabled: true, run: () => {} }] : []),
-      ...(workspacesUnavailable ? [{ key: 'workspaces-unavailable', label: '打开工作区', detail: workspacesState === null ? '工作区服务不可用' : '工作区列表加载失败', disabled: true, run: () => {} }] : []),
-      ...S.prompts.map((prompt) => ({ key: `prompt-${prompt.id}`, label: prompt.name, detail: S.insertDraft === null ? '当前没有可用输入框' : '提示词', disabled: S.insertDraft === null, run: () => { setS({ commandOpen: false }); insertPrompt(prompt) } })),
-      ...(sessionsUnavailable ? [] : (sessionsState?.ids ?? []).map((id) => ({ key: `session-${id}`, label: sessionsState?.byId[id]?.displayTitle || sessionsState?.byId[id]?.title || id, detail: '会话', run: () => { setS({ commandOpen: false }); openSessionItem(id) } }))),
-      ...(workspacesUnavailable ? [] : (workspacesState?.items ?? []).map((workspace) => ({ key: `workspace-${workspace.workspaceId}`, label: workspace.title || workspace.path || workspace.workspaceId, detail: '工作区', run: () => { setS({ commandOpen: false }); void openWorkspaceItem(workspace.workspaceId) } }))),
-      ...remote.map((item) => ({ key: `remote-${item.sessionId}`, label: item.snippet || item.sessionId, detail: '全文搜索结果', run: () => { setS({ commandOpen: false }); openSessionItem(item.sessionId) } })),
+    const commands: PaletteCommand[] = [
+      { key: 'balance', label: '打开额度与用量', detail: '设置', group: '功能', run: () => { setS({ commandOpen: false, settingsSection: 'usage' }); openHostSettings('用量与额度') } },
+      { key: 'export', label: '导出当前会话', detail: S.sessionId === null ? '当前没有打开的会话' : 'Markdown', group: '功能', disabled: S.sessionId === null, run: () => { setS({ commandOpen: false }); void runExport('markdown') } },
+      { key: 'search-current', label: '搜索当前会话', detail: S.sessionId === null ? '当前没有打开的会话' : '设置', group: '功能', disabled: S.sessionId === null, run: () => { setS({ commandOpen: false, settingsSection: 'search' }); openHostSettings('搜索') } },
+      { key: 'folders', label: '打开项目文件夹', detail: '设置', group: '功能', run: () => { setS({ commandOpen: false, settingsSection: 'folders' }); openHostSettings('项目文件夹') } },
+      { key: 'prompts', label: '打开提示词库', detail: '设置', group: '功能', run: () => { setS({ commandOpen: false, settingsSection: 'prompts' }); openHostSettings('提示词') } },
+      { key: 'tools', label: '打开效率工具', detail: '设置', group: '功能', run: () => { setS({ commandOpen: false, settingsSection: 'extensions' }); openHostSettings('扩展') } },
+      ...(sessionsUnavailable ? [{ key: 'sessions-unavailable', label: '打开会话', detail: sessionsState === null ? '会话服务不可用' : '会话列表加载失败', group: '会话', disabled: true, run: () => {} }] : []),
+      ...(workspacesUnavailable ? [{ key: 'workspaces-unavailable', label: '打开工作区', detail: workspacesState === null ? '工作区服务不可用' : '工作区列表加载失败', group: '工作区', disabled: true, run: () => {} }] : []),
+      ...S.prompts.map((prompt) => ({ key: `prompt-${prompt.id}`, label: prompt.name, detail: S.insertDraft === null ? '当前没有可用输入框' : '提示词', group: '提示词', disabled: S.insertDraft === null, run: () => { setS({ commandOpen: false }); insertPrompt(prompt) } })),
+      ...(sessionsUnavailable ? [] : (sessionsState?.ids ?? []).map((id) => ({ key: `session-${id}`, label: sessionsState?.byId[id]?.displayTitle || sessionsState?.byId[id]?.title || id, detail: '会话', group: '会话', run: () => { setS({ commandOpen: false }); openSessionItem(id) } }))),
+      ...(workspacesUnavailable ? [] : (workspacesState?.items ?? []).map((workspace) => ({ key: `workspace-${workspace.workspaceId}`, label: workspace.title || workspace.path || workspace.workspaceId, detail: '工作区', group: '工作区', run: () => { setS({ commandOpen: false }); void openWorkspaceItem(workspace.workspaceId) } }))),
+      ...remote.map((item, index) => ({ key: `remote-${item.sessionId}-${index}`, label: item.snippet || item.sessionId, detail: '全文搜索结果', group: '全文搜索', run: () => { setS({ commandOpen: false }); openSessionItem(item.sessionId) } })),
     ]
-    const q = query.toLowerCase()
-    const visible = commands.filter((item) => q === '' || item.label.toLowerCase().includes(q) || item.detail.toLowerCase().includes(q)).slice(0, 50)
-    const chosen = Math.max(0, Math.min(index, visible.length - 1))
-    return React.createElement('div', { className: 'vx-modal-mask', onClick: () => setS({ commandOpen: false }) },
-      React.createElement('div', {
-        className: 'vx-glass vx-modal',
-        style: { width: 'min(620px, 94vw)' },
-        role: 'dialog',
-        'aria-modal': true,
-        'aria-label': '命令面板',
-        tabIndex: -1,
-        ref: dialogRef,
-        onClick: (e: React.MouseEvent) => e.stopPropagation(),
-      },
-        React.createElement('input', { className: 'vx-input', autoFocus: true, placeholder: '搜索会话、工作区、提示词或功能…', value: query, onChange: (e: React.ChangeEvent<HTMLInputElement>) => { setQuery(e.target.value); setIndex(0) }, onKeyDown: (e: React.KeyboardEvent) => { if (e.key === 'ArrowDown') { e.preventDefault(); setIndex(Math.min(visible.length - 1, chosen + 1)) } else if (e.key === 'ArrowUp') { e.preventDefault(); setIndex(Math.max(0, chosen - 1)) } else if (e.key === 'Enter') { e.preventDefault(); const command = visible[chosen]; if (command !== undefined && command.disabled !== true) command.run() } else if (e.key === 'Escape') setS({ commandOpen: false }) } }),
-        React.createElement('div', { className: 'vx-list' }, visible.map((command, itemIndex) => React.createElement('button', { key: command.key, className: 'vx-list-item' + (itemIndex === chosen ? ' on' : ''), disabled: command.disabled === true, onMouseEnter: () => setIndex(itemIndex), onClick: command.run }, React.createElement('span', null, command.label), React.createElement('span', { className: 'vx-muted' }, command.detail)))),
-        remoteStatus !== '' ? React.createElement('div', { className: 'vx-muted vx-pad-sm' }, remoteStatus) : null,
-        visible.length === 0 ? React.createElement('div', { className: 'vx-muted vx-pad-sm' }, '没有匹配项') : null,
+    const visible = filterCommands(commands, query)
+    const recentItems = query.trim() === '' ? recentCommands(commands, recent).slice(0, 3) : []
+    const recentKeys = new Set(recentItems.map((item) => item.key))
+    const elsewhere = groupCommands(visible.filter((item) => !recentKeys.has(item.key)))
+    const groups: CommandGroup[] = recentItems.length > 0
+      ? [{ group: '最近', items: recentItems }, ...elsewhere]
+      : elsewhere
+    const flat = groups.flatMap((group) => group.items)
+    const chosen = Math.max(0, Math.min(index, flat.length - 1))
+    const runCommand = (command: PaletteCommand): void => {
+      if (command.disabled === true) return
+      const storage = typeof window === 'undefined' ? null : window.localStorage
+      const nextRecent = recordRecent(recent, command.key)
+      setRecent(nextRecent)
+      saveRecent(storage, nextRecent)
+      command.run()
+    }
+    React.useEffect(() => {
+      const node = document.getElementById(`vx-cmd-${chosen}`)
+      if (node !== null) node.scrollIntoView({ block: 'nearest' })
+    }, [chosen])
+    const onKeyDown = (event: React.KeyboardEvent<HTMLInputElement>): void => {
+      if (event.key === 'ArrowDown') { event.preventDefault(); setIndex(Math.min(flat.length - 1, chosen + 1)) }
+      else if (event.key === 'ArrowUp') { event.preventDefault(); setIndex(Math.max(0, chosen - 1)) }
+      else if (event.key === 'Home') { event.preventDefault(); setIndex(0) }
+      else if (event.key === 'End') { event.preventDefault(); setIndex(Math.max(0, flat.length - 1)) }
+      else if (event.key === 'Enter') {
+        event.preventDefault()
+        const command = flat[chosen]
+        if (command !== undefined) runCommand(command)
+      }
+    }
+    let flatIndex = -1
+    return React.createElement(Dialog, {
+      open: s.commandOpen,
+      onClose: () => setS({ commandOpen: false }),
+      title: '快捷面板',
+      description: '搜索会话、工作区、提示词或功能',
+      size: 'lg',
+      className: 'vx-command-dialog',
+      footer: React.createElement('div', { className: 'vx-command-foot' },
+        React.createElement('span', null, React.createElement(Kbd, null, '↑'), React.createElement(Kbd, null, '↓'), ' 选择'),
+        React.createElement('span', null, React.createElement(Kbd, null, 'Enter'), ' 打开'),
+        React.createElement('span', null, React.createElement(Kbd, null, 'Esc'), ' 关闭'),
       ),
+    },
+      React.createElement('input', {
+        className: 'vx-input vx-command-input',
+        autoFocus: true,
+        'data-autofocus': true,
+        placeholder: '搜索会话、工作区、提示词或功能…',
+        value: query,
+        onChange: (event: React.ChangeEvent<HTMLInputElement>) => { setQuery(event.currentTarget.value); setIndex(0) },
+        onKeyDown,
+        role: 'combobox',
+        'aria-expanded': flat.length > 0,
+        'aria-controls': 'vx-command-list',
+        'aria-activedescendant': flat.length > 0 ? `vx-cmd-${chosen}` : undefined,
+      }),
+      React.createElement('div', { className: 'vx-list vx-command-list', id: 'vx-command-list', role: 'listbox', 'aria-label': '命令列表' },
+        groups.map((group) => React.createElement(React.Fragment, { key: group.group },
+          React.createElement('div', { className: 'vx-pop-group' }, group.group),
+          group.items.map((command) => {
+            flatIndex++
+            const itemIndex = flatIndex
+            return React.createElement('button', {
+              key: command.key,
+              id: `vx-cmd-${itemIndex}`,
+              type: 'button',
+              role: 'option',
+              'aria-selected': itemIndex === chosen,
+              className: 'vx-list-item vx-command-item' + (itemIndex === chosen ? ' on' : ''),
+              disabled: command.disabled === true,
+              onMouseEnter: () => setIndex(itemIndex),
+              onClick: () => runCommand(command),
+            },
+              React.createElement('span', { className: 'vx-command-label' }, command.label),
+              React.createElement('span', { className: 'vx-muted' }, command.detail),
+            )
+          }),
+        )),
+      ),
+      remoteStatus !== '' ? React.createElement('div', { className: 'vx-muted' }, remoteStatus) : null,
+      flat.length === 0 ? React.createElement(EmptyState, { title: '没有匹配项', hint: '换个关键词，或直接输入功能名称。' }) : null,
     )
   }
 
@@ -3366,7 +3998,6 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     const s = useS()
     const [sel, setSel] = React.useState<Record<string, boolean>>({})
     const [q, setQ] = React.useState('')
-    const dialogRef = useDialogFocus(() => setS({ batchModal: false }))
     const sessions = useSessionsSafe(props)
     const ids = sessions !== null ? (sessions.ids ?? []) : []
     const byId = sessions !== null ? (sessions.byId as unknown as Record<string, { displayTitle?: string; title?: string; running?: boolean }>) : {}
@@ -3392,285 +4023,471 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
         toast(`归档完成：成功 ${succeeded}，失败 ${failed}${details === '' ? '' : `；${details}`}`, 'error')
       }
     }
-    return React.createElement('div', { className: 'vx-modal-mask', onClick: () => setS({ batchModal: false }) },
-      React.createElement('div', {
-        className: 'vx-glass vx-modal',
-        style: { width: 'min(560px, 92vw)' },
-        role: 'dialog',
-        'aria-modal': true,
-        'aria-label': '批量归档会话',
-        tabIndex: -1,
-        ref: dialogRef,
-        onClick: (e: React.MouseEvent) => e.stopPropagation(),
-      },
-        React.createElement('div', { className: 'vx-pop-head' },
-          React.createElement('span', null, '批量归档会话'),
-          React.createElement('button', { className: 'vx-chip', title: '关闭', 'aria-label': '关闭批量归档', onClick: () => setS({ batchModal: false }) }, React.createElement(Icon, { n: 'x', size: 12 })),
-        ),
-        React.createElement('div', { className: 'vx-muted vx-pad-sm' }, '将选中的会话归档；运行中的会话不可选。DSH 当前未公开恢复接口，本插件不提供恢复入口。'),
-        React.createElement('div', { className: 'vx-row vx-pad-sm' },
-          React.createElement(Icon, { n: 'search', size: 13 }),
-          React.createElement('input', { className: 'vx-input', placeholder: '搜索会话…', value: q, onChange: (e: React.ChangeEvent<HTMLInputElement>) => setQ(e.target.value) }),
-          React.createElement('button', { className: 'vx-btn', onClick: () => { const all: Record<string, boolean> = {}; for (const id of filtered) if (byId[id]?.running !== true) all[id] = true; setSel(all) } }, '全选可归档'),
-          React.createElement('button', { className: 'vx-btn', onClick: () => setSel({}) }, '清空'),
-        ),
-        React.createElement('div', { className: 'vx-list' },
-          filtered.map((id) => {
-            const sum = byId[id]
-            const running = sum?.running === true
-            return React.createElement('label', { key: id, className: 'vx-check-row' },
-              React.createElement('input', { type: 'checkbox', disabled: running, checked: sel[id] === true, onChange: (e: React.ChangeEvent<HTMLInputElement>) => { const next = { ...sel }; if (e.target.checked) next[id] = true; else delete next[id]; setSel(next) } }),
-              React.createElement('span', { className: 'vx-check-title' }, sum !== undefined ? (sum.displayTitle || sum.title || id) : id),
-              running ? React.createElement('span', { className: 'vx-badge' }, '运行中，不可归档') : null,
-            )
-          }),
-        ),
-        React.createElement('div', { className: 'vx-row vx-pad-sm' },
-          React.createElement('button', { className: 'vx-btn vx-btn-danger', disabled: selCount === 0, onClick: () => askConfirm(`确认归档选中的 ${selCount} 个会话？`, (ok) => { if (ok) void batchArchive(Object.keys(sel)) }) },
-            React.createElement(Icon, { n: 'trash', size: 12 }), ` 归档选中 (${selCount})`),
-          React.createElement('button', { className: 'vx-btn', onClick: () => setS({ batchModal: false }) }, '取消'),
-        ),
+    return React.createElement(Dialog, {
+      open: s.batchModal === true,
+      onClose: () => setS({ batchModal: false }),
+      title: '批量归档会话',
+      description: '运行中的会话不可选；DSH 当前未公开恢复接口，本插件不提供恢复入口。',
+      size: 'lg',
+      footer: React.createElement(React.Fragment, null,
+        React.createElement(Button, { variant: 'ghost', onClick: () => setS({ batchModal: false }) }, '取消'),
+        React.createElement(Button, {
+          variant: 'danger',
+          disabled: selCount === 0,
+          onClick: () => askConfirm(`确认归档选中的 ${selCount} 个会话？`, (ok) => { if (ok) void batchArchive(Object.keys(sel)) }),
+        }, `归档选中 (${selCount})`),
+      ),
+    },
+      React.createElement('div', { className: 'vx-toolbar' },
+        React.createElement(Icon, { n: 'search', size: 13 }),
+        React.createElement('input', { className: 'vx-input', placeholder: '搜索会话…', value: q, 'data-autofocus': true, onChange: (event: React.ChangeEvent<HTMLInputElement>) => setQ(event.currentTarget.value) }),
+        React.createElement(Button, {
+          variant: 'ghost',
+          size: 'sm',
+          onClick: () => { const all: Record<string, boolean> = {}; for (const id of filtered) if (byId[id]?.running !== true) all[id] = true; setSel(all) },
+        }, '全选可归档'),
+        React.createElement(Button, { variant: 'ghost', size: 'sm', onClick: () => setSel({}) }, '清空'),
+      ),
+      React.createElement('div', { className: 'vx-list' },
+        filtered.map((id) => {
+          const sum = byId[id]
+          const running = sum?.running === true
+          return React.createElement('label', { key: id, className: 'vx-check-row' },
+            React.createElement('input', { type: 'checkbox', disabled: running, checked: sel[id] === true, onChange: (event: React.ChangeEvent<HTMLInputElement>) => { const next = { ...sel }; if (event.target.checked) next[id] = true; else delete next[id]; setSel(next) } }),
+            React.createElement('span', { className: 'vx-check-title' }, sum !== undefined ? (sum.displayTitle || sum.title || id) : id),
+            running ? React.createElement(Badge, { tone: 'neutral' }, '运行中，不可归档') : null,
+          )
+        }),
       ),
     )
   }
 
-  function PanelBody(props: { useSessions: OverlayProps['useSessions']; useWorkspaces: OverlayProps['useWorkspaces'] }): React.ReactElement {
-    const s = useS()
-    if (s.panelTab === 'look') return React.createElement(AppearanceTab, null)
-    if (s.panelTab === 'folder') return React.createElement(FoldersTab, { useSessions: props.useSessions, useWorkspaces: props.useWorkspaces })
-    if (s.panelTab === 'prompt') return React.createElement(PromptsTab, null)
-    if (s.panelTab === 'search') return React.createElement(SearchTab, null)
-    if (s.panelTab === 'export') return React.createElement(ExportTab, null)
-    if (s.panelTab === 'mermaid') return React.createElement(MermaidTab, null)
-    if (s.panelTab === 'tools') return React.createElement(ToolsTab, null)
-    if (s.panelTab === 'balance') return React.createElement(BalancePanelContent, null)
-    return React.createElement(AboutTab, null)
-  }
+  /** Anchor of the header quick panel; the click handler stores the button.
+   *  A plain mutable object, not React.useRef: the install function is not a
+   *  component, so calling a hook here reads a null dispatcher. */
+  const panelAnchorRef: { current: HTMLElement | null } = { current: null }
 
-  /** Default anchor of the floating panel; the frame below only moves it when
-   *  the viewport or the input dock forces that. */
-  const PANEL_PLACEMENT = { preferred: { right: 76, top: 74 }, width: 430, maxHeight: 660, minHeight: 240, margin: 12 } as const
-  interface PanelEnv { viewport: PanelSize; safeBottom: number | null }
   /**
-   * Measure what the panel must dodge. The composer is identified as the
-   * lowest editable text box on the page — it moves between the hero and
-   * session layouts and grows as the draft wraps, so it cannot be a constant.
+   * Appearance write handlers shared by the quick panel and the settings page.
+   * Discrete choices save once; a slider drag publishes immediately and only
+   * the host POST is debounced.
    */
-  function measurePanelEnv(): PanelEnv {
-    const w = typeof window !== 'undefined' ? window : null
-    const d = typeof document !== 'undefined' ? document : null
-    const viewport: PanelSize = { w: w === null ? 0 : w.innerWidth, h: w === null ? 0 : w.innerHeight }
-    if (d === null) return { viewport, safeBottom: null }
-    let boxes: PanelBox[] = []
-    try {
-      boxes = Array.from(d.querySelectorAll('[role="textbox"]'))
-        .filter((node) => node.getAttribute('contenteditable') !== 'false')
-        .map((node) => node.getBoundingClientRect() as unknown as PanelBox)
-        .filter((box) => box.width > 0 && box.height > 0)
-    } catch { boxes = [] }
-    const top = pickComposerTop(boxes, viewport)
-    return { viewport, safeBottom: top === null ? null : top - COMPOSER_CLEARANCE }
-  }
-  function frameFor(env: PanelEnv, pos: { x: number; y: number } | null): PanelFrame {
-    return panelFrame({
-      viewport: env.viewport,
-      preferred: PANEL_PLACEMENT.preferred,
-      width: PANEL_PLACEMENT.width,
-      maxHeight: PANEL_PLACEMENT.maxHeight,
-      minHeight: PANEL_PLACEMENT.minHeight,
-      margin: PANEL_PLACEMENT.margin,
-      safeBottom: env.safeBottom,
-      pos,
-    })
+  function useAppearanceBindings(cfg: CustomPluginConfig) {
+    const tier = tierFromCfg(cfg)
+    const preset = presetForTier(tier, cfg.bgFxPreset)
+    const set = (key: keyof CustomPluginConfig, value: string | boolean): void => {
+      setS({ cfg: { ...S.cfg, [key]: value } })
+      saveCfg()
+    }
+    const pickTier = (next: BgTier): void => {
+      if (next === tier) return
+      bgSaveDebounced.cancel()
+      setS({ cfg: { ...S.cfg, bgFx: next, bgFxPreset: presetForTier(next, S.cfg.bgFxPreset) } })
+      saveCfg()
+    }
+    const pickPreset = (next: BgFxPreset): void => {
+      bgSaveDebounced.cancel()
+      setS({ cfg: { ...S.cfg, bgFxPreset: next } })
+      saveCfg()
+    }
+    const moveParam = (key: BgParamKey, value: number): void => {
+      setS({ cfg: setParamInCfg(S.cfg, tier, preset, key, value) })
+      bgSaveDebounced.push()
+    }
+    const pickStrength = (next: BgStrength): void => {
+      if (next === strengthFromCfg(cfg)) return
+      bgSaveDebounced.cancel()
+      setS({ cfg: setStrengthInCfg(S.cfg, next) })
+      saveCfg()
+    }
+    const pickFocus = (next: boolean): void => {
+      if ((S.cfg.bgFocus !== false) === next) return
+      bgSaveDebounced.cancel()
+      setS({ cfg: { ...S.cfg, bgFocus: next } })
+      saveCfg()
+    }
+    const restoreDefaults = (): void => {
+      bgSaveDebounced.cancel()
+      setS({ cfg: resetBgParams(S.cfg) })
+      saveCfg()
+    }
+    return {
+      tier,
+      preset,
+      onSet: set,
+      onTier: pickTier,
+      onPreset: pickPreset,
+      onStrength: pickStrength,
+      onFocus: pickFocus,
+      onParam: moveParam,
+      onRestoreParams: restoreDefaults,
+    }
   }
 
-  function PersonalizePanel(props: { useSessions: OverlayProps['useSessions']; useWorkspaces: OverlayProps['useWorkspaces'] }): React.ReactElement {
-    const s = useS()
-    const ref = React.useRef<HTMLDivElement | null>(null)
-    const TABS: Array<[string, string, string]> = [['look', 'sliders', '外观'], ['folder', 'folder', '项目'], ['prompt', 'zap', '提示词'], ['search', 'search', '搜索'], ['export', 'download', '导出'], ['mermaid', 'gitBranch', 'Mermaid'], ['tools', 'wrench', '效率'], ['balance', 'wallet', '额度'], ['about', 'info', '关于']]
-    // A window resize and a session switch both move the composer without a
-    // store write; re-measure on those two only, so a streaming turn does not
-    // force a layout read on every store event.
-    const [viewportTick, setViewportTick] = React.useState(0)
-    React.useEffect(() => {
-      const w = typeof window !== 'undefined' ? window : null
-      if (w === null) return
-      const bump = (): void => setViewportTick((v) => v + 1)
-      w.addEventListener('resize', bump)
-      return () => { w.removeEventListener('resize', bump) }
-    }, [])
-    const env = React.useMemo(() => measurePanelEnv(), [viewportTick, s.sessionId])
-    const frame = frameFor(env, s.panelPos)
-    // Non-modal popover semantics: focus enters so Escape reaches the panel,
-    // Tab continues through the page (no trap), and closing hands focus back
-    // to the header button that opened it — but never steals focus from a
-    // surface the user just moved to.
-    React.useEffect(() => {
-      const node = ref.current
-      if (node === null) return
-      try { node.focus({ preventScroll: true }) } catch { node.focus() }
-      const onKey = (event: KeyboardEvent): void => {
-        if (event.key !== 'Escape' || event.defaultPrevented) return
-        event.preventDefault()
-        event.stopPropagation()
-        setS({ panelOpen: false })
+  /** The host settings panel is portalled to <body> while open. */
+  function hostSettingsDialog(): HTMLElement | null {
+    if (typeof document === 'undefined') return null
+    return document.querySelector<HTMLElement>('[role="dialog"][data-shortcut-modal="settings"]')
+  }
+
+  /** Click the first matching node, preferring one that is actually laid out. */
+  function clickFirst(selector: string): boolean {
+    if (typeof document === 'undefined') return false
+    const nodes = [...document.querySelectorAll<HTMLElement>(selector)]
+    const target = nodes.find((node) => node.getClientRects().length > 0) ?? nodes[0]
+    if (target === undefined) return false
+    target.click()
+    return true
+  }
+
+  /** Poll a DOM probe until it finds something or the timeout elapses. */
+  async function waitForDom<T>(probe: () => T | null, timeoutMs: number): Promise<T | null> {
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() <= deadline) {
+      const value = probe()
+      if (value !== null) return value
+      await new Promise((resolve) => setTimeout(resolve, 40))
+    }
+    return null
+  }
+
+  /**
+   * Open the host's settings page on our section. The shell publishes no
+   * "open settings" method, and the sidebar entry is the account menu on a
+   * default Desktop install, so this walks the real entry controls (account
+   * menu → 设置, or a direct trigger) and then selects our nav cell. Anything
+   * that cannot be reached falls back to the shortcut toast instead of
+   * pretending it navigated.
+   */
+  function openHostSettings(sectionLabel?: string): void {
+    const sectionFor = (label: string | undefined): string => {
+      switch (label) {
+        case '提示词': return 'prompts'
+        case '用量与额度': return 'usage'
+        case '搜索': return 'search'
+        case '项目文件夹': return 'folders'
+        case '扩展': return 'extensions'
+        default: return 'appearance'
       }
-      const onDown = (event: MouseEvent): void => {
-        const target = event.target instanceof Node ? event.target : null
-        if (target === null || node.contains(target)) return
-        const el = target instanceof HTMLElement ? target : null
-        // The opener toggles the panel itself, and a plugin dialog opened
-        // from inside the panel must not close it on its first click.
-        if (el !== null && (el.closest('.vx-header-btn') !== null || el.closest('.vx-modal') !== null)) return
-        setS({ panelOpen: false })
-      }
-      node.addEventListener('keydown', onKey)
-      document.addEventListener('mousedown', onDown, true)
-      const restoreFocus = (): void => {
-        // The panel is closed and nothing else took focus: hand it back to the
-        // button that opened the panel. Re-checked after a task because a
-        // click that closed the panel also runs the browser's own focus shift
-        // (which lands on <body> after our capture handler returns).
-        if (document.querySelector('.vx-panel') !== null) return
-        const active = document.activeElement
-        if (!(active === null || active === document.body || active === document.documentElement || node.contains(active))) return
-        const opener = document.querySelector('.vx-header-btn[title="个性化中心"]')
-        if (opener instanceof HTMLElement) {
-          try { opener.focus({ preventScroll: true }) } catch { /* opener unmounted */ }
+    }
+    setS({ settingsSection: sectionFor(sectionLabel) })
+    const fallback = (): void => {
+      const path = sectionLabel === undefined ? '设置 → 个性化' : `设置 → 个性化 → ${sectionLabel}`
+      const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform)
+      toast(`按 ${isMac ? '⌘+,' : 'Ctrl+Alt+,'} 打开${path}`, 'info')
+    }
+    if (typeof document === 'undefined') { fallback(); return }
+    void (async () => {
+      let dialog = hostSettingsDialog()
+      if (dialog === null) {
+        // The host opens Settings from its own shortcut handler, which accepts
+        // the synthetic keydown (the menu route below is only a fallback). Try
+        // the desktop binding first, then the web binding.
+        const press = (init: KeyboardEventInit): void => {
+          document.dispatchEvent(new KeyboardEvent('keydown', {
+            key: ',', code: 'Comma', bubbles: true, cancelable: true, composed: true, ...init,
+          }))
+        }
+        const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform)
+        press(isMac ? { metaKey: true } : { ctrlKey: true })
+        dialog = await waitForDom(hostSettingsDialog, 220)
+        if (dialog === null) {
+          press({ ctrlKey: true, altKey: true })
+          dialog = await waitForDom(hostSettingsDialog, 300)
+        }
+        if (dialog === null && !isMac) {
+          press({ metaKey: true })
+          dialog = await waitForDom(hostSettingsDialog, 260)
         }
       }
-      return () => {
-        node.removeEventListener('keydown', onKey)
-        document.removeEventListener('mousedown', onDown, true)
-        restoreFocus()
-        setTimeout(restoreFocus, 0)
+      if (dialog === null) {
+        const direct = clickFirst('button[aria-haspopup="dialog"][aria-keyshortcuts]')
+          || clickFirst('button[aria-label="设置"], button[aria-label="Settings"]')
+        if (!direct) {
+          const findItem = (): HTMLElement | null => {
+            const rows = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')]
+            return rows.find((row) => /^(设置|Settings)/.test((row.textContent ?? '').trim())) ?? null
+          }
+          let item = findItem()
+          if (item === null) {
+            const launcher = clickFirst('button[aria-label="账号菜单"], button[aria-label="Account menu"]')
+              || clickFirst('button[aria-haspopup="menu"][data-collapsed]')
+            if (!launcher) { fallback(); return }
+            item = await waitForDom(findItem, 800)
+          }
+          if (item === null) { fallback(); return }
+          item.click()
+        }
+        dialog = await waitForDom(hostSettingsDialog, 1500)
+        if (dialog === null) { fallback(); return }
       }
-    }, [])
-    const onHeadDown = (e: React.MouseEvent): void => {
-      const target = e.target as HTMLElement
-      if (target.closest('button,a,input') !== null) return
-      const el = ref.current
-      if (el === null) return
-      const rect = el.getBoundingClientRect()
-      const start = { mx: e.clientX, my: e.clientY, x: rect.left, y: rect.top }
-      const d = typeof document !== 'undefined' ? document : null
-      if (d === null) return
-      // One measurement for the whole drag: the composer does not move while
-      // the handle is held, and a per-move rect read would flush layout.
-      const dragEnv = measurePanelEnv()
-      let final: { x: number; y: number } | null = null
-      const move = (ev: MouseEvent): void => {
-        // Direct DOM writes during the drag: publishing through the store
-        // would re-render every subscriber at mousemove rate for one
-        // element's position. The store only learns the resting place.
-        const f = frameFor(dragEnv, { x: start.x + ev.clientX - start.mx, y: start.y + ev.clientY - start.my })
-        final = { x: f.left, y: f.top }
-        el.style.left = `${f.left}px`
-        el.style.top = `${f.top}px`
-        el.style.height = `${f.height}px`
-        el.style.right = 'auto'
+      const nav = dialog.querySelector('nav')
+      const candidates = (): HTMLElement[] => nav === null
+        ? []
+        : [...nav.querySelectorAll<HTMLElement>('button')].filter((cell) => (cell.textContent ?? '').trim().includes('个性化'))
+      for (let index = 0; index < candidates().length; index++) {
+        // Re-query each pass: selecting another section re-renders the nav.
+        const cell = candidates()[index]
+        if (cell === undefined) break
+        cell.click()
+        const mounted = await waitForDom(() => dialog?.querySelector('.vx-settings-nav') === null ? null : true, 500)
+        if (mounted !== null) return
       }
-      const up = (): void => {
-        d.removeEventListener('mousemove', move)
-        d.removeEventListener('mouseup', up)
-        if (final !== null) setS({ panelPos: final })
-      }
-      d.addEventListener('mousemove', move)
-      d.addEventListener('mouseup', up)
-    }
-    const style: React.CSSProperties = { top: frame.top, left: frame.left, right: undefined, width: frame.width, height: frame.height }
-    return React.createElement('div', {
-      ref,
-      className: 'vx-glass vx-panel',
-      style,
-      role: 'dialog',
-      'aria-modal': 'false',
-      'aria-label': '个性化中心',
-      tabIndex: -1,
+      if (dialog.querySelector('.vx-settings-nav') !== null) return
+      fallback()
+    })()
+  }
+
+  /**
+   * Header quick panel: a 380px anchored popover with the appearance controls
+   * only. Management lives in the settings page; this surface opens under the
+   * button, closes on Escape/outside press, and hands focus back to it.
+   */
+  function QuickAppearancePanel(): React.ReactElement {
+    const s = useS()
+    const { cfg, dark } = useSSelector(selectAppearanceSlice, shallowEqual)
+    const bindings = useAppearanceBindings(cfg)
+    return React.createElement(Popover, {
+      open: s.panelOpen,
+      anchor: panelAnchorRef,
+      onClose: () => setS({ panelOpen: false }),
+      ariaLabel: '个性化',
+      width: 380,
+      maxHeight: 620,
+      align: 'end',
     },
-      React.createElement('div', { className: 'vx-panel-head', onMouseDown: onHeadDown },
-        React.createElement(Icon, { n: 'sliders', size: 14 }),
-        React.createElement('span', { className: 'vx-panel-title' }, '个性化中心'),
-        React.createElement('span', { className: 'vx-panel-sub' }, '外观 · 效率 · 额度'),
+      React.createElement('div', { className: 'vx-pop-head' },
+        React.createElement(Icon, { n: 'sliders', size: 13 }),
+        React.createElement('span', null, '个性化'),
         React.createElement('span', { className: 'vx-flex1' }),
-        React.createElement('button', { className: 'vx-chip', title: '关闭', 'aria-label': '关闭个性化面板', onClick: () => setS({ panelOpen: false }) }, React.createElement(Icon, { n: 'x', size: 12 })),
+        React.createElement(IconButton, {
+          label: '关闭个性化面板',
+          size: 'sm',
+          icon: React.createElement(Icon, { n: 'x', size: 12 }),
+          onClick: () => setS({ panelOpen: false }),
+        }),
       ),
-      React.createElement('div', { className: 'vx-tabs' },
-        TABS.map((t) => React.createElement('button', { key: t[0], className: 'vx-tab' + (s.panelTab === t[0] ? ' on' : ''), onClick: () => setS({ panelTab: t[0] }) },
-          React.createElement(Icon, { n: t[1], size: 12 }), ' ' + t[2])),
+      React.createElement('div', { className: 'vx-pop-body' },
+        React.createElement(AppearanceControls, { cfg, dark, compact: true, ...bindings }),
       ),
-      React.createElement('div', { className: 'vx-panel-body' },
-        React.createElement(PanelBody, { useSessions: props.useSessions, useWorkspaces: props.useWorkspaces }),
+      React.createElement('div', { className: 'vx-pop-foot' },
+        React.createElement(Button, { variant: 'ghost', size: 'sm', onClick: () => { setS({ panelOpen: false }); openHostSettings() } }, '完整设置'),
+        React.createElement('span', { className: 'vx-flex1' }),
+        React.createElement('span', { className: 'vx-muted' }, '外观即时生效'),
       ),
     )
   }
 
-  function SidebarFoldersPanel(props: { useSessions: OverlayProps['useSessions']; useWorkspaces: OverlayProps['useWorkspaces'] }): React.ReactElement | null {
+  function SidebarFoldersPanel(props: { useSessions: OverlayProps['useSessions']; useWorkspaces: OverlayProps['useWorkspaces'] }): React.ReactElement {
     const s = useS()
-    if (s.foldersOpen !== true) return null
-    return React.createElement('div', { className: 'vx-glass vx-folders' },
+    return React.createElement(Popover, {
+      open: s.foldersOpen === true,
+      anchor: foldersAnchorRef,
+      onClose: () => setS({ foldersOpen: false }),
+      ariaLabel: '项目文件夹',
+      width: 300,
+      maxHeight: 560,
+      align: 'start',
+      className: 'vx-folders-pop',
+    },
       React.createElement('div', { className: 'vx-pop-head' },
-        React.createElement(Icon, { n: 'folder', size: 14 }),
+        React.createElement(Icon, { n: 'folder', size: 13 }),
         React.createElement('span', null, '项目文件夹'),
         React.createElement('span', { className: 'vx-flex1' }),
-        React.createElement('button', { className: 'vx-chip', title: '新建文件夹', onClick: () => askText('文件夹名称：', '', (name) => {
-          if (name.trim() === '') return
-          S.folders = S.folders.concat({ id: 'f' + Date.now() + Math.floor(Math.random() * 9999), name, children: [], sessionIds: [], workspaceIds: [], prompts: [] })
-          setS({ folders: S.folders })
-          saveCfg()
-        }) }, React.createElement(Icon, { n: 'folderPlus', size: 12 })),
-        React.createElement('button', { className: 'vx-chip', title: '关闭', 'aria-label': '关闭项目文件夹', onClick: () => setS({ foldersOpen: false }) }, React.createElement(Icon, { n: 'x', size: 12 })),
+        React.createElement(IconButton, {
+          label: '新建文件夹',
+          size: 'sm',
+          icon: React.createElement(Icon, { n: 'folderPlus', size: 12 }),
+          onClick: () => askText('文件夹名称：', '', (name) => {
+            if (name.trim() === '') return
+            S.folders = S.folders.concat({ id: 'f' + Date.now() + Math.floor(Math.random() * 9999), name, children: [], sessionIds: [], workspaceIds: [], prompts: [] })
+            setS({ folders: S.folders })
+            saveCfg()
+          }),
+        }),
+        React.createElement(IconButton, {
+          label: '关闭项目文件夹',
+          size: 'sm',
+          icon: React.createElement(Icon, { n: 'x', size: 12 }),
+          onClick: () => setS({ foldersOpen: false }),
+        }),
       ),
-      React.createElement('div', { className: 'vx-folders-body' },
+      React.createElement('div', { className: 'vx-pop-body' },
         S.folders.length === 0 ? React.createElement('div', { className: 'vx-muted vx-pad-sm' }, '暂无文件夹。在个性化中心可管理，或点击右上角新建。') : null,
         S.folders.map((f) => React.createElement(FolderNode, { key: f.id, node: f, useSessions: props.useSessions, useWorkspaces: props.useWorkspaces })),
       ),
     )
   }
 
-  function SettingsPage(): React.ReactElement {
-    return React.createElement('div', { className: 'vx-settings-page' },
-      React.createElement(AppearanceTab, null),
-      React.createElement('div', { className: 'vx-section-title' }, '功能开关'),
-      React.createElement(ToolsTab, null),
-      React.createElement(MermaidTab, null),
+  /** Settings sections, in navigation order. */
+  const SETTINGS_SECTIONS: Array<[string, string, string]> = [
+    ['appearance', 'sliders', '外观'],
+    ['folders', 'folder', '项目文件夹'],
+    ['prompts', 'zap', '提示词'],
+    ['search', 'search', '搜索'],
+    ['export', 'download', '导出'],
+    ['extensions', 'wrench', '扩展'],
+    ['usage', 'wallet', '用量与额度'],
+    ['data', 'info', '数据与关于'],
+  ]
+
+  function AppearanceSection(): React.ReactElement {
+    const { cfg, dark } = useSSelector(selectAppearanceSlice, shallowEqual)
+    const bindings = useAppearanceBindings(cfg)
+    return React.createElement(AppearanceControls, { cfg, dark, ...bindings })
+  }
+
+  /**
+   * The settings-page hub. The host renders this entry inside its own settings
+   * page; the left navigation and the cards are ours, everything visual comes
+   * from the host tokens.
+   */
+  function SettingsPage(props: Partial<OverlayProps>): React.ReactElement {
+    const section = useSSelector((state) => state.settingsSection)
+    // The settings surface can live in its own host window, whose <html> does
+    // not necessarily carry the appearance classes applied to the main window.
+    // Mirror the material decision on this subtree so cards keep the frost /
+    // liquid treatment (and the filter is present in this document).
+    const glassOn = useSSelector((state) => state.cfg.glass === true)
+    const liquid = useSSelector((state) => state.cfg.glass === true && state.cfg.glassMode === 'liquid')
+    const bgLive = useSSelector((state) => state.cfg.bgFx !== 'none')
+    const pageRef = React.useRef<HTMLDivElement | null>(null)
+    React.useEffect(() => {
+      if (!liquid) return
+      const doc = pageRef.current?.ownerDocument
+      if (doc !== undefined) ensureLiquidGlass(doc)
+    }, [liquid])
+    // The host settings overlay is above .vx-root; global modals and toasts
+    // must render from inside it while it is mounted or they are invisible.
+    React.useEffect(() => {
+      setS({ settingsSurfaceOpen: true })
+      return () => { setS({ settingsSurfaceOpen: false }) }
+    }, [])
+    // The host panel owns the scroll container; entering a section from a
+    // scrolled position would otherwise keep that offset on the new cards.
+    React.useEffect(() => {
+      let node = document.getElementById('vx-settings-page')?.parentElement ?? null
+      while (node !== null) {
+        const overflowY = getComputedStyle(node).overflowY
+        if (overflowY === 'auto' || overflowY === 'scroll') { node.scrollTop = 0; return }
+        node = node.parentElement
+      }
+    }, [section])
+    const useSessions = (props.useSessions ?? useBridgedSessions) as OverlayProps['useSessions']
+    const useWorkspaces = (props.useWorkspaces ?? useBridgedWorkspaces) as OverlayProps['useWorkspaces']
+    const foldersProps = { useSessions, useWorkspaces }
+    const pick = (id: string): void => setS({ settingsSection: id })
+    // The page root carries the whole material decision: the settings surface is
+    // hosted in its own document, where the appearance classes on the main
+    // <html> do not exist. Cards are transparent groups inside that sheet, not a
+    // second material layer.
+    const card = (cardProps: React.ComponentProps<typeof Card>, ...children: React.ReactNode[]): React.ReactElement => {
+      return React.createElement(Card, cardProps, ...children)
+    }
+    const content = (): React.ReactElement => {
+      if (section === 'folders') {
+        return card({
+          title: '项目文件夹',
+          description: '跨工作区共享的会话与工作区收藏夹，支持多级嵌套与拖拽排序。',
+        }, React.createElement(FoldersTab, foldersProps))
+      }
+      if (section === 'prompts') {
+        return card({
+          title: '提示词',
+          description: '收藏、标签与变量模板；插入到当前输入框。',
+        }, React.createElement(PromptsTab, null))
+      }
+      if (section === 'search') {
+        return card({
+          title: '会话搜索',
+          description: '搜索当前会话的消息与工具记录。',
+        }, React.createElement(SearchTab, null))
+      }
+      if (section === 'export') {
+        return card({
+          title: '导出与备份',
+          description: '把当前会话导出为 JSON、Markdown 或 HTML；备份非敏感状态。',
+        }, React.createElement(ExportTab, null))
+      }
+      if (section === 'extensions') {
+        return React.createElement(React.Fragment, null,
+          card({ title: 'Mermaid', description: '助手回复中的图表代码块自动就地渲染。' }, React.createElement(MermaidTab, null)),
+          card({ title: '效率工具', description: '防自动跳转、公式复制与批量归档。' }, React.createElement(ToolsTab, null)),
+        )
+      }
+      if (section === 'usage') {
+        return card({
+          title: '用量与额度',
+          description: '本机会话记录统计；费用为按官方价目表折算的估算值。',
+        }, React.createElement(BalancePanelContent, null))
+      }
+      if (section === 'data') {
+        return React.createElement(React.Fragment, null,
+          card({ title: '备份', description: '导出或导入不含账号凭据的本地状态。' }, React.createElement(BackupControls, null)),
+          card({ title: '关于', description: '版本、状态文件与诊断信息。' }, React.createElement(AboutTab, null)),
+        )
+      }
+      return card({
+        title: '外观',
+        description: '主题背景、天气特效、背景动效与玻璃质感，选择后即时生效。',
+      }, React.createElement(AppearanceSection, null))
+    }
+    return React.createElement(React.Fragment, null,
+      React.createElement('div', {
+        ref: pageRef,
+        className: 'vx-settings-page vx-settings-shell'
+          + (glassOn ? ' vx-glass-on' : ' vx-glass-off')
+          + (liquid ? ' vx-liquid' : '')
+          + (bgLive ? ' vx-bg-live' : ''),
+        id: 'vx-settings-page',
+      },
+        React.createElement('nav', { className: 'vx-settings-nav', 'aria-label': '个性化设置分区' },
+          SETTINGS_SECTIONS.map(([id, iconName, label]) => React.createElement('button', {
+            key: id,
+            type: 'button',
+            className: 'vx-settings-nav-item' + (section === id ? ' on' : ''),
+            'aria-current': section === id ? 'page' : undefined,
+            onClick: () => pick(id),
+          }, React.createElement(Icon, { n: iconName, size: 14 }), label)),
+        ),
+        React.createElement('div', { className: 'vx-settings-content' },
+          React.createElement('div', { key: section, className: 'vx-section-in' }, content())),
+      ),
+      // Global decision surfaces follow the settings overlay's stacking level.
+      React.createElement(SettingsOverlays, { useSessions: foldersProps.useSessions, useWorkspaces: foldersProps.useWorkspaces }),
+    )
+  }
+
+  /** Modals/toasts owned by the settings overlay while it is open. */
+  function SettingsOverlays(props: { useSessions?: OverlayProps['useSessions']; useWorkspaces?: OverlayProps['useWorkspaces'] }): React.ReactElement {
+    return React.createElement(React.Fragment, null,
+      React.createElement(AskModal, { key: 'ask' }),
+      React.createElement(ConfirmModal, { key: 'confirm' }),
+      React.createElement(TemplateModal, { key: 'template' }),
+      React.createElement(MermaidModal, { key: 'mermaid' }),
+      React.createElement(BatchModal, { key: 'batch', useSessions: props.useSessions as OverlayProps['useSessions'] }),
+      React.createElement(CommandPalette, { key: 'command', useSessions: props.useSessions as OverlayProps['useSessions'], useWorkspaces: props.useWorkspaces as OverlayProps['useWorkspaces'] }),
+      React.createElement(Toasts, { key: 'toasts' }),
     )
   }
 
   function Toasts(): React.ReactElement {
     const toasts = useSSelector((state) => state.toasts)
-    return React.createElement('div', { className: 'vx-toasts' },
-      toasts.map((t) => React.createElement('div', { key: t.id, className: 'vx-toast' + (t.kind === 'error' ? ' err' : '') },
-        React.createElement(Icon, { n: t.kind === 'error' ? 'x' : (t.kind === 'success' ? 'check' : 'info'), size: 13 }),
-        React.createElement('span', null, t.text),
-        t.action !== null ? React.createElement('button', { className: 'vx-chip', onClick: () => { try { t.action?.run() } catch { /* action failed */ } } }, t.action.label) : null,
-      )),
-    )
+    return React.createElement(ToastStack, { items: toasts, onDismiss: dismissToast })
   }
 
   function OverlayRoot(props: OverlayProps): React.ReactElement {
     // The overlay tree is always mounted; subscribe only to the fields it
     // renders (overlays/config/theme/session), not to turns/toasts/usage.
     const {
-      cfg, dark, booted, sessionId,
-      panelOpen, foldersOpen, promptOpen, mermaidModal, batchModal, commandOpen,
-      quoteSel, ask, confirmAsk, templatePrompt,
+      cfg, dark, booted, sessionId, settingsSurfaceOpen,
     } = useSSelector(
       (state) => ({
         cfg: state.cfg,
         dark: state.dark,
         booted: state.booted,
         sessionId: state.sessionId,
-        panelOpen: state.panelOpen,
-        foldersOpen: state.foldersOpen,
-        promptOpen: state.promptOpen,
-        mermaidModal: state.mermaidModal,
-        batchModal: state.batchModal,
-        commandOpen: state.commandOpen,
-        quoteSel: state.quoteSel,
-        ask: state.ask,
-        confirmAsk: state.confirmAsk,
-        templatePrompt: state.templatePrompt,
+        settingsSurfaceOpen: state.settingsSurfaceOpen,
       }),
       shallowEqual,
     )
@@ -3772,6 +4589,16 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     // chips (LaTeX / MathML / Mermaid) appear as soon as the next fetch lands,
     // without waiting for a session switch to trigger one.
     const sessions = useSessionsSafe(props)
+    const workspaces = useWorkspacesSafe(props)
+    const lastIndexRef = React.useRef<{ sessions: SessionListLike | null; workspaces: WorkspaceListLike | null }>({ sessions: null, workspaces: null })
+    React.useEffect(() => {
+      if (lastIndexRef.current.sessions === sessions && lastIndexRef.current.workspaces === workspaces) return
+      lastIndexRef.current = { sessions, workspaces }
+      setS({
+        sessionIndex: sessions === null ? null : { ...sessions, ids: uniqueIds(sessions.ids) },
+        workspaceIndex: workspaces,
+      })
+    }, [sessions, workspaces])
     const summary = sessions !== null && sessionId !== null ? sessions.byId[sessionId] : null
     React.useEffect(() => {
       const watchedId = S.sessionId
@@ -3808,17 +4635,26 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     }, [sessionId, summary?.running])
     const children: React.ReactElement[] = [React.createElement(FxCanvas, { key: 'fx' })]
     children.push(React.createElement(MermaidInPlace, { key: 'mmd' }))
-    if (panelOpen === true) children.push(React.createElement(PersonalizePanel, { key: 'panel', useSessions: props.useSessions, useWorkspaces: props.useWorkspaces }))
-    if (foldersOpen === true) children.push(React.createElement(SidebarFoldersPanel, { key: 'folders', useSessions: props.useSessions, useWorkspaces: props.useWorkspaces }))
-    if (promptOpen !== null) children.push(React.createElement(PromptPopover, { key: 'prompt' }))
-    if (mermaidModal !== null) children.push(React.createElement(MermaidModal, { key: 'mermaid' }))
-    if (batchModal === true) children.push(React.createElement(BatchModal, { key: 'batch', useSessions: props.useSessions }))
-    if (commandOpen === true) children.push(React.createElement(CommandPalette, { key: 'command', useSessions: props.useSessions, useWorkspaces: props.useWorkspaces }))
-    if (quoteSel !== null && cfg.quote === true) children.push(React.createElement(QuoteButton, { key: 'quote' }))
-    if (ask !== null) children.push(React.createElement(AskModal, { key: 'ask' }))
-    if (confirmAsk !== null) children.push(React.createElement(ConfirmModal, { key: 'confirm' }))
-    if (templatePrompt !== null) children.push(React.createElement(TemplateModal, { key: 'template' }))
-    children.push(React.createElement(Toasts, { key: 'toasts' }))
+    // The quick panel stays mounted so its exit animation can run; the
+    // Popover renders nothing while fully closed.
+    children.push(React.createElement(QuickAppearancePanel, { key: 'panel' }))
+    children.push(React.createElement(SidebarFoldersPanel, { key: 'folders', useSessions: props.useSessions, useWorkspaces: props.useWorkspaces }))
+    children.push(React.createElement(PromptPopover, { key: 'prompt' }))
+    children.push(React.createElement(BalancePopover, { key: 'balance' }))
+    // The host settings overlay sits at body-level z-index 1000, above the
+    // shell's overlay layer that contains .vx-root. While our hub is mounted
+    // inside it, the global modals/toasts must render from SettingsPage or
+    // they would be invisible behind that overlay.
+    if (!settingsSurfaceOpen) {
+      // Keep the decision surfaces mounted so Dialog can run its exit motion.
+      children.push(React.createElement(MermaidModal, { key: 'mermaid' }))
+      children.push(React.createElement(BatchModal, { key: 'batch', useSessions: props.useSessions }))
+      children.push(React.createElement(CommandPalette, { key: 'command', useSessions: props.useSessions, useWorkspaces: props.useWorkspaces }))
+      children.push(React.createElement(AskModal, { key: 'ask' }))
+      children.push(React.createElement(ConfirmModal, { key: 'confirm' }))
+      children.push(React.createElement(TemplateModal, { key: 'template' }))
+      children.push(React.createElement(Toasts, { key: 'toasts' }))
+    }
     return React.createElement('div', { className: `vx-root ${dark ? 'vx-dark' : 'vx-light'}` }, children)
   }
 
@@ -3862,7 +4698,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
   injectOne('sidebar.footer.action', 'custom-plugin-folders', { id: 'custom-plugin-folders', order: -100, label: '项目' }, FolderSidebarButton)
   injectOne('shell.overlay', 'custom-plugin-overlay', { id: 'custom-plugin-overlay', order: 10, label: 'Custom 便利套件' }, OverlayRoot)
   injectOne('conversation.input.dock', 'custom-plugin-column-bg', { id: 'custom-plugin-column-bg', order: 20, label: '会话区背景' }, ColumnBgAnchor)
-  injectOne('conversation.input.dock', 'custom-plugin-quote', { id: 'custom-plugin-quote', order: 30, label: '引用回复' }, QuoteDock)
+  injectOne('conversation.input.dock', 'custom-plugin-input', { id: 'custom-plugin-input', order: 30, label: '输入桥接' }, InputBridge)
   injectOne('conversation.chat.turnTail', 'custom-plugin-turn-tail', { id: 'custom-plugin-turn-tail', order: 10 }, TurnTailEntry)
   injectOne('settings.section', 'custom-plugin-appearance', { id: 'custom-plugin-appearance', order: 30, label: '个性化' }, SettingsPage)
   injectOne('conversation.session.header.actions', 'custom-plugin-panel-open', { id: 'custom-plugin-panel-open', order: 5, label: '个性化' }, HeaderPanelButton)
@@ -3889,6 +4725,9 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     // A slider burst may still be waiting to POST when the plugin is disabled;
     // drop it rather than writing after teardown.
     bgSaveDebounced.cancel()
+    if (stateChannel !== null) {
+      try { stateChannel.close() } catch { /* already closed */ }
+    }
     // The calm-zone poll is a page-global timer owned by the background
     // painter; it must not survive the plugin.
     stopBgFocusTracking()
@@ -3915,7 +4754,7 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
     try { mermaidScanner.restore() } catch { /* best effort */ }
     const d = typeof document !== 'undefined' ? document : null
     if (d !== null) {
-      for (const cls of ['vx-liquid', 'vx-dark', 'vx-light']) {
+      for (const cls of ['vx-liquid', 'vx-bg-live', 'vx-glass-off', 'vx-dark', 'vx-light']) {
         try { d.documentElement.classList.remove(cls) } catch { /* classList unavailable */ }
       }
       try { d.getElementById('vx-lg-filter')?.remove() } catch { /* node already gone */ }
@@ -3924,6 +4763,10 @@ export function installCustomPlugin(ctx: Context, reportDiag: (message: string) 
       // after this disposer, so React effect cleanup may never run for it.
       // The renderer goes first (canvas/context, rAF, listeners, observer,
       // atlas, level buffer), then the host node that contained the canvas.
+      if (bgLayerHealTimer !== null) {
+        clearTimeout(bgLayerHealTimer)
+        bgLayerHealTimer = null
+      }
       destroyBgRenderer()
       try { unmountBgLayer(d as unknown as BgLayerDocLike) } catch { /* node already gone */ }
     }
